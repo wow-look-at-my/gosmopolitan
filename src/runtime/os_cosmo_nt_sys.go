@@ -7,7 +7,7 @@
 // internal/runtime/syscall/cosmo's WindowsFns table.
 //
 // Every user-level syscall on an NT host funnels here with LINUX amd64
-// numbering and must come back with Linux semantics: Linux errnos,
+// numbering. It must come back with Linux semantics: Linux errnos,
 // struct layouts and flag values. The Win32 mapping follows cosmo
 // libc's precedent, and an unimplemented syscall answers ENOSYS.
 //
@@ -298,16 +298,16 @@ func ntFail3(errno uintptr) (uintptr, uintptr, uintptr) {
 	return ^uintptr(0), 0, errno
 }
 
-// ntSyscallEmulate is the WindowsFns.Emulate hook: dispatch by Linux
-// syscall number to the typed backends.
+// ntSyscallEmulate is the WindowsFns.Emulate hook: dispatch by Linux syscall
+// number to the typed backends.
 //
-// A syscall argument may point into the calling goroutine's STACK, and
-// a raw uintptr is not adjusted when that stack grows. So this MUST
-// stay nosplit, as must its whole caller chain from syscall.Syscall
-// down, and it MUST re-type every pointer-carrying argument in the
-// dispatch call expression itself. The backends then hold real
-// pointers, which stack copying adjusts. Handing one back to Win32 as
-// a uintptr happens only inside nosplit ntcallE and ntcallSE.
+// A syscall argument may point into the calling goroutine's STACK, and a raw
+// uintptr is not adjusted when that stack grows. So this MUST stay nosplit,
+// as must its whole caller chain from syscall.Syscall down, and it MUST
+// re-type every pointer-carrying argument. That argument is in the dispatch
+// call expression itself. The backends then hold real pointers, which stack
+// copying adjusts. Handing one back to Win32 as a uintptr happens only inside
+// nosplit ntcallE and ntcallSE.
 //
 //go:nosplit
 func ntSyscallEmulate(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uintptr) {
@@ -1024,10 +1024,10 @@ func ntEmuLseek(fd int32, off int64, whence uintptr) (r1, r2, errno uintptr) {
 	return uintptr(newpos), 0, 0
 }
 
-// ntEmuPreadPwrite implements pread64/pwrite64 by seeking around the
+// ntEmuPreadPwrite implements pread64/pwrite64 by seeking around. The
 // shared file pointer (save, seek, transfer, restore) under the slot's
 // ntFilePos lock, which every other user of that pointer takes too.
-// The steps have to look like one: a caller of pread expects the
+// The steps have to look like one. A caller of pread expects the
 // offset it asked for and expects its own file position back
 // afterwards, and neither survives an interleaved seek.
 func ntEmuPreadPwrite(fd int32, p unsafe.Pointer, n int32, off int64, isWrite bool) (r1, r2, errno uintptr) {
@@ -1266,10 +1266,10 @@ type ntOverlapped struct {
 //
 // They part on a RE-lock. Linux replaces the operation the fd holds, so
 // LOCK_SH after LOCK_EX is one step. NT refuses a second lock over a
-// range this handle already holds, so a re-lock here unlocks first and
-// takes the new one after, and another process can win the range in
-// that window. flock(2) documents the same window for a conversion,
-// and a caller that holds one lock never comes here. The
+// range this handle already holds, so a re-lock here unlocks first. The
+// re-lock takes the new one after, and another process can win the
+// range in that window. flock(2) documents the same window for a
+// conversion, and a caller that holds one lock never comes here. The
 // uintptr(unsafe.Pointer(&ov)) conversions stay INSIDE the calls.
 func ntEmuFlock(fd int32, op int32) (r1, r2, errno uintptr) {
 	e, ok := ntFDLookup(fd)
@@ -1448,7 +1448,7 @@ func ntEmuFchmodat(dirfd int32, cpath *byte, mode uint32) (r1, r2, errno uintptr
 
 // ---- readlink (os.Executable) ----
 
-// ntEmuReadlinkat answers /proc/self/exe, which os/executable_cosmo.go
+// ntEmuReadlinkat answers /proc/self/exe. These os/executable_cosmo.go
 // reads first on every host, with GetModuleFileNameW in /c/-form, so
 // os.Executable works without any os-package changes. Every other path
 // is read as a symlink (ntReadlinkW).
@@ -1539,7 +1539,7 @@ const ntLinuxDirentHdr = 19
 // GetFileInformationByHandleEx(FileIdBothDirectoryInfo), the same role
 // Apple's __getdirentries64 plays in the darwin port. The directory HANDLE
 // holds the kernel-side enumeration cursor (RestartInfo on the first query
-// re-anchors it); entries that were returned by the kernel but do not fit the
+// re-anchors it). Entries that were returned by the kernel but do not fit the
 // caller's buffer are parked in the fd's pending list so nothing is ever lost
 // between calls.
 func ntEmuGetdents(fd int32, buf unsafe.Pointer, count uintptr) (r1, r2, errno uintptr) {

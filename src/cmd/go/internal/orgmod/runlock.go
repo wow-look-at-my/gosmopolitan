@@ -75,9 +75,10 @@ func Version(ctx context.Context, ci bool, open func() (RunLockStore, Run, error
 	return LockedVersion(ctx, store, RunLockKey{Run: run, Module: path, Branch: branch}, resolve)
 }
 
-// LockedVersion returns the version the store records for key. When it records
-// none, LockedVersion claims the head that resolve returns and returns the
-// version the claim leaves in the store, which a racing claim can have set.
+// LockedVersion returns the version the store records for key. LockedVersion
+// claims the head that resolve returns and returns the version the claim
+// leaves in the store, which a racing claim can have set. Do this when it
+// records none.
 func LockedVersion(ctx context.Context, store RunLockStore, key RunLockKey, resolve func() (string, error)) (string, error) {
 	fail := func(err error) error {
 		return fmt.Errorf("%s: run lock store %s: %w", key.Name(), store, err)

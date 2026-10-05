@@ -61,7 +61,7 @@ func TestApeLoaderBinariesMatchTheirPins(t *testing.T) {
 // TestApeLoaderIsStatic holds the property that makes a loader usable on a
 // host that carries nothing: it links against no interpreter. A loader
 // that needed one would fail on exactly the minimal image an APE is meant
-// to run on, and the failure would land on the host.
+// to run on. The failure would land on the host.
 func TestApeLoaderIsStatic(t *testing.T) {
 	for name, want := range map[string]elf.Machine{
 		"apeld-linux-amd64": elf.EM_X86_64,

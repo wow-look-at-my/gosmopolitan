@@ -7,7 +7,7 @@
 // socket syscalls ntSyscallEmulate dispatches.
 //
 // The model is linux-shaped nonblocking BSD sockets over the classic
-// synchronous ws2_32 surface: WSASocketW WITHOUT WSA_FLAG_OVERLAPPED,
+// synchronous ws2_32 surface. WSASocketW WITHOUT WSA_FLAG_OVERLAPPED,
 // ioctlsocket(FIONBIO) for O_NONBLOCK, plain
 // recv/send/recvfrom/sendto/accept/connect, and readiness from the WSAPoll
 // netpoller. None of upstream's IOCP or OVERLAPPED machinery is involved.
@@ -531,7 +531,7 @@ func ntEmuSocket(domain, typ, proto int32) (r1, r2, errno uintptr) {
 // netpollinitNT calls it under runtime locks.
 //
 // After the accept the client's getsockname MUST equal the accepted end's
-// getpeername, else another local process won the connect race and the halves
+// getpeername, else another local process won the connect race. The halves
 // talk to a stranger. A mismatch is WSAECONNABORTED.
 func ntLoopbackTCPPair() (a, c uintptr, step string, werr uintptr) {
 	l, lerr := ntcallE(ntWSASocketWFn, _NT_AF_INET, _NT_SOCK_STREAM, 0,
@@ -611,15 +611,14 @@ func ntLoopbackTCPPair() (a, c uintptr, step string, werr uintptr) {
 	return a, c, "", 0
 }
 
-// ntEmuSocketpair emulates socketpair(2) with a connected loopback TCP
-// pair dressed as AF_UNIX. SOCK_DGRAM is EOPNOTSUPP: a datagram pair
-// would ride loopback UDP, which legally DROPS datagrams on real NT,
-// and afunix.sys has no DGRAM to fall back on. Another domain is
-// EOPNOTSUPP too, Linux's own errno for AF_INET here, and any other
-// protocol is EPROTONOSUPPORT.
+// ntEmuSocketpair emulates socketpair(2) with a connected loopback TCP pair
+// dressed as AF_UNIX. SOCK_DGRAM is EOPNOTSUPP. A datagram pair would ride
+// loopback UDP, which legally DROPS datagrams on real NT, and afunix.sys has
+// no DGRAM to fall back on. Another domain is EOPNOTSUPP too, Linux's own
+// errno for AF_INET here, and any other protocol is EPROTONOSUPPORT.
 //
-// The ends are real TCP sockets, so data flow, shutdown(2), FIONBIO
-// and WSAPoll readiness all work through the socket-kind machinery.
+// The ends are real TCP sockets, so data flow, shutdown(2), FIONBIO and
+// WSAPoll readiness all work through the socket-kind machinery.
 func ntEmuSocketpair(domain, typ, proto int32, sv *[2]int32) (r1, r2, errno uintptr) {
 	if sv == nil {
 		return ntFail3(ntEFAULT)
@@ -677,8 +676,8 @@ func ntEmuSocketpair(domain, typ, proto int32, sv *[2]int32) (r1, r2, errno uint
 
 // ntEmuBind records the Linux-spelling AF_UNIX name on the fd entry,
 // which is what ntEmuGetsockname reports back. An afunix socket file
-// is a reparse point and is NOT auto-deleted on close: unlink(2)
-// removes it like any other file, as on Linux.
+// is a reparse point. The afunix socket file is NOT auto-deleted on
+// close: unlink(2) removes it like any other file, as on Linux.
 func ntEmuBind(fd int32, sa unsafe.Pointer, salen uint32) (r1, r2, errno uintptr) {
 	e, eno := ntSockLookup(fd)
 	if eno != 0 {

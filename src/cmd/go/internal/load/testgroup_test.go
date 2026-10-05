@@ -25,7 +25,7 @@ func TestGroupMembersSharesOneBinary(test *testing.T) {
 }
 
 // build_pgo_auto_multi is the case that found this: -pgo=auto gives main
-// packages their own default.pgo, and every dependency is compiled once per
+// packages their own default.pgo. Every dependency is compiled once per
 // profile. One binary cannot link both copies.
 func TestGroupMembersKeepsProfilesApart(test *testing.T) {
 	groups := GroupMembers([]TestGroupMember{
@@ -65,8 +65,9 @@ func TestGroupMembersShareAcrossChangeableGODEBUG(test *testing.T) {
 	}
 }
 
-// A setting read only as the program starts keeps the value the binary
-// started with, so a package that needs another value gets its own binary.
+// Consider a setting read only as the program. That read starts keeps the
+// value the binary started with, so a package that needs another value
+// gets its own binary.
 func TestGroupMembersKeepsStartupGODEBUGApart(test *testing.T) {
 	plain := member("a", "")
 	maxprocs := member("b", "")
@@ -87,7 +88,7 @@ func TestGroupMembersKeepsStartupGODEBUGApart(test *testing.T) {
 	}
 }
 
-// The linker keeps only the last -extldflags, so a host linker flag the go
+// The linker keeps only the last -extldflags. A host linker flag the go
 // command adds joins the one the user gave instead of replacing it.
 func TestWithExtldflagJoinsTheLastValue(test *testing.T) {
 	cases := []struct {

@@ -94,14 +94,14 @@ func TestToolIDHashesUnstampedTool(t *testing.T) {
 	}
 }
 
-// TestCosmoToolIDNamesTheToolNotTheBinary takes the real compile binary and
-// makes a second copy whose own build ID is rewritten, which is what a
-// rebuild of the binary carrying the tools does when only the carrier
-// changed. Both must report the same tool ID, and a real one: the ID is
-// stamped from the tool's packages at link time (see linkedToolIDs), so a
-// compiler that is the same code keeps its cache entries from whichever
-// binary carries it, and a compiler that is different code moves the ID
-// through its archives.
+// TestCosmoToolIDNamesTheToolNotTheBinary takes the real compile binary.
+// TestCosmoToolIDNamesTheToolNotTheBinary makes a second copy whose own
+// build ID is rewritten, which is what a rebuild of the binary carrying the
+// tools does when only the carrier changed. Both must report the same tool
+// ID, and a real one. The ID is stamped from the tool's packages at link
+// time (see linkedToolIDs). A compiler that is the same code keeps its
+// cache entries from whichever binary carries it. A compiler that is
+// different code moves the ID through its archives.
 func TestCosmoToolIDNamesTheToolNotTheBinary(t *testing.T) {
 	testenv.MustHaveGoBuild(t)
 	testenv.MustHaveExec(t)

@@ -43,7 +43,7 @@ func openCache(dir string) (Cache, error) {
 
 // The store is configured by the environment, and what the build IS comes from
 // the build itself: the target it produces and the module it builds. The store
-// has no other way to learn either, so its log would otherwise say how many
+// has no other way to learn either. Its log would otherwise say how many
 // objects moved and nothing about whose build moved them.
 
 // openStore builds the shared tier this command reaches, or nothing when the

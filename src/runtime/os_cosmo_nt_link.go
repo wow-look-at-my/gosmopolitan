@@ -105,11 +105,11 @@ func ntSymlinkTargetIsDir(wlink, wtarget []uint16) bool {
 
 // ntEmuSymlinkat creates newpath as a symbolic link to target.
 //
-// The link body is stored in NT spelling: an absolute target goes
-// through ntPathW like every other path, so "/c/x" and "/tmp/x" name
-// the file they name here, and a relative one only has its slashes
-// flipped, because NT resolves it against the link's directory the way
-// Linux does. ntReadlinkW undoes exactly this translation.
+// The link body is stored in NT spelling. An absolute target goes through
+// ntPathW like every other path. "/c/x" and "/tmp/x" name the file they name
+// here, and a relative one only has its slashes flipped. This is because NT
+// resolves it against the link's directory the way Linux does. ntReadlinkW
+// undoes exactly this translation.
 //
 // ALLOW_UNPRIVILEGED_CREATE lets a developer-mode host create the link
 // without a privilege; a host older than the flag answers
@@ -153,8 +153,8 @@ func ntEmuSymlinkat(oldp *byte, newdirfd int32, newp *byte) (r1, r2, errno uintp
 }
 
 // ntReadlinkW reads the name the link at w stands for, in the Linux spelling
-// symlinkat took it in. The substitute name is the NT resolves, and it
-// carries the \??\ prefix of the object namespace, which is stripped here;
+// symlinkat took it in. The substitute name is the NT resolves. It carries
+// the \??\ prefix of the object namespace, which is stripped here.
 // \??\UNC\server\share becomes \\server\share. A path that is not a symlink
 // or a junction answers EINVAL, Linux's errno for readlink of an ordinary
 // file.
@@ -276,7 +276,7 @@ func ntChmodW(w []uint16, mode uint32) uintptr {
 }
 
 // ntDupHandle duplicates a slot's handle into this process. A socket is a
-// real kernel file handle, and a same-process duplicate names the same object
+// real kernel file handle. A same-process duplicate names the same object
 // with an independent lifetime, which is dup(2)'s contract.
 func ntDupHandle(h uintptr) (uintptr, uintptr) {
 	var nh uintptr
@@ -329,7 +329,7 @@ func ntEmuDup(fd int32) (r1, r2, errno uintptr) {
 	return uintptr(nfd), 0, 0
 }
 
-// ntEmuDup3 implements dup3(2), and dup2(2) through it: the duplicate
+// ntEmuDup3 implements dup3(2), and dup2(2) through it. The duplicate
 // lands in newfd, closing whatever was there, in one step under the
 // table lock so no other opener can take the slot in between.
 func ntEmuDup3(oldfd, newfd, flags int32) (r1, r2, errno uintptr) {

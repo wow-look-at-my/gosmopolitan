@@ -13,8 +13,8 @@ import (
 // A forked test suite runs many processes of one binary against the directory
 // their parent named, and each emits meta-data under the same name. Windows
 // refuses the rename while another process holds that file open. The file it
-// refuses to overwrite is the file this run would have written, so the run
-// has nothing left to do and must not fail.
+// refuses to overwrite is the file this run would have written. The run has
+// nothing left to do and must not fail.
 func TestAMetaFileAnotherProcessAlreadyWroteIsNotAFailure(t *testing.T) {
 	const content = "meta-data another process wrote"
 	s := stateReadyToEmit(t, "covmeta.0123")

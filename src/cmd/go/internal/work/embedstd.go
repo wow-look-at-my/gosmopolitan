@@ -18,14 +18,14 @@ import (
 )
 
 // embeddedStdAction finishes the compile action of a standard package in
-// embedded mode: the archive already exists inside this binary, so the
-// action has nothing to run and answers the archive's name and the build ID
+// embedded mode: the archive already exists inside this binary. The action
+// has nothing to run and answers the archive's name and the build ID
 // recorded for it. A reader outside this process, which a -export listing
-// serves, gets the archive as a build cache file instead.
-// A package the manifest never names answers nil and compiles here like any
-// other, rather than claiming an archive that is not in it. cmd is such a
-// package set. That package needs a tree to compile from, and a binary with
-// neither the archive nor a tree says which package it wanted.
+// serves, gets the archive as a build cache file instead. A package the
+// manifest never names answers nil and compiles here like any other, rather
+// than claiming an archive that is not in it. cmd is such a package set.
+// That package needs a tree to compile from, and a binary with neither the
+// archive nor a tree says which package it wanted.
 func (builder *Builder) embeddedStdAction(act *Action, p *load.Package) *Action {
 	pkg := cfg.EmbeddedStdPackage(p.ImportPath)
 	outcome := embeddedStdLookup(pkg)

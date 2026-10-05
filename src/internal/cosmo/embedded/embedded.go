@@ -2,13 +2,13 @@
 // governed by a BSD-style license that can be found in the LICENSE file.
 
 // Package embedded reads the standard library a go binary carries inside
-// itself: a blob of compiled package archives, the assembly headers and a
+// itself. A blob of compiled package archives. The assembly headers and a
 // manifest per target, appended past the APE's load span by the linker's
 // -apeappend flag and found through a trailer at the end of the file.
 //
 // A tool names an entry as "self:<name>", for example
 // "self:std/cosmo_amd64/fmt.a" in an importcfg or "self:include" as an
-// assembler include directory, and resolves it here with no file of its own.
+// assembler include directory. It resolves it here with no file of its own.
 package embedded
 
 import (

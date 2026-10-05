@@ -26,9 +26,8 @@ type ntM128A struct {
 // Offsets match upstream
 // internal/runtime/syscall/windows/defs_windows_amd64.go (Rip = 0xF8). The
 // VEH handlers only touch fields up to rip on OS-allocated records, but
-// ntPreemptM allocates its own buffer for GetThreadContext, which requires
+// ntPreemptM allocates its own buffer for GetThreadContext. This requires
 // the complete struct - and a 16-byte-aligned base, which Go's 8-byte struct
-// alignment does not give; ntPreemptM over-allocates and rounds, upstream's
 // idiom.
 type ntContext struct {
 	p1home, p2home, p3home, p4home, p5home, p6home uint64

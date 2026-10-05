@@ -13,7 +13,7 @@ flags='O_(RDONLY|WRONLY|RDWR|CREATE|CREAT|APPEND|EXCL|SYNC|TRUNC|NOFOLLOW|DIRECT
 # cosmoBuilds reports whether a cosmo build compiles this file at all. A
 # constraint that names an explicit GOOS list and leaves cosmo out of it takes
 # the file out of scope: a file cosmo never compiles teaches a reader to skim
-# this guard's output, and then the real hit goes past too.
+# this guard's output. Then the real hit goes past too.
 cosmoBuilds() {
 	local line
 	line=$(grep -m1 '^//go:build ' "$1" 2>/dev/null) || return 0

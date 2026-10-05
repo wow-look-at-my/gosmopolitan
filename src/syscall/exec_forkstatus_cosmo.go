@@ -44,8 +44,8 @@ func readForkExecStatus(fd int, p *byte, np int, pid int) (n int, err error) {
 
 // forkExecStatusKill kills a child that is past the budget and names it on
 // stderr. The kill is not silent: the parent is about to report ETIMEDOUT
-// for a spawn that got as far as fork, and only this line says which pid
-// never reached exec.
+// for a spawn that got as far as fork. Only this line says which pid never
+// reached exec.
 func forkExecStatusKill(pid int) {
 	spid := strconv.Itoa(pid)
 	msg := "forkExec: child " + spid + " has not exec'd after 120s; killing it"

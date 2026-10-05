@@ -28,8 +28,8 @@ import (
 // instead of hundreds.
 
 // batchOutput answers what one test program printed. The whole corpus runs in
-// ONE process on the first call, because a process start costs about a second
-// on a wasm runtime and most of these programs do almost nothing.
+// ONE process on the first call. This is because a process start costs about
+// a second on a wasm runtime and most of these programs do almost nothing.
 func batchOutput(corpus, file string) (out []byte, batched bool, err error) {
 	exe, name, err := batchFor(corpus, file)
 	if err != nil || name == "" {
@@ -178,7 +178,7 @@ type batch struct {
 }
 
 // eligible reports whether a test file can join the batch, and the source to
-// put in it. A file carrying a build constraint is left out: the constraint
+// put in it. A file carrying a build constraint is left out. The constraint
 // decides whether the file exists at all, and a batch that loses one has a
 // package with nothing in it.
 func eligible(src string) (string, bool) {

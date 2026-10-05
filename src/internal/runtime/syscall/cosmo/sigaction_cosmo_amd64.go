@@ -66,7 +66,7 @@ func xnuSigaction(sig uintptr, new, old unsafe.Pointer) (r1, errno uintptr)
 // A signal with no Apple number (SIGSTKFLT, SIGPWR, the realtime range)
 // fails with EINVAL rather than reporting a handler this host can never
 // deliver. The runtime's own path treats the same case as a no-op
-// success, because initsig walks every signal and must not fail; a
+// success, because initsig walks every signal and must not fail. A
 // caller naming one signal gets told instead.
 //
 //go:nosplit

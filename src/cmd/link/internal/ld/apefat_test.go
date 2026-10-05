@@ -158,11 +158,11 @@ func TestAPEDebugSidecarName(t *testing.T) {
 	}
 }
 
-// TestAPEFatMergeStripAndSidecars merges a thin APE (amd64) with a raw ELF
-// (arm64) under -apestrip -apedbg and verifies: the amd64 sidecar copies
-// that linker's ELF with the OS ABI cleared, the arm64 image gets no sidecar, and the
-// fat APE embeds only each payload's loadable span with the section header
-// fields zeroed - no symtab or debug bytes survive in the output.
+// TestAPEFatMergeStripAndSidecars merges a thin APE (amd64) with a raw ELF (arm64)
+// under -apestrip -apedbg and verifies. The amd64 sidecar copies that linker's ELF
+// with the OS ABI cleared, the arm64 image gets no sidecar. The fat APE embeds only
+// each payload's loadable span with the section header fields zeroed - no symtab or
+// debug bytes survive in the output.
 func TestAPEFatMergeStripAndSidecars(t *testing.T) {
 	amdElf, armElf, out := mergeTestPair(t, true, true)
 	extent := payloadExtent(amdElf)

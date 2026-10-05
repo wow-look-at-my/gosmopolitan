@@ -144,8 +144,8 @@ func pthread_cond_signal(c *pthreadcond) int32 {
 func cosmo_pthread_cond_signal_trampoline()
 
 // semacreate creates a semaphore for the M: on XNU hosts it lazily
-// initializes the M's pthread mutex/cond pair (like upstream darwin);
-// the Linux futex word needs no initialization.
+// initializes the M's pthread mutex/cond pair (like upstream darwin).
+// The Linux futex word needs no initialization.
 //
 //go:nosplit
 func semacreate(mp *m) {

@@ -123,11 +123,11 @@ func checkDebugSectionCodec(t *testing.T, path string, want elf.CompressionType)
 	}
 }
 
-// TestAPECosmoZstdDebugSidecars builds a real GOOS=cosmo fat APE and
-// verifies both per-architecture debug sidecars carry zstd-compressed
-// (ELFCOMPRESS_ZSTD) .debug_* sections readable by debug/elf - and that
-// a GOOS=linux build from the same toolchain still uses zlib, pinning
-// the upstream codec path for non-cosmo targets.
+// TestAPECosmoZstdDebugSidecars builds a real GOOS=cosmo fat APE.
+// TestAPECosmoZstdDebugSidecars verifies both per-architecture debug sidecars
+// carry zstd-compressed (ELFCOMPRESS_ZSTD) .debug_* sections readable by
+// debug/elf - and that a GOOS=linux build from the same toolchain still uses
+// zlib, pinning the upstream codec path for non-cosmo targets.
 func TestAPECosmoZstdDebugSidecars(t *testing.T) {
 	testenv.MustHaveGoBuild(t)
 	if testing.Short() {

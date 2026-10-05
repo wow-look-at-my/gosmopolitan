@@ -28,7 +28,7 @@ const darwinSysctlBufSize = 512
 
 func darwinUname(buf *Utsname) error {
 	*buf = Utsname{}
-	// Domainname stays empty, as it does on the arm64 path: Apple's utsname has
+	// Domainname stays empty, as it does on the arm64 path. Apple's utsname has
 	// no such field, and no sysctl serves what a Linux kernel puts there.
 	fields := [...]struct {
 		mib [2]int32

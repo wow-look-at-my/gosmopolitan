@@ -1,4 +1,4 @@
-# The embedded standard library: go tool embedstd writes the blob, a cosmo
+# The embedded standard library. Go tool embedstd writes the blob, a cosmo
 # go command links it in, and with no GOROOT that command builds a program
 # byte for byte as the source tree does. The toolchain must already be
 # built, and cosmocc installed in /opt/cosmocc: std is built with cgo on.

@@ -9,8 +9,8 @@ package cosmo
 // functions that do the translating.
 
 // DarwinStatfs is Apple's struct statfs under the 64-bit-inode ABI. The
-// syscall package allocates one of these and converts it to a Linux Statfs_t;
-// see darwinStatfs for why the buffer cannot be built inside the emulation.
+// syscall package allocates one of these and converts it to a Linux Statfs_t.
+// See darwinStatfs for why the buffer cannot be built inside the emulation.
 type DarwinStatfs struct {
 	Bsize       uint32
 	Iosize      int32
@@ -159,7 +159,7 @@ const (
 
 // darwinXlatResource maps a Linux RLIMIT_* number to Apple's. The second
 // result is false for a resource Apple does not have (RLIMIT_LOCKS and
-// everything above it), which the caller reports as EINVAL - the same
+// everything above it), which the caller reports as EINVAL. The same
 // answer Linux gives for a resource its own kernel does not know.
 //
 //go:nosplit
@@ -213,9 +213,10 @@ type LinuxTimeval struct {
 	Usec int64
 }
 
-// DarwinRusage is Apple's struct rusage. Every field after both
-// timevals is a 64-bit signed integer in the same order Linux uses -
-// Linux took the layout from BSD - so only the timevals are translated.
+// DarwinRusage is Apple's struct rusage. Consider every field after
+// both timevals. That field is a 64-bit signed integer in the same
+// order Linux uses - Linux took the layout from BSD - so only the
+// timevals are translated.
 type DarwinRusage struct {
 	Utime    DarwinTimeval
 	Stime    DarwinTimeval
@@ -285,7 +286,7 @@ func DarwinRusageToLinux(src *DarwinRusage, dst *LinuxRusage) {
 // its argument, so both systems number even the requests they share
 // differently. Every value here is the one the tree's own tables record
 // (syscall/zerrors_linux_arm64.go and syscall/zerrors_darwin_arm64.go),
-// never a remembered one: a wrong request does not fail, it performs a
+// never a remembered one. A wrong request does not fail, it performs a
 // DIFFERENT operation on the descriptor.
 const (
 	linuxTIOCSCTTY  = 0x540e

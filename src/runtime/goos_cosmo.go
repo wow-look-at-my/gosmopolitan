@@ -32,9 +32,9 @@ func setGOOS() {
 // one of multiple amd64, arm, s390x, and so on.
 //
 // A variable for the same reason as GOOS: a payload can run on a machine
-// of another architecture, and then the honest answer is the machine.
-// `const x = runtime.GOARCH == "amd64"` still compiles - the type checker
-// folds the build value where a constant is required. See
+// of another architecture. Then the honest answer is the machine. `const
+// x = runtime.GOARCH == "amd64"` still compiles - the type checker folds
+// the build value where a constant is required. See
 // cmd/compile/internal/types2/dynconst.go.
 readonly var GOARCH string = goarch.GOARCH
 

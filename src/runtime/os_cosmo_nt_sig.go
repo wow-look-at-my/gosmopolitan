@@ -91,7 +91,7 @@ const (
 	ntCallbackLastVCH
 )
 
-// ntInitSignals registers the exception machinery at NT boot: error dialogs
+// ntInitSignals registers the exception machinery at NT boot. Error dialogs
 // off (CI must never hang on a WER popup), the vectored exception handler in
 // first position, the first/last vectored continue handlers (upstream
 // initExceptionHandler's shape), and the wide TEB stack window for the boot
@@ -151,7 +151,7 @@ func ntExcToLinuxSig(code uint32) (sig uint32, code0 uintptr) {
 }
 
 // ntIsGoException reports whether this exception should be translated into a
-// Go panic or throw: the faulting PC must be inside the Go text segment (DLL
+// Go panic or throw. The faulting PC must be inside the Go text segment (DLL
 // faults are passed on) and the code must be in the handled set.
 //
 //go:nosplit
@@ -477,7 +477,7 @@ func ntDeliverSelfSignal(sig uint32, handler uintptr) {
 }
 
 // ntWinthrowLine writes one line about the exception with ntwrite1
-// alone: code, PC, the access kind and address, SP, the g the thread
+// alone. Code, PC, the access kind and address, SP, the g the thread
 // carries, and whether a panic was already under way.
 //
 //go:nosplit

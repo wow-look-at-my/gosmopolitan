@@ -20,9 +20,9 @@ func Run(argv []string) int {
 	return RunAs(argv, nil)
 }
 
-// RunAs is Run for a host binary that reaches the go command by a command
-// line of its own, goCommand, which the go command uses to start itself
-// again. A nil goCommand is this executable.
+// RunAs is Run. This holds for a host binary that reaches the go command
+// by a command line of its own, goCommand, which the go command uses to
+// start itself again. A nil goCommand is this executable.
 func RunAs(argv []string, goCommand []string) int {
 	if code, ran := selftool.Dispatch(argv); ran {
 		return code

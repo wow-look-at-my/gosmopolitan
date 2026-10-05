@@ -236,7 +236,7 @@ func gsmSources(route string) []archiveSource {
 
 // githubRefs returns what ls-remote would list, over plain HTTP. The first
 // source that answers wins: the info/refs advertisement from github.com,
-// direct and then through the proxy; then the REST API, from
+// direct and then through the proxy. This also covers then the REST API, from
 // github-state-mirror, api.github.com, and api.github.com through the proxy.
 func (r *gitRepo) githubRefs(ctx context.Context) (map[string]string, error) {
 	infoRefs := "https://github.com/" + r.github.owner + "/" + r.github.name + ".git/info/refs?service=git-upload-pack"

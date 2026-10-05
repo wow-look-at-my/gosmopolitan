@@ -70,8 +70,7 @@ func assembleTest(t *testing.T, spec string, wantAMD, wantARM bool) []byte {
 }
 
 // bootHeaderMachines decodes every printf boot header in the 8192-byte
-// scan window and returns its ELF machine type, the way the cosmo `ape`
-// loader's own scan does.
+// the cosmo `ape` loader's own scan does.
 func bootHeaderMachines(t *testing.T, bin []byte) []uint16 {
 	t.Helper()
 	head := bin
@@ -168,7 +167,7 @@ func catchExitf(t *testing.T, fn func()) string {
 // TestAPEPlatformsHeaderPieces checks that each selection emits exactly the
 // boot mechanisms its platforms need and nothing else. The absences are the
 // contract: a piece kept for a deselected platform is a claim the binary no
-// longer honors, and a piece dropped for a selected one is a host that dies
+// longer honors. A piece dropped for a selected one is a host that dies
 // with no diagnosable symptom.
 func TestAPEPlatformsHeaderPieces(t *testing.T) {
 	tests := []struct {
@@ -312,7 +311,7 @@ func TestAPEPlatformsDefaultUnchanged(t *testing.T) {
 }
 
 // TestAPEPlatformsDerivedFromPayloads checks the no-flag behavior for a
-// single input: the header claims only the platforms that input can serve,
+// single input. The header claims only the platforms that input can serve,
 // which is what a GOCOSMOFAT=0 build produced before the flag existed.
 func TestAPEPlatformsDerivedFromPayloads(t *testing.T) {
 	amdOnly := assembleTest(t, "", true, false)

@@ -58,8 +58,8 @@ func ntNowFiletime() (ntFiletime, bool) {
 // SetFileTime, which needs a handle rather than a path.
 //
 // The sentinels translate to Win32's own convention rather than to a
-// value: SetFileTime leaves a stamp alone when its pointer is NULL,
-// which is exactly UTIME_OMIT, and UTIME_NOW is filled from the system
+// value: SetFileTime leaves a stamp alone when its pointer is NULL.
+// This is exactly UTIME_OMIT, and UTIME_NOW is filled from the system
 // clock. A nil times array means "both now" on Linux.
 //
 // AT_SYMLINK_NOFOLLOW opens a symlink as itself, so the stamps land on
@@ -166,8 +166,8 @@ func ntEmuTruncate(cpath *byte, length int64) (r1, r2, errno uintptr) {
 
 // ntHandlePathW recovers a handle's path as a wide string.
 // GetFinalPathNameByHandleW answers in \\?\ form. SetCurrentDirectoryW
-// accepts that form, but it stores the string as given, so the prefix
-// is rewritten away to keep the current directory in the ordinary
+// accepts that form, but it stores the string as given. The prefix is
+// rewritten away to keep the current directory in the ordinary
 // spelling GetCurrentDirectoryW reports: \\?\C:\dir becomes C:\dir and
 // \\?\UNC\server\share becomes \\server\share.
 func ntHandlePathW(h uintptr) ([]uint16, uintptr) {

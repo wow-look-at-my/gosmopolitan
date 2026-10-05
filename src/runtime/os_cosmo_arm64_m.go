@@ -8,7 +8,7 @@ package runtime
 import "internal/runtime/atomic"
 
 // mOS contains OS-specific m fields for cosmo arm64. The host OS is
-// only known at run time, so it carries both hosts' M-parking state: a
+// only known at run time. It carries both hosts' M-parking state: a
 // pthread mutex/cond pair for XNU and a futex word for Linux (see
 // os_cosmo_arm64_sema.go).
 type mOS struct {

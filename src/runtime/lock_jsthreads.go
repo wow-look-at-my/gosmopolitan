@@ -311,7 +311,7 @@ func notetsleepg(n *note, ns int64) bool {
 	return ok
 }
 
-// notetsleepgPark is the gopark callback of notetsleepg: it publishes the
+// notetsleepgPark is the gopark callback of notetsleepg. It publishes the
 // parked g on the note under noteGLock, unless the note was woken in the
 // meantime (then the park is abandoned).
 func notetsleepgPark(gp *g, np unsafe.Pointer) bool {
@@ -522,7 +522,7 @@ func wasmNewEventG() *g {
 // serving the synchronous, nested case). It locks itself to the main M so
 // that an event handler that blocks and is readied from a worker thread still
 // continues on the main thread (JavaScript values and the events bookkeeping
-// are main-thread-only); while it is blocked, the main M parks in stoplockedm
+// are main-thread-only). While it is blocked, the main M parks in stoplockedm
 // - in the event loop, via wasmMainParkNote - and the P moves to a worker.
 func wasmEventGoroutine() {
 	// This goroutine is created by (and normally starts on) the main M.
@@ -655,8 +655,9 @@ func wasmThreadsBeforeIdleMain(now, pollUntil int64) (gp *g, otherReady bool) {
 // beforeIdle gets called by the scheduler if no goroutine is awake.
 //
 // On the main M: arm the host timeout machinery and hand a pending host event
-// to the scheduler (wasmThreadsBeforeIdleMain); with nothing to do the main M
-// falls through to stopm and parks in the event loop (wasmMainParkNote).
+// to the scheduler (wasmThreadsBeforeIdleMain). This also covers with nothing
+// to do the main M falls through to stopm and parks in the event loop
+// (wasmMainParkNote).
 //
 //go:yeswritebarrierrec
 func beforeIdle(now, pollUntil int64) (gp *g, otherReady bool) {
