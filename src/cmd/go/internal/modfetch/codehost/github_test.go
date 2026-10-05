@@ -7,6 +7,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -285,6 +286,9 @@ type fakeGitHub struct {
 
 	// infoRefsStatus fails every info/refs request, direct or proxied.
 	infoRefsStatus int
+	// infoRefsCredential is the exact Authorization value an info/refs request
+	// must carry. Set, a request without it is unauthorized.
+	infoRefsCredential string
 	// apiStatus fails every direct api.github.com request with this code.
 	apiStatus int
 	// private makes github.com and api.github.com answer nothing, directly or through the proxy.
@@ -341,6 +345,10 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	if isInfoRefs {
+		if f.infoRefsCredential != "" && req.Header.Get("Authorization") != f.infoRefsCredential {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
 		if f.infoRefsStatus != 0 {
 			http.Error(w, "no refs", f.infoRefsStatus)
 			return
@@ -597,6 +605,50 @@ func TestGitHubRefsOverHTTP(t *testing.T) {
 				t.Errorf("asked github-state-mirror: %v, want %v\nall: %q", sawGSM, usedAPI, fake.refRequests)
 			}
 		})
+	}
+}
+
+// TestGitHubInfoRefsPresentsTheGitCredential reads a private repository's ref
+// advertisement over HTTPS with the credential git's own helper holds, instead
+// of falling back to git ls-remote. The advertisement is the same one the fast
+// path parses; only the credential differs.
+func TestGitHubInfoRefsPresentsTheGitCredential(t *testing.T) {
+	testenv.MustHaveExecPath(t, "git")
+	source, _ := makeSourceRepo(t, sourceFiles)
+	head := gitIn(t, source, "rev-parse", "HEAD")
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(home, "gitconfig"))
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_ASKPASS", "")
+	t.Setenv("GIT_TERMINAL_PROMPT", "0")
+	if err := os.WriteFile(filepath.Join(home, "gitconfig"), []byte("[credential]\n\thelper = store\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".git-credentials"), []byte("https://gopher:sekret@github.com\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	credential := "Basic " + base64.StdEncoding.EncodeToString([]byte("gopher:sekret"))
+
+	fake := &fakeGitHub{dir: source, redirectTo: "codeload.github.com", infoRefsCredential: credential}
+	serveFakeGitHub(t, fake)
+	ctx := testContext(t)
+	repo := fakeGitHubRepo(t, ctx, filepath.Join(t.TempDir(), "no-such-remote.git"))
+
+	latest, err := repo.Latest(ctx)
+	if err != nil {
+		t.Fatalf("Latest with a git credential = %v; want the advertisement", err)
+	}
+	if latest.Name != head || latest.Origin.Ref != "HEAD" {
+		t.Errorf("Latest = %s at %q, want %s at HEAD", latest.Name, latest.Origin.Ref, head)
+	}
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	last := fake.refRequests[len(fake.refRequests)-1]
+	if !strings.HasPrefix(last, "github.com/owner/repo.git/info/refs") {
+		t.Errorf("refs came from %s, want the authenticated github.com info/refs\nall: %q", last, fake.refRequests)
 	}
 }
 

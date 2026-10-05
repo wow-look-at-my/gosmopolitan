@@ -269,7 +269,29 @@ func (r *gitRepo) githubInfoRefs(source archiveSource) (map[string]string, error
 	if err != nil {
 		return nil, err
 	}
-	resp, err := web.GetPinned(u, source.allowHost, source.credentialFor)
+	refs, err := r.readInfoRefs(u, source.pinOptions())
+	if err == nil {
+		return refs, nil
+	}
+	// A private repository answers 401 until a credential is presented, and
+	// the GOPROXY credentials may hold none for it. Git holds one; present it
+	// over HTTPS so the advertisement costs one GET, not a git ls-remote.
+	if source.bearer != "" || source.credentialFor != "" {
+		return nil, err
+	}
+	basicAuth, authErr := gitBasicAuth(r.dir, source.url)
+	if authErr != nil {
+		return nil, err
+	}
+	opts := source.pinOptions()
+	opts.BasicAuth = basicAuth
+	return r.readInfoRefs(u, opts)
+}
+
+// readInfoRefs fetches and parses the advertisement at u, with the credential
+// the options name.
+func (r *gitRepo) readInfoRefs(u *url.URL, opts web.PinOptions) (map[string]string, error) {
+	resp, err := web.GetPinnedWith(u, opts)
 	if err != nil {
 		return nil, err
 	}

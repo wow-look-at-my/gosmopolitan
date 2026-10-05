@@ -19,8 +19,35 @@ import (
 	"net/http"
 	"net/url"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
+
+// GitBasicAuth returns the credential git's own helpers hold for rawURL, as
+// HTTP basic authentication. A caller that would otherwise run git over the
+// network can present the same credential to a plain HTTPS request instead.
+// dir is the working directory git reads its config in, and must be absolute,
+// as GOAUTH=git requires.
+func GitBasicAuth(dir, rawURL string) (*url.Userinfo, error) {
+	if dir == "" || !filepath.IsAbs(dir) {
+		return nil, fmt.Errorf("git credential needs an absolute working directory, got %q", dir)
+	}
+	cmd := exec.Command("git", "credential", "fill")
+	cmd.Dir = dir
+	cmd.Stdin = strings.NewReader(fmt.Sprintf("url=%s\n", rawURL))
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("'git credential fill' failed (url=%s): %w", rawURL, err)
+	}
+	prefix, username, password := parseGitAuth(out)
+	if prefix == "" || username == "" || password == "" {
+		return nil, fmt.Errorf("'git credential fill' returned no credential for %s", rawURL)
+	}
+	if !strings.HasPrefix(rawURL, prefix) {
+		return nil, fmt.Errorf("requested a credential for %s, got one for %s", rawURL, prefix)
+	}
+	return url.UserPassword(username, password), nil
+}
 
 const maxTries = 3
 

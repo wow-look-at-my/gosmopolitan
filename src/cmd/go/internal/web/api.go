@@ -205,6 +205,9 @@ type PinOptions struct {
 	CredentialURL string
 	// Bearer is the whole credential when it is set. GOAUTH is not asked. net/http drops it on a redirect to another host.
 	Bearer string
+	// BasicAuth is presented as HTTP basic authentication. It is not asked of
+	// GOAUTH, and takes precedence over CredentialURL.
+	BasicAuth *url.Userinfo
 	// NoRedirect returns a redirect as the response and does not follow it.
 	NoRedirect bool
 }
