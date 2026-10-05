@@ -83,10 +83,12 @@ func LockedVersion(ctx context.Context, store RunLockStore, key RunLockKey, reso
 	fail := func(err error) error {
 		return fmt.Errorf("%s: run lock store %s: %w", key.Name(), store, err)
 	}
-	// A lock never changes inside its run, so this job's copy of it is the store's answer, and no request goes out for it.
-	kept := keptLocks(store)
-	if version, found, err := kept.Lookup(ctx, key); err == nil && found && version != "" {
-		return version, nil
+	// A lock never changes inside its run, so the copy on this machine is the store's answer.
+	kept, keeping := keptLocks(store)
+	if keeping {
+		if version, found, err := kept.Lookup(ctx, key); err == nil && found && version != "" {
+			return version, nil
+		}
 	}
 	version, found, err := store.Lookup(ctx, key)
 	if err != nil {
@@ -110,8 +112,10 @@ func LockedVersion(ctx context.Context, store RunLockStore, key RunLockKey, reso
 	if version == "" {
 		return "", fail(errors.New("the store holds an empty version"))
 	}
-	if _, err := kept.Claim(ctx, key, version); err != nil {
-		fmt.Fprintf(logOutput, "go: %s: cannot keep the run lock in %s, so the next go command asks %s again: %v\n", key.Name(), kept.dir, store, err)
+	if keeping {
+		if _, err := kept.Claim(ctx, key, version); err != nil {
+			fmt.Fprintf(logOutput, "go: %s: cannot keep the run lock in %s, so the next go command asks %s again: %v\n", key.Name(), kept.dir, store, err)
+		}
 	}
 	logVersion(key.Module, key.Branch, version, origin)
 	return version, nil
@@ -125,21 +129,17 @@ func logVersion(path, branch, version, origin string) {
 
 var logOutput io.Writer = os.Stderr
 
-// jobDir holds this job's copy of the locks it read. The runner gives each job
-// a new RUNNER_TEMP.
-var jobDir = func() string {
-	if dir := os.Getenv("RUNNER_TEMP"); dir != "" {
-		return dir
+// keptLocks returns this machine's copy of the locks store holds, under
+// StateDir. Each store has its own copy, so a store that fails still fails the
+// build. The key names the run and the attempt, so a copy never outlives them.
+func keptLocks(store RunLockStore) (fileStore, bool) {
+	root := StateDir()
+	if root == "" {
+		return fileStore{}, false
 	}
-	return os.TempDir()
-}
-
-// keptLocks returns this job's copy of the locks store holds. Each store has its
-// own copy, so a store that fails still fails the build.
-func keptLocks(store RunLockStore) fileStore {
 	sum := sha256.Sum256([]byte(store.String()))
-	dir := filepath.Join(jobDir(), "gosmopolitan-run-locks", hex.EncodeToString(sum[:12]))
-	return fileStore{raw: dir, dir: dir}
+	dir := filepath.Join(root, "run-locks", hex.EncodeToString(sum[:12]))
+	return fileStore{raw: dir, dir: dir}, true
 }
 
 // OpenRunLock returns the store and the run of this process. It reads the

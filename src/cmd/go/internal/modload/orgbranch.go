@@ -7,12 +7,10 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"maps"
+	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
-	"sync"
 
 	"cmd/go/internal/base"
 	"cmd/go/internal/cfg"
@@ -126,11 +124,7 @@ func orgVersion(ld *Loader, ctx context.Context, path string) (string, error) {
 		branch = orgDefaultRev
 	}
 	return orgVersionCache.Do(orgVersionKey{branch, path}, func() (string, error) {
-		inherited, err := orgmod.Inherited()
-		if err != nil {
-			return "", err
-		}
-		if version, ok := inherited[path+"@"+branch]; ok {
+		if version, ok := orgmod.InheritedHead(path, branch); ok {
 			return version, nil
 		}
 		resolve := func() (string, error) {
@@ -143,31 +137,32 @@ func orgVersion(ld *Loader, ctx context.Context, path string) (string, error) {
 		}
 		version, err := orgmod.Version(ctx, orgmod.CIBuild(), orgmod.CurrentRunLock, path, branch, resolve)
 		if err == nil {
-			passOrgHead(path+"@"+branch, version, inherited)
+			passOrgHead(path, branch, version)
 		}
 		return version, err
 	})
 }
 
-var (
-	orgHeadsMu sync.Mutex
-	orgHeads   orgmod.Heads // what this command passes on: the inherited heads and its own
-)
-
-// passOrgHead puts the head this command resolved in the environment of every
-// process it starts. Each child go command then builds it without a request.
-// Every child starts after the packages load, so no reader sees a partial write.
-func passOrgHead(name, version string, inherited orgmod.Heads) {
-	orgHeadsMu.Lock()
-	defer orgHeadsMu.Unlock()
-	if orgHeads == nil {
-		orgHeads = maps.Clone(inherited)
+func init() {
+	orgmod.StateDir = func() string {
+		if cfg.GOMODCACHE == "" {
+			return ""
+		}
+		return filepath.Join(cfg.GOMODCACHE, "cache", "org")
 	}
-	orgHeads[name] = version
-	env := slices.DeleteFunc(slices.Clone(cfg.OrigEnv), func(entry string) bool {
-		return strings.HasPrefix(entry, orgmod.HeadsEnv+"=")
-	})
-	cfg.OrigEnv = append(env, orgmod.HeadsEnv+"="+orgHeads.String())
+}
+
+// passOrgHead keeps the head this command resolved for the go commands it
+// starts, and removes it when this command exits.
+func passOrgHead(path, branch, version string) {
+	cleanup, err := orgmod.PassHead(path, branch, version)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "go: %s@%s: cannot pass the head to the go commands this one starts, so each resolves it again: %v\n", path, branch, err)
+		return
+	}
+	if cleanup != nil {
+		base.AtExit(cleanup)
+	}
 }
 
 // orgBranchVersion returns the head of one branch of the repository that

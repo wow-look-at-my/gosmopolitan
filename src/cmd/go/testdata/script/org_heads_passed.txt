@@ -1,6 +1,8 @@
-# A go command passes the org heads it resolved to every process it starts. A
+# A go command passes the org heads it resolved to the go commands it starts. A
 # go run under go generate builds those heads and asks the repository for none
-# of them. So one go generate builds one set of heads, and resolves each of them once.
+# of them. So one go generate builds one set of heads, and resolves each once.
+# The child finds them by walking its own ancestors in /proc. No variable or
+# flag carries a head, so a host without /proc resolves each head again.
 
 [short] skip 'constructs local git repositories'
 [!git] skip
@@ -17,7 +19,6 @@ env GIT_AUTHOR_EMAIL='gopher@golang.org'
 env GIT_COMMITTER_NAME=$GIT_AUTHOR_NAME
 env GIT_COMMITTER_EMAIL=$GIT_AUTHOR_EMAIL
 env GITHUB_ACTIONS=
-env GOSMOPOLITAN_ORG_HEADS=
 
 cd $WORK/alpha
 exec git init
@@ -33,22 +34,24 @@ env GIT_COMMITTER_DATE=2026-01-03T04:05:06Z
 exec git commit -am 'alpha next'
 exec git checkout main
 
-# The first directive moves the head of alpha. The go run after it still
-# builds the head go generate resolved, and nothing resolves it a second time.
+# The first directive moves the head of alpha. With /proc, the go run after it
+# still builds the head go generate resolved, and nothing resolves it again.
+# Without /proc the go run resolves the new head for itself.
 cd $WORK/m
 go generate
-stdout '^alpha-main$'
-! stdout 'alpha-next'
-stderr -count=1 'github.com/wow-look-at-my/alpha@HEAD: building v0\.0\.0-20260102030405-[0-9a-f]+ -- the branch head, this build resolving it for itself'
+[GOOS:linux] stdout '^alpha-main$'
+[GOOS:linux] ! stdout 'alpha-next'
+[GOOS:linux] stderr -count=1 'github.com/wow-look-at-my/alpha@HEAD: building v0\.0\.0-20260102030405-[0-9a-f]+ -- the branch head, this build resolving it for itself'
+[!GOOS:linux] stdout '^alpha-next$'
 
 # A go command that no go command started resolves the head for itself.
 go run .
 stdout '^alpha-next$'
 
-# A value that is not module@branch=version fails, and names the variable.
-env GOSMOPOLITAN_ORG_HEADS=github.com/wow-look-at-my/alpha
-! go run .
-stderr 'GOSMOPOLITAN_ORG_HEADS: entry "github.com/wow-look-at-my/alpha": want module@branch=version'
+# The environment carries no head. A variable that names one changes nothing.
+env GOSMOPOLITAN_ORG_HEADS=github.com/wow-look-at-my/alpha@HEAD=v0.0.0-20260102030405-000000000000
+go run .
+stdout '^alpha-next$'
 
 -- $WORK/home/gopher/.gitconfig --
 [user]

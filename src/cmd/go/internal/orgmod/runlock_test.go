@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -26,17 +28,30 @@ const (
 
 var testRun = Run{Repository: "wow-look-at-my/consumer", ID: "4242", Attempt: "1"}
 
-// TestMain gives this process its own job directory, so no test reads a lock
-// another run of these tests kept.
+// testStateEnv names the state directory a child of these tests shares with its parent. Only this test binary reads it.
+const testStateEnv = "ORGMOD_TEST_STATE_DIR"
+
+// TestMain gives this process its own state directory, so no test reads what
+// another run of these tests kept. A child started by a test shares its parent's.
 func TestMain(m *testing.M) {
-	dir, err := os.MkdirTemp("", "orgmod-job")
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+	dir := os.Getenv(testStateEnv)
+	if dir == "" {
+		made, err := os.MkdirTemp("", "orgmod-state")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		dir = made
 	}
-	jobDir = func() string { return dir }
+	StateDir = func() string { return dir }
+	if asks := os.Getenv(childAsks); asks != "" {
+		answerChild(asks)
+		os.Exit(0)
+	}
 	code := m.Run()
-	os.RemoveAll(dir)
+	if os.Getenv(testStateEnv) == "" {
+		os.RemoveAll(dir)
+	}
 	os.Exit(code)
 }
 
@@ -551,9 +566,9 @@ func TestLockedVersionAsksTheStoreOncePerJob(t *testing.T) {
 	t.Serial()
 	var out strings.Builder
 	jobTemp := t.TempDir()
-	saveOutput, saveDir := logOutput, jobDir
-	logOutput, jobDir = &out, func() string { return jobTemp }
-	defer func() { logOutput, jobDir = saveOutput, saveDir }()
+	saveOutput, saveDir := logOutput, StateDir
+	logOutput, StateDir = &out, func() string { return jobTemp }
+	defer func() { logOutput, StateDir = saveOutput, saveDir }()
 
 	store := newMemStore()
 	var calls int
@@ -595,24 +610,80 @@ func TestLockedVersionAsksTheStoreOncePerJob(t *testing.T) {
 	}
 }
 
-func TestHeads(t *testing.T) {
-	heads, err := ParseHeads("github.com/wow-look-at-my/beta@HEAD=" + headB + ",," + alphaPath + "@main=" + headA)
+// childAsks names the head a child of this test binary looks up. TestMain answers it in place of running the tests.
+const childAsks = "ORGMOD_TEST_CHILD_ASKS"
+
+// askChild starts this test binary as a child process and returns the head it
+// inherits for module@branch, or "none".
+func askChild(t *testing.T, module, branch string) string {
+	t.Helper()
+	cmd := exec.Command(os.Args[0], "-test.run=^$")
+	cmd.Env = append(os.Environ(), testStateEnv+"="+StateDir(), childAsks+"="+module+"@"+branch)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("child: %v", err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// answerChild prints the head this process inherits for the module@branch
+// that childAsks names.
+func answerChild(asks string) {
+	module, branch, _ := strings.Cut(asks, "@")
+	if version, ok := InheritedHead(module, branch); ok {
+		fmt.Println(version)
+		return
+	}
+	fmt.Println("none")
+}
+
+// TestPassHeadReachesOnlyChildren pins where an inherited head comes from: a
+// live ancestor that runs this same executable, and nothing else.
+func TestPassHeadReachesOnlyChildren(t *testing.T) {
+	t.Serial()
+	me, procFound := self()
+	cleanup, err := PassHead(alphaPath, "main", headA)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if heads[alphaPath+"@main"] != headA || heads["github.com/wow-look-at-my/beta@HEAD"] != headB || len(heads) != 2 {
-		t.Errorf("ParseHeads = %v", heads)
-	}
-	want := alphaPath + "@main=" + headA + ",github.com/wow-look-at-my/beta@HEAD=" + headB
-	if got := heads.String(); got != want {
-		t.Errorf("String = %q, want %q", got, want)
-	}
-	if empty, err := ParseHeads(""); err != nil || len(empty) != 0 {
-		t.Errorf("ParseHeads of nothing = %v, %v; want no heads", empty, err)
-	}
-	for _, bad := range []string{alphaPath, alphaPath + "=" + headA, alphaPath + "@main=", "@main=" + headA} {
-		if _, err := ParseHeads(bad); err == nil || !strings.Contains(err.Error(), HeadsEnv) {
-			t.Errorf("ParseHeads(%q) = %v; want an error that names %s", bad, err, HeadsEnv)
+	if !procFound {
+		// No /proc: no process finds an ancestor, so none takes a head.
+		if cleanup != nil {
+			t.Error("PassHead kept a head with no way for a child to find this process")
 		}
+		if got := askChild(t, alphaPath, "main"); got != "none" {
+			t.Errorf("a child with no /proc inherited %q; want none", got)
+		}
+		return
+	}
+	if cleanup == nil {
+		t.Fatal("the first PassHead returned no cleanup")
+	}
+	if again, err := PassHead(alphaPath, "v1", headB); err != nil || again != nil {
+		t.Errorf("a second PassHead = %v, %v; want no second cleanup", again != nil, err)
+	}
+
+	if got := askChild(t, alphaPath, "main"); got != headA {
+		t.Errorf("a child inherited %q; want the head its parent passed, %q", got, headA)
+	}
+	if got := askChild(t, alphaPath, "v1"); got != headB {
+		t.Errorf("a child inherited %q for v1; want %q", got, headB)
+	}
+
+	// A record no live ancestor wrote is never read: one under this pid with another start time.
+	betaPath := "github.com/wow-look-at-my/beta"
+	for _, forged := range []procID{{me.pid, me.start + "0"}, {1, "0"}} {
+		store := fileStore{dir: filepath.Join(StateDir(), "heads", forged.String())}
+		if _, err := store.Claim(context.Background(), RunLockKey{Module: betaPath, Branch: "main"}, headB); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := askChild(t, betaPath, "main"); got != "none" {
+		t.Errorf("a child inherited %q from a record no ancestor wrote; want none", got)
+	}
+
+	cleanup()
+	if got := askChild(t, alphaPath, "main"); got != "none" {
+		t.Errorf("a child inherited %q after its parent removed its heads; want none", got)
 	}
 }

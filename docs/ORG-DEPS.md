@@ -11,7 +11,8 @@ An org module is a `github.com/wow-look-at-my/...` module. It has no version of 
 ## go.mod keeps the placeholder
 
 - Each go command resolves the head again and builds it. The version lives in the build list, the module cache and `go version -m`, not in `go.mod`.
-- A go command passes the heads it resolved to every process it starts, in `GOSMOPOLITAN_ORG_HEADS` (`module@branch=version`, separated by commas). A go command that a `go generate` directive, a `go run` program or a test starts builds those heads and resolves none of them again. So one `go generate` builds one set of heads, and asks for each of them once. A malformed value fails the command. `org_heads_passed.txt` covers it.
+- A go command keeps the heads it resolved under `$GOMODCACHE/cache/org/heads/<pid>-<start time>/` while it runs, and removes them when it exits. A go command that it starts, through a `go generate` directive, a `go run` program or a test, builds those heads and resolves none of them again. So one `go generate` resolves each head once. The code is `src/cmd/go/internal/orgmod/procheads.go`, and `org_heads_passed.txt` covers it.
+- No variable and no flag carries a head. A child walks its own ancestors in `/proc` and reads only the record of a live ancestor that runs the same go executable. The start time tells a recycled pid apart. A forged record therefore means a write into the module cache, which can already change any module's source. A host without `/proc` passes nothing, and each go command resolves its heads itself.
 - `go mod tidy`, `go get` and every build write the placeholder for an org module. A tidy go.mod stays byte for byte identical when an org dependency moves.
 - The token on an org require or replace line is not read. A go.mod file that records some other version builds the same way, and the next write puts the placeholder back.
 - An org module has no `go.sum` line. Its commit is the integrity check.
@@ -27,7 +28,7 @@ A CI build follows the same heads as any other build, and writes the same placeh
 - The first go command of the run that resolves a lock claims the head it found. Every later go command of the run, in any job on any machine, builds the claimed version instead of the head. A commit that lands in the middle of a run therefore reaches no job of it. A re-run is a new attempt, so it claims the heads again.
 - The claim is a create-if-absent. Of racing claims one wins, and every build takes the winner's version.
 - Inside one go command the resolved version stays cached, so a command asks the store once per lock.
-- A lock never changes inside its run. As a result, a job keeps a copy of each lock it reads, under `$RUNNER_TEMP/gosmopolitan-run-locks/`, one directory per store. A later go command of the job reads the copy and sends no request, so the job asks the store once per lock. Only the command that asked prints the `building` line.
+- A lock never changes inside its run. As a result, the machine keeps a copy of each lock it reads, under `$GOMODCACHE/cache/org/run-locks/`, one directory per store. A later go command of the job reads the copy and sends no request, so the job asks the store once per lock. Only the command that asked prints the `building` line. The key names the run and the attempt, so a copy never reaches another run.
 - A store that refuses, or a CI build that names no run, fails the command. The error names the store and the module. Nothing stands in for the lock.
 - A dropped connection, a 5xx or a 429 is the path to the store, not its answer. The command asks again on a fixed cadence until the store answers, and names each failure on stderr.
 - Outside CI nothing reads or writes the store.
