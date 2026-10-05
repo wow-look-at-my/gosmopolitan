@@ -263,20 +263,20 @@ func (r *gitRepo) githubRefs(ctx context.Context) (map[string]string, error) {
 	return nil, err
 }
 
-// githubInfoRefs reads the ref advertisement git itself fetches first.
+// githubInfoRefs reads the ref advertisement git itself fetches first. A
+// private repository refuses it until a credential is presented, and the
+// GOPROXY credentials may hold none for it. Git holds one; present that over
+// HTTPS so the advertisement costs one GET rather than a git ls-remote.
 func (r *gitRepo) githubInfoRefs(source archiveSource) (map[string]string, error) {
 	u, err := url.Parse(source.url)
 	if err != nil {
 		return nil, err
 	}
-	refs, err := r.readInfoRefs(u, source.pinOptions())
+	refs, status, err := r.readInfoRefs(u, source.pinOptions())
 	if err == nil {
 		return refs, nil
 	}
-	// A private repository answers 401 until a credential is presented, and
-	// the GOPROXY credentials may hold none for it. Git holds one; present it
-	// over HTTPS so the advertisement costs one GET, not a git ls-remote.
-	if source.bearer != "" || source.credentialFor != "" {
+	if !refusedForCredential(status) || source.bearer != "" || source.credentialFor != "" {
 		return nil, err
 	}
 	basicAuth, authErr := gitBasicAuth(r.dir, source.url)
@@ -285,29 +285,37 @@ func (r *gitRepo) githubInfoRefs(source archiveSource) (map[string]string, error
 	}
 	opts := source.pinOptions()
 	opts.BasicAuth = basicAuth
-	return r.readInfoRefs(u, opts)
+	refs, _, err = r.readInfoRefs(u, opts)
+	return refs, err
+}
+
+// refusedForCredential reports whether status asks for a credential. The values
+// are net/http's, written out because the bootstrap go command cannot import it.
+func refusedForCredential(status int) bool {
+	return status == 401 || status == 403
 }
 
 // readInfoRefs fetches and parses the advertisement at u, with the credential
-// the options name.
-func (r *gitRepo) readInfoRefs(u *url.URL, opts web.PinOptions) (map[string]string, error) {
+// the options name. The status is reported so a caller can tell a refusal from
+// any other failure.
+func (r *gitRepo) readInfoRefs(u *url.URL, opts web.PinOptions) (map[string]string, int, error) {
 	resp, err := web.GetPinnedWith(u, opts)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer resp.Body.Close()
 	if err := resp.Err(); err != nil {
-		return nil, err
+		return nil, resp.StatusCode, err
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponse))
 	if err != nil {
-		return nil, fmt.Errorf("reading %s: %w", u.Redacted(), err)
+		return nil, resp.StatusCode, fmt.Errorf("reading %s: %w", u.Redacted(), err)
 	}
 	refs, err := parseRefAdvertisement(data)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", u.Redacted(), err)
+		return nil, resp.StatusCode, fmt.Errorf("%s: %w", u.Redacted(), err)
 	}
-	return refs, nil
+	return refs, resp.StatusCode, nil
 }
 
 // parseRefAdvertisement reads a smart-HTTP upload-pack advertisement: pkt-lines

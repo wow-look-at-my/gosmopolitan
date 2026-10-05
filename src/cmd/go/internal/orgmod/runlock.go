@@ -24,10 +24,7 @@ import (
 // RunLockEnv names the environment variable that names the store as a URL. A file URL names a directory.
 const RunLockEnv = "GOSMOPOLITAN_RUN_LOCK_STORE"
 
-// RunEnv names the run as owner/repo/run-id/attempt. A CI job takes its run
-// from the GitHub Actions variables; a build driver that runs several go
-// commands in one local build names the run here, and every go command it
-// starts inherits it.
+// RunEnv names the run as owner/repo/run-id/attempt.
 const RunEnv = "GOSMOPOLITAN_RUN"
 
 // DefaultRunLockStore is the buildhost server that holds the run locks.
@@ -61,10 +58,6 @@ type RunLockStore interface {
 }
 
 // RunLocked reports whether this build locks the org module heads of a run.
-// A CI build locks its workflow run; a build that names one in RunEnv locks
-// that run too, so a driver that runs several go commands in one build pays to
-// resolve each head once. A build that names no run resolves every head for
-// itself, as it always has.
 var RunLocked = sync.OnceValue(func() bool {
 	return CIBuild() || os.Getenv(RunEnv) != ""
 })
@@ -88,9 +81,10 @@ func Version(ctx context.Context, locked bool, open func() (RunLockStore, Run, e
 	return LockedVersion(ctx, store, RunLockKey{Run: run, Module: path, Branch: branch}, resolve)
 }
 
-// LockedVersion returns the version the store records for key. When it records
-// none, LockedVersion claims the head that resolve returns and returns the
-// version the claim leaves in the store, which a racing claim can have set.
+// LockedVersion returns the version the store records for key. LockedVersion
+// claims the head that resolve returns and returns the version the claim
+// leaves in the store, which a racing claim can have set. Do this when it
+// records none.
 func LockedVersion(ctx context.Context, store RunLockStore, key RunLockKey, resolve func() (string, error)) (string, error) {
 	fail := func(err error) error {
 		return fmt.Errorf("%s: run lock store %s: %w", key.Name(), store, err)
@@ -207,8 +201,7 @@ func runFromEnv(getenv func(string) string) (Run, error) {
 }
 
 // localStore is the store a local run locks its heads in: a directory of its
-// own under the user cache. One local build therefore never reads another's
-// locks, and no job authenticates to a shared server.
+// own under the user cache.
 func localStore(run Run) fileStore {
 	dir := filepath.Join(localRunLockRoot(), run.slug())
 	pruneLocalRunLocks()
@@ -224,8 +217,7 @@ func localRunLockRoot() string {
 	return filepath.Join(base, "gosmopolitan", "run-locks")
 }
 
-// localRunLockMaxAge is how long a local run's locks are kept after its last
-// command wrote one. A build does not outlive it, so the directory is dead.
+// localRunLockMaxAge is how long a local run's locks are kept after its last command wrote one.
 const localRunLockMaxAge = 7 * 24 * time.Hour
 
 // localRunLockPrune runs the sweep once per process.
@@ -252,7 +244,7 @@ func pruneLocalRunLocks() {
 	})
 }
 
-// slug names a run in a directory name, so two runs never share a store.
+// slug names a run in a directory name, so runs never share a store.
 func (r Run) slug() string {
 	sum := sha256.Sum256([]byte(strings.Join([]string{r.Repository, r.ID, r.Attempt}, "\x00")))
 	return hex.EncodeToString(sum[:16])

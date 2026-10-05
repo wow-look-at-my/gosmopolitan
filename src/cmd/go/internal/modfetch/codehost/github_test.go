@@ -286,9 +286,10 @@ type fakeGitHub struct {
 
 	// infoRefsStatus fails every info/refs request, direct or proxied.
 	infoRefsStatus int
-	// infoRefsCredential is the exact Authorization value an info/refs request
-	// must carry. Set, a request without it is unauthorized.
+	// infoRefsCredential is the Authorization an info/refs request must carry.
 	infoRefsCredential string
+	// lastInfoRefsCredential is the Authorization of the last info/refs request.
+	lastInfoRefsCredential string
 	// apiStatus fails every direct api.github.com request with this code.
 	apiStatus int
 	// private makes github.com and api.github.com answer nothing, directly or through the proxy.
@@ -325,6 +326,9 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		f.refRequests = append(f.refRequests, record)
 	} else {
 		f.requests = append(f.requests, record)
+	}
+	if isInfoRefs {
+		f.lastInfoRefsCredential = req.Header.Get("Authorization")
 	}
 	f.mu.Unlock()
 
@@ -649,6 +653,44 @@ func TestGitHubInfoRefsPresentsTheGitCredential(t *testing.T) {
 	last := fake.refRequests[len(fake.refRequests)-1]
 	if !strings.HasPrefix(last, "github.com/owner/repo.git/info/refs") {
 		t.Errorf("refs came from %s, want the authenticated github.com info/refs\nall: %q", last, fake.refRequests)
+	}
+}
+
+// TestGitHubInfoRefsDoesNotRetryANonAuthFailure covers the retry gate. A
+// failure that is not a repository refusing a credential must leave the helper
+// alone, because that helper can prompt or hang. A credential is available, and
+// a server error still leaves it unpresented.
+func TestGitHubInfoRefsDoesNotRetryANonAuthFailure(t *testing.T) {
+	testenv.MustHaveExecPath(t, "git")
+	source, _ := makeSourceRepo(t, sourceFiles)
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(home, "gitconfig"))
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_ASKPASS", "")
+	t.Setenv("GIT_TERMINAL_PROMPT", "0")
+	if err := os.WriteFile(filepath.Join(home, "gitconfig"), []byte("[credential]\n\thelper = store\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".git-credentials"), []byte("https://gopher:sekret@github.com\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	fake := &fakeGitHub{dir: source, redirectTo: "codeload.github.com", infoRefsStatus: http.StatusInternalServerError}
+	serveFakeGitHub(t, fake)
+	ctx := testContext(t)
+	repo := fakeGitHubRepo(t, ctx, filepath.Join(t.TempDir(), "no-such-remote.git"))
+
+	// The API answers, so the refs still resolve; what matters is whether the
+	// advertisement was retried with the credential.
+	if _, err := repo.Latest(ctx); err != nil {
+		t.Fatal(err)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.lastInfoRefsCredential != "" {
+		t.Errorf("a server error was retried with %q; want the credential helper left alone", fake.lastInfoRefsCredential)
 	}
 }
 

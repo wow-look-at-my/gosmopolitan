@@ -287,7 +287,7 @@ func TestOpenRunLock(t *testing.T) {
 		t.Errorf("openRunLock with no run at all = %v; want an error that names %s too", err, RunEnv)
 	}
 
-	// A local run with no store named gets one of its own, so one build never
+	// A local run with no store named gets one of its own. One build never
 	// reads another's locks and no job authenticates to the shared server.
 	local := map[string]string{
 		"GITHUB_REPOSITORY":  "",
