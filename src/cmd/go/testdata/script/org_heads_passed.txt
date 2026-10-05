@@ -39,10 +39,10 @@ exec git checkout main
 # Without /proc the go run resolves the new head for itself.
 cd $WORK/m
 go generate
-[GOOS:linux] stdout '^alpha-main$'
-[GOOS:linux] ! stdout 'alpha-next'
-[GOOS:linux] stderr -count=1 'github.com/wow-look-at-my/alpha@HEAD: building v0\.0\.0-20260102030405-[0-9a-f]+ -- the branch head, this build resolving it for itself'
-[!GOOS:linux] stdout '^alpha-next$'
+[procfs] stdout '^alpha-main$'
+[procfs] ! stdout 'alpha-next'
+[procfs] stderr -count=1 'github.com/wow-look-at-my/alpha@HEAD: building v0\.0\.0-20260102030405-[0-9a-f]+ -- the branch head, this build resolving it for itself'
+[!procfs] stdout '^alpha-next$'
 
 # A go command that no go command started resolves the head for itself.
 go run .
