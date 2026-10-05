@@ -120,7 +120,7 @@ type storeUnavailable struct {
 
 func (e *storeUnavailable) Error() string {
 	if e.store == "" {
-		return fmt.Sprintf("%s: run lock unavailable: %v", e.key.Name(), e.err)
+		return fmt.Sprintf("%s: %v", e.key.Name(), e.err)
 	}
 	return fmt.Sprintf("%s: run lock store %s: %v", e.key.Name(), e.store, e.err)
 }
