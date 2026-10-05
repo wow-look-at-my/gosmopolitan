@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -181,15 +182,15 @@ func (s *claimFails) Claim(ctx context.Context, key RunLockKey, version string) 
 	return "", errors.New("503 Service Unavailable")
 }
 
-func TestVersionOutsideCINeverTouchesStore(t *testing.T) {
+func TestVersionWithoutARunNeverTouchesStore(t *testing.T) {
 	open := func() (RunLockStore, Run, error) {
-		t.Fatal("a build outside CI opened the run lock store")
+		t.Fatal("a build that locks no run opened the run lock store")
 		return nil, Run{}, nil
 	}
 	var calls int
 	got, err := Version(context.Background(), false, open, alphaPath, "main", resolveTo(headB, &calls))
 	if err != nil || got != headB || calls != 1 {
-		t.Errorf("Version outside CI = %q, %v after %d resolves; want the head %q", got, err, calls, headB)
+		t.Errorf("Version without a run = %q, %v after %d resolves; want the head %q", got, err, calls, headB)
 	}
 }
 
@@ -228,18 +229,18 @@ func TestOpenRunLock(t *testing.T) {
 	}
 
 	for _, name := range []string{"GITHUB_REPOSITORY", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT"} {
-		_, err := openRunLock(envOf(with(map[string]string{name: ""})))
+		_, err := openRunLock(true, envOf(with(map[string]string{name: ""})))
 		if err == nil || !strings.Contains(err.Error(), name) {
 			t.Errorf("openRunLock without %s = %v; want an error that names it", name, err)
 		}
 	}
 
 	// The default store is buildhost, which needs the job's OIDC token.
-	_, err := openRunLock(envOf(ci))
+	_, err := openRunLock(true, envOf(ci))
 	if err == nil || !strings.Contains(err.Error(), DefaultRunLockStore) || !strings.Contains(err.Error(), "id-token: write") {
 		t.Errorf("openRunLock with no OIDC token = %v; want an error that names the store and the permission", err)
 	}
-	lock, err := openRunLock(envOf(with(map[string]string{
+	lock, err := openRunLock(true, envOf(with(map[string]string{
 		"ACTIONS_ID_TOKEN_REQUEST_URL":   "https://token.example/?x=1",
 		"ACTIONS_ID_TOKEN_REQUEST_TOKEN": "bearer",
 	})))
@@ -248,7 +249,7 @@ func TestOpenRunLock(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	lock, err = openRunLock(envOf(with(map[string]string{RunLockEnv: "file://" + dir})))
+	lock, err = openRunLock(true, envOf(with(map[string]string{RunLockEnv: "file://" + dir})))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +257,7 @@ func TestOpenRunLock(t *testing.T) {
 		t.Errorf("openRunLock with a file URL = %#v, want a file store in %s", lock.store, dir)
 	}
 
-	_, err = openRunLock(envOf(with(map[string]string{RunLockEnv: "ftp://example.com/locks"})))
+	_, err = openRunLock(true, envOf(with(map[string]string{RunLockEnv: "ftp://example.com/locks"})))
 	if err == nil || !strings.Contains(err.Error(), "ftp://example.com/locks") {
 		t.Errorf("openRunLock with an ftp URL = %v; want an error that names it", err)
 	}
@@ -269,21 +270,41 @@ func TestOpenRunLock(t *testing.T) {
 		RunLockEnv:           "file://" + dir,
 	}
 	blanked[RunEnv] = testRun.Repository + "/" + testRun.ID + "/" + testRun.Attempt
-	lock, err = openRunLock(envOf(blanked))
+	lock, err = openRunLock(false, envOf(blanked))
 	if err != nil || lock.run != testRun {
 		t.Errorf("openRunLock from %s = %v, %v; want run %v", RunEnv, lock.run, err, testRun)
 	}
 	for _, bad := range []string{"wow-look-at-my/consumer/4242", "consumer/4242/1", "a/b//1", "a/b/c/d/e"} {
 		blanked[RunEnv] = bad
-		_, err = openRunLock(envOf(blanked))
+		_, err = openRunLock(false, envOf(blanked))
 		if err == nil || !strings.Contains(err.Error(), RunEnv) {
 			t.Errorf("openRunLock with %s=%q = %v; want an error that names %s", RunEnv, bad, err, RunEnv)
 		}
 	}
 	delete(blanked, RunEnv)
-	_, err = openRunLock(envOf(blanked))
+	_, err = openRunLock(false, envOf(blanked))
 	if err == nil || !strings.Contains(err.Error(), RunEnv) {
 		t.Errorf("openRunLock with no run at all = %v; want an error that names %s too", err, RunEnv)
+	}
+
+	// A local run with no store named gets one of its own, so one build never
+	// reads another's locks and no job authenticates to the shared server.
+	local := map[string]string{
+		"GITHUB_REPOSITORY":  "",
+		"GITHUB_RUN_ID":      "",
+		"GITHUB_RUN_ATTEMPT": "",
+	}
+	local[RunEnv] = testRun.Repository + "/" + testRun.ID + "/" + testRun.Attempt
+	lock, err = openRunLock(false, envOf(local))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fs, ok := lock.store.(fileStore)
+	if !ok {
+		t.Fatalf("a local run's default store = %#v, want a file store", lock.store)
+	}
+	if root := filepath.Join(localRunLockRoot(), testRun.slug()); fs.dir != root {
+		t.Errorf("a local run's default store = %s, want %s", fs.dir, root)
 	}
 }
 
@@ -395,7 +416,7 @@ func TestHTTPStore(t *testing.T) {
 		"ACTIONS_ID_TOKEN_REQUEST_URL":   srv.URL + "/token?api-version=2.0",
 		"ACTIONS_ID_TOKEN_REQUEST_TOKEN": "request-token",
 	}
-	lock, err := openRunLock(envOf(env))
+	lock, err := openRunLock(true, envOf(env))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -422,7 +443,7 @@ func TestHTTPStore(t *testing.T) {
 
 	// A token the job cannot get fails the same way.
 	env["ACTIONS_ID_TOKEN_REQUEST_TOKEN"] = "wrong"
-	lock, err = openRunLock(envOf(env))
+	lock, err = openRunLock(true, envOf(env))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -492,7 +513,7 @@ func TestHTTPStoreRetriesTransportFailures(t *testing.T) {
 		"ACTIONS_ID_TOKEN_REQUEST_URL":   srv.URL + "/token",
 		"ACTIONS_ID_TOKEN_REQUEST_TOKEN": "request-token",
 	}
-	lock, err := openRunLock(envOf(env))
+	lock, err := openRunLock(true, envOf(env))
 	if err != nil {
 		t.Fatal(err)
 	}

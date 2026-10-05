@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 )
 
 // A CI run locks the version of each org module it builds.
@@ -23,7 +24,10 @@ import (
 // RunLockEnv names the environment variable that names the store as a URL. A file URL names a directory.
 const RunLockEnv = "GOSMOPOLITAN_RUN_LOCK_STORE"
 
-// RunEnv names the run as owner/repo/run-id/attempt.
+// RunEnv names the run as owner/repo/run-id/attempt. A CI job takes its run
+// from the GitHub Actions variables; a build driver that runs several go
+// commands in one local build names the run here, and every go command it
+// starts inherits it.
 const RunEnv = "GOSMOPOLITAN_RUN"
 
 // DefaultRunLockStore is the buildhost server that holds the run locks.
@@ -56,12 +60,21 @@ type RunLockStore interface {
 	String() string
 }
 
+// RunLocked reports whether this build locks the org module heads of a run.
+// A CI build locks its workflow run; a build that names one in RunEnv locks
+// that run too, so a driver that runs several go commands in one build pays to
+// resolve each head once. A build that names no run resolves every head for
+// itself, as it always has.
+var RunLocked = sync.OnceValue(func() bool {
+	return CIBuild() || os.Getenv(RunEnv) != ""
+})
+
 // Version returns the version of the org module at path on branch that this
-// process builds. Outside a CI build that is the head resolve returns, and open
-// is never called. A CI build takes the version its run locked, and fails when
-// the store fails.
-func Version(ctx context.Context, ci bool, open func() (RunLockStore, Run, error), path, branch string, resolve func() (string, error)) (string, error) {
-	if !ci {
+// process builds. A build that locks no run takes the head resolve returns,
+// and open is never called. A locked build takes the version its run locked,
+// and fails when the store fails.
+func Version(ctx context.Context, locked bool, open func() (RunLockStore, Run, error), path, branch string, resolve func() (string, error)) (string, error) {
+	if !locked {
 		version, err := resolve()
 		if err == nil {
 			logVersion(path, branch, version, "the branch head, this build resolving it for itself")
@@ -117,7 +130,7 @@ func logVersion(path, branch, version, origin string) {
 // OpenRunLock returns the store and the run of this process. It reads the
 // environment once.
 var OpenRunLock = sync.OnceValues(func() (runLock, error) {
-	return openRunLock(os.Getenv)
+	return openRunLock(CIBuild(), os.Getenv)
 })
 
 // CurrentRunLock is OpenRunLock in the shape Version takes.
@@ -131,33 +144,19 @@ type runLock struct {
 	run   Run
 }
 
-// openRunLock reads the run and the store from getenv.
-func openRunLock(getenv func(string) string) (runLock, error) {
-	run := Run{
-		Repository: getenv("GITHUB_REPOSITORY"),
-		ID:         getenv("GITHUB_RUN_ID"),
-		Attempt:    getenv("GITHUB_RUN_ATTEMPT"),
-	}
-	if run.ID == "" || run.Attempt == "" {
-		if raw := getenv(RunEnv); raw != "" {
-			parts := strings.Split(raw, "/")
-			if len(parts) != 4 || slices.Contains(parts, "") {
-				return runLock{}, fmt.Errorf("%s=%q: want owner/repo/run-id/attempt", RunEnv, raw)
-			}
-			run = Run{Repository: parts[0] + "/" + parts[1], ID: parts[2], Attempt: parts[3]}
-		}
-	}
-	for _, v := range []struct{ name, val string }{
-		{"GITHUB_REPOSITORY", run.Repository},
-		{"GITHUB_RUN_ID", run.ID},
-		{"GITHUB_RUN_ATTEMPT", run.Attempt},
-	} {
-		if v.val == "" {
-			return runLock{}, fmt.Errorf("a CI build locks org modules per run, and neither %s nor %s is set", v.name, RunEnv)
-		}
+// openRunLock reads the run and the store from getenv. ci is whether this build
+// is a CI job, which decides the store a run defaults to.
+func openRunLock(ci bool, getenv func(string) string) (runLock, error) {
+	run, err := runFromEnv(getenv)
+	if err != nil {
+		return runLock{}, err
 	}
 	raw := getenv(RunLockEnv)
 	if raw == "" {
+		if !ci {
+			store := localStore(run)
+			return runLock{store, run}, nil
+		}
 		raw = DefaultRunLockStore
 	}
 	u, err := url.Parse(raw)
@@ -175,6 +174,88 @@ func openRunLock(getenv func(string) string) (runLock, error) {
 		return runLock{store, run}, nil
 	}
 	return runLock{}, fmt.Errorf("run lock store %s: %s names neither a file URL nor an HTTP one", raw, RunLockEnv)
+}
+
+// runFromEnv reads the run this build belongs to. A CI job names it in the
+// GitHub Actions variables; a caller that runs several go commands in one
+// local build names it in RunEnv.
+func runFromEnv(getenv func(string) string) (Run, error) {
+	run := Run{
+		Repository: getenv("GITHUB_REPOSITORY"),
+		ID:         getenv("GITHUB_RUN_ID"),
+		Attempt:    getenv("GITHUB_RUN_ATTEMPT"),
+	}
+	if run.ID == "" || run.Attempt == "" {
+		if raw := getenv(RunEnv); raw != "" {
+			parts := strings.Split(raw, "/")
+			if len(parts) != 4 || slices.Contains(parts, "") {
+				return Run{}, fmt.Errorf("%s=%q: want owner/repo/run-id/attempt", RunEnv, raw)
+			}
+			run = Run{Repository: parts[0] + "/" + parts[1], ID: parts[2], Attempt: parts[3]}
+		}
+	}
+	for _, v := range []struct{ name, val string }{
+		{"GITHUB_REPOSITORY", run.Repository},
+		{"GITHUB_RUN_ID", run.ID},
+		{"GITHUB_RUN_ATTEMPT", run.Attempt},
+	} {
+		if v.val == "" {
+			return Run{}, fmt.Errorf("a CI build locks org modules per run, and neither %s nor %s is set", v.name, RunEnv)
+		}
+	}
+	return run, nil
+}
+
+// localStore is the store a local run locks its heads in: a directory of its
+// own under the user cache. One local build therefore never reads another's
+// locks, and no job authenticates to a shared server.
+func localStore(run Run) fileStore {
+	dir := filepath.Join(localRunLockRoot(), run.slug())
+	pruneLocalRunLocks()
+	return fileStore{raw: "file://" + filepath.ToSlash(dir), dir: dir}
+}
+
+// localRunLockRoot is the directory that holds every local run's locks.
+func localRunLockRoot() string {
+	base, err := os.UserCacheDir()
+	if err != nil {
+		base = os.TempDir()
+	}
+	return filepath.Join(base, "gosmopolitan", "run-locks")
+}
+
+// localRunLockMaxAge is how long a local run's locks are kept after its last
+// command wrote one. A build does not outlive it, so the directory is dead.
+const localRunLockMaxAge = 7 * 24 * time.Hour
+
+// localRunLockPrune runs the sweep once per process.
+var localRunLockPrune sync.Once
+
+// pruneLocalRunLocks removes the run directories no build can still be using.
+// The sweep is best effort: a directory that cannot be read or removed is left
+// for the next build.
+func pruneLocalRunLocks() {
+	localRunLockPrune.Do(func() {
+		root := localRunLockRoot()
+		entries, err := os.ReadDir(root)
+		if err != nil {
+			return
+		}
+		cutoff := time.Now().Add(-localRunLockMaxAge)
+		for _, entry := range entries {
+			info, err := entry.Info()
+			if err != nil || info.ModTime().After(cutoff) {
+				continue
+			}
+			os.RemoveAll(filepath.Join(root, entry.Name()))
+		}
+	})
+}
+
+// slug names a run in a directory name, so two runs never share a store.
+func (r Run) slug() string {
+	sum := sha256.Sum256([]byte(strings.Join([]string{r.Repository, r.ID, r.Attempt}, "\x00")))
+	return hex.EncodeToString(sum[:16])
 }
 
 // fileURLPath returns the local path a file URL names.
