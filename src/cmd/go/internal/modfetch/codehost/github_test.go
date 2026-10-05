@@ -288,8 +288,8 @@ type fakeGitHub struct {
 	infoRefsStatus int
 	// infoRefsCredential is the Authorization an info/refs request must carry.
 	infoRefsCredential string
-	// lastInfoRefsCredential is the Authorization of the last info/refs request.
-	lastInfoRefsCredential string
+	// lastInfoRefsCredential is the Authorization of every info/refs request, in order.
+	infoRefsAuth []string
 	// apiStatus fails every direct api.github.com request with this code.
 	apiStatus int
 	// private makes github.com and api.github.com answer nothing, directly or through the proxy.
@@ -328,7 +328,7 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		f.requests = append(f.requests, record)
 	}
 	if isInfoRefs {
-		f.lastInfoRefsCredential = req.Header.Get("Authorization")
+		f.infoRefsAuth = append(f.infoRefsAuth, req.Header.Get("Authorization"))
 	}
 	f.mu.Unlock()
 
@@ -612,12 +612,13 @@ func TestGitHubRefsOverHTTP(t *testing.T) {
 	}
 }
 
-// TestGitHubInfoRefsPresentsTheGitCredential reads a private repository's ref
-// advertisement over HTTPS with the credential git's own helper holds, instead
-// of falling back to git ls-remote. The advertisement is the same one the fast
-// path parses; only the credential differs.
-func TestGitHubInfoRefsPresentsTheGitCredential(t *testing.T) {
+// TestGitHubInfoRefsSendsTheCredentialFirst covers a private repository's ref
+// advertisement. With a git credential available, the first request carries
+// it, so there is no anonymous refusal and no second round trip.
+func TestGitHubInfoRefsSendsTheCredentialFirst(t *testing.T) {
+	t.Serial()
 	testenv.MustHaveExecPath(t, "git")
+	resetGitHubCredential()
 	source, _ := makeSourceRepo(t, sourceFiles)
 	head := gitIn(t, source, "rev-parse", "HEAD")
 
@@ -650,19 +651,20 @@ func TestGitHubInfoRefsPresentsTheGitCredential(t *testing.T) {
 
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
-	last := fake.refRequests[len(fake.refRequests)-1]
-	if !strings.HasPrefix(last, "github.com/owner/repo.git/info/refs") {
-		t.Errorf("refs came from %s, want the authenticated github.com info/refs\nall: %q", last, fake.refRequests)
+	if len(fake.infoRefsAuth) == 0 || fake.infoRefsAuth[0] != credential {
+		t.Errorf("first info/refs Authorization = %q; want %q\nall: %q", firstOf(fake.infoRefsAuth), credential, fake.infoRefsAuth)
 	}
 }
 
-// TestGitHubInfoRefsDoesNotRetryANonAuthFailure covers the retry gate. A
-// failure that is not a repository refusing a credential must leave the helper
-// alone, because that helper can prompt or hang. A credential is available, and
-// a server error still leaves it unpresented.
-func TestGitHubInfoRefsDoesNotRetryANonAuthFailure(t *testing.T) {
+// TestGitHubInfoRefsAnonymousWithoutACredential covers a machine with no
+// github.com credential. The first request carries none, and the refs resolve
+// by the API, so a build without a credential behaves as it always has.
+func TestGitHubInfoRefsAnonymousWithoutACredential(t *testing.T) {
+	t.Serial()
 	testenv.MustHaveExecPath(t, "git")
+	resetGitHubCredential()
 	source, _ := makeSourceRepo(t, sourceFiles)
+	head := gitIn(t, source, "rev-parse", "HEAD")
 
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -673,25 +675,74 @@ func TestGitHubInfoRefsDoesNotRetryANonAuthFailure(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, "gitconfig"), []byte("[credential]\n\thelper = store\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(home, ".git-credentials"), []byte("https://gopher:sekret@github.com\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
 
-	fake := &fakeGitHub{dir: source, redirectTo: "codeload.github.com", infoRefsStatus: http.StatusInternalServerError}
+	fake := &fakeGitHub{dir: source, redirectTo: "codeload.github.com", infoRefsCredential: "Basic " + base64.StdEncoding.EncodeToString([]byte("nobody:none"))}
 	serveFakeGitHub(t, fake)
 	ctx := testContext(t)
 	repo := fakeGitHubRepo(t, ctx, filepath.Join(t.TempDir(), "no-such-remote.git"))
 
-	// The API answers, so the refs still resolve; what matters is whether the
-	// advertisement was retried with the credential.
-	if _, err := repo.Latest(ctx); err != nil {
-		t.Fatal(err)
+	latest, err := repo.Latest(ctx)
+	if err != nil {
+		t.Fatalf("Latest with no credential = %v; want the refs from the API", err)
 	}
+	if latest.Name != head {
+		t.Errorf("Latest = %s, want %s", latest.Name, head)
+	}
+
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
-	if fake.lastInfoRefsCredential != "" {
-		t.Errorf("a server error was retried with %q; want the credential helper left alone", fake.lastInfoRefsCredential)
+	if len(fake.infoRefsAuth) == 0 || fake.infoRefsAuth[0] != "" {
+		t.Errorf("first info/refs Authorization = %q; want none", firstOf(fake.infoRefsAuth))
 	}
+}
+
+// TestGitHubCredentialHelperRunsOnce covers the per-process credential: every
+// origin of one build resolves through one run of the helper.
+func TestGitHubCredentialHelperRunsOnce(t *testing.T) {
+	t.Serial()
+	testenv.MustHaveExecPath(t, "git")
+	resetGitHubCredential()
+	source, _ := makeSourceRepo(t, sourceFiles)
+
+	home := t.TempDir()
+	runs := filepath.Join(home, "runs")
+	t.Setenv("HOME", home)
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(home, "gitconfig"))
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_ASKPASS", "")
+	t.Setenv("GIT_TERMINAL_PROMPT", "0")
+	t.Setenv("GIT_CRED_RUNS", runs)
+	helper := "[credential]\n\thelper = \"!f() { echo run >> $GIT_CRED_RUNS; echo username=gopher; echo password=sekret; }; f\"\n"
+	if err := os.WriteFile(filepath.Join(home, "gitconfig"), []byte(helper), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	credential := "Basic " + base64.StdEncoding.EncodeToString([]byte("gopher:sekret"))
+
+	fake := &fakeGitHub{dir: source, redirectTo: "codeload.github.com", infoRefsCredential: credential}
+	serveFakeGitHub(t, fake)
+	ctx := testContext(t)
+	for range 2 {
+		repo := fakeGitHubRepo(t, ctx, filepath.Join(t.TempDir(), "no-such-remote.git"))
+		if _, err := repo.Latest(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	data, err := os.ReadFile(runs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(data), "run"); got != 1 {
+		t.Errorf("the credential helper ran %d times for two origins, want once", got)
+	}
+}
+
+// firstOf answers the first entry, or "" for an empty list.
+func firstOf(values []string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	return values[0]
 }
 
 // TestGitHubPrivateOverMirror resolves and downloads a private repository

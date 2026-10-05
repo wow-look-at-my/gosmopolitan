@@ -8,13 +8,36 @@ package codehost
 
 import (
 	"net/url"
+	"os"
+	"sync"
 
 	"cmd/go/internal/auth"
 )
 
-// gitBasicAuth returns the credential git's own helpers hold for rawURL, so a
-// private repository's ref advertisement can be read over HTTPS instead of a
-// git ls-remote. dir is the working directory git reads its config in.
-func gitBasicAuth(dir, rawURL string) (*url.Userinfo, error) {
-	return auth.GitBasicAuth(dir, rawURL)
+// githubBasicAuth returns the credential git's own helpers hold for a
+// github.com URL, resolved once per process. Every origin of one build resolves
+// through it, so the helper runs once rather than once per request, and a URL
+// only decides which host git matches. With no credential the answer is nil,
+// and the request goes out anonymously.
+func githubBasicAuth(rawURL string) *url.Userinfo {
+	githubCredential.Do(func() {
+		dir, err := os.Getwd()
+		if err != nil {
+			return
+		}
+		githubCredentialValue, _ = auth.GitBasicAuth(dir, rawURL)
+	})
+	return githubCredentialValue
 }
+
+// resetGitHubCredential forgets the cached credential, so a test judges one
+// helper run rather than whatever an earlier test resolved.
+func resetGitHubCredential() {
+	githubCredential = sync.Once{}
+	githubCredentialValue = nil
+}
+
+var (
+	githubCredential      sync.Once
+	githubCredentialValue *url.Userinfo
+)
