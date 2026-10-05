@@ -99,7 +99,7 @@ func darwinGettimeofday(tv, tz uintptr) (r1, r2, errno uintptr) {
 }
 
 // The only way to tell that apart from failure is to zero errno first and
-// read it back, which is exactly what Apple's own man page prescribes.
+// read it back, which is exactly what Apple's own. Man page prescribes.
 //
 //go:nosplit
 func darwinGetpriority(which, who uintptr) (r1, r2, errno uintptr) {

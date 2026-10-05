@@ -136,7 +136,7 @@ func TestZipDifference(test *testing.T) {
 }
 
 // The overlay carries the added files from the machine that generated them to
-// every machine that reads the cache, so what it packs is what arrives.
+// every machine that reads the cache. What it packs is what arrives.
 func TestOverlayRoundTripsAddedFiles(test *testing.T) {
 	mod := module.Version{Path: "example.com/m", Version: "v1.2.3"}
 	added := []string{"gen.go", "internal/deep/table.go"}

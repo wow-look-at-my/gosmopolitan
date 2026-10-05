@@ -228,7 +228,7 @@ func buildTestELFForMachine(t *testing.T, machine uint16, entry uint64, phdrs []
 
 // testELFPhdrs is a program header table shaped like the cosmo linker's
 // amd64 output: an executable text load (which also covers the ELF header),
-// a read-only load, and a writable load whose p_memsz exceeds p_filesz
+// a read-only load, and a writable. Load whose p_memsz exceeds p_filesz
 // (BSS). A PT_NOTE is included to check that non-LOAD entries are skipped.
 func testELFPhdrs() []testProgHeader {
 	return []testProgHeader{
@@ -399,8 +399,8 @@ func TestPECosmoHeaderStructure(t *testing.T) {
 
 // TestAPEFatPETransplant runs the full fat chain. A thin APE with the
 // real PE header is re-ingested by payloadFromAPEOrELF (capturing its
-// head), merged with an arm64 payload, and the fat output must carry
-// the thin header region byte for byte - valid as-is, since the amd64
+// head), merged with an arm64 payload, and the fat output must carry.
+// The thin header region byte for byte - valid as-is, since the amd64
 // image lands at the same file offset with identical bytes.
 func TestAPEFatPETransplant(t *testing.T) {
 	elf, info := buildTestNTELF(t)

@@ -5,8 +5,8 @@
 
 // Windows NT sendmsg/recvmsg emulation. The scatter-gather data path
 // behind SYS_SENDMSG/SYS_RECVMSG, dispatched by ntSyscallEmulate, and
-// the socket-only SYS_READV/SYS_WRITEV on the same WSABUF machinery -
-// what makes net.Buffers work.
+// the socket-only SYS_READV/SYS_WRITEV on the same WSABUF. Machinery
+// - what makes net.Buffers work.
 //
 // Callers hand in LINUX amd64 structures (ntLinuxMsghdr/ntLinuxIovec).
 // A WSABUF is {u32 len, char *buf}, the REVERSE field order of an
@@ -384,9 +384,8 @@ func ntSendmsgControl(fd int32, e *ntFDEntry, msg *ntLinuxMsghdr, flags int32) (
 				return ntFail3(ntEOPNOTSUPP)
 			}
 		case ntFDFile, ntFDPipe:
-			// Fine. (Pipes transfer even though same-process dup(2)
-			// on them stays ENOSYS - DuplicateHandle works on any
-			// kernel handle.)
+			// Fine. (Pipes transfer even though same-process dup(2) on them stays
+			// ENOSYS - DuplicateHandle works on any kernel handle.)
 		default: // dir, stdio
 			return ntFail3(ntEOPNOTSUPP)
 		}

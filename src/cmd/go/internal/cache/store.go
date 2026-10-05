@@ -41,10 +41,10 @@ func openCache(dir string) (Cache, error) {
 	return cache, nil
 }
 
-// The store is configured by the environment, and what the build IS comes from
-// the build itself: the target it produces and the module it builds. The store
-// has no other way to learn either. Its log would otherwise say how many
-// objects moved and nothing about whose build moved them.
+// The store is configured by the environment. What the build IS comes from the
+// build itself: the target it produces and the module it builds. The store has
+// no other way to learn either. Its log would otherwise say how many objects
+// moved and nothing about whose build moved them.
 
 // openStore builds the shared tier this command reaches, or nothing when the
 // environment configures none. A CI run with none configured is an error: a

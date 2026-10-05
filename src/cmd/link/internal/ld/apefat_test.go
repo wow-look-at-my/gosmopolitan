@@ -91,10 +91,9 @@ func setAPEFatFlags(t *testing.T, strip, dbg bool) {
 	t.Cleanup(func() { *flagApeStrip, *flagApeDbg = oldStrip, oldDbg })
 }
 
-// mergeTestPair builds the synthetic ELF pair, stages the amd64 input as a
-// thin APE and the arm64 input as a raw ELF (covering both accepted input
-// forms), and runs apeFatMerge with the given -apestrip/-apedbg values. It
-// returns the pristine input images and the merged output path.
+// stages the amd64 input as a thin APE and the arm64 input as a raw ELF
+// (covering both accepted input
+// It returns the pristine input images and the merged output path.
 func mergeTestPair(t *testing.T, strip, dbg bool) (amdElf, armElf []byte, out string) {
 	t.Helper()
 	amdElf, armElf = buildTestELFPair(t)
@@ -232,10 +231,7 @@ func TestAPEFatMergeStripAndSidecars(t *testing.T) {
 	}
 }
 
-// TestAPEFatMergeDefaultUnchanged verifies that without -apestrip/-apedbg
-// the merge embeds the full payloads byte-for-byte (only p_offsets shifted)
-// and writes no sidecar files - today's behavior, which GOCOSMOSTRIP=0 and
-// user -ldflags -s/-w builds rely on.
+// And user -ldflags -s/-w builds rely on.
 func TestAPEFatMergeDefaultUnchanged(t *testing.T) {
 	amdElf, armElf, out := mergeTestPair(t, false, false)
 

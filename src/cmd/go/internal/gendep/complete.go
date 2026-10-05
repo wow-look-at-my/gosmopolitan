@@ -345,7 +345,7 @@ func programMissing(err error) bool {
 // wroteNowhere answers the path a failed generator could not open because a
 // directory above it is absent from the staged copy, or "". The go command
 // leaves a submodule's whole directory out of the parent's zip, so a directive
-// that writes into one reports exactly this, on every machine, for every
+// that writes into one reports exactly. This, on every machine, for every
 // consumer of that module version.
 //
 // The generator's own message supplies the candidate and the staged tree

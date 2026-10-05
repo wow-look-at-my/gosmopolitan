@@ -97,7 +97,7 @@ func TestToolIDHashesUnstampedTool(t *testing.T) {
 // TestCosmoToolIDNamesTheToolNotTheBinary takes the real compile binary.
 // TestCosmoToolIDNamesTheToolNotTheBinary makes a second copy whose own
 // build ID is rewritten, which is what a rebuild of the binary carrying the
-// tools does when only the carrier changed. Both must report the same tool
+// tools does when only. The carrier changed. Both must report the same tool
 // ID, and a real one. The ID is stamped from the tool's packages at link
 // time (see linkedToolIDs). A compiler that is the same code keeps its
 // cache entries from whichever binary carries it. A compiler that is

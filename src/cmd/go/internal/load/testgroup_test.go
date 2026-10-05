@@ -51,7 +51,7 @@ func TestGroupMembersKeepsProfilesApart(test *testing.T) {
 }
 
 // A binary applies a package's default GODEBUG when it is started for that
-// package, so a setting the program can change as it runs does not split
+// package, so a setting the program can change as it runs does. Not split
 // packages apart.
 func TestGroupMembersShareAcrossChangeableGODEBUG(test *testing.T) {
 	plain := member("a", "")

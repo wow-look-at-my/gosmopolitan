@@ -53,8 +53,8 @@ func (builder *Builder) embeddedStdAction(act *Action, p *load.Package) *Action 
 }
 
 // buildIDActionBytes decodes the ACTION field of a build id -- the part
-// before the slash -- which cmd/go writes as the leading bytes of the action
-// id that produced the object, base64.RawURLEncoding'd.
+// before the slash -- which cmd/go writes as the leading bytes of the
+// action. Id that produced the object, base64.RawURLEncoding'd.
 func buildIDActionBytes(buildID string) []byte {
 	action, _, ok := strings.Cut(buildID, "/")
 	if !ok {
@@ -81,7 +81,7 @@ func embeddedStdKey(content [cache.HashSize]byte, buildID string) [cache.HashSiz
 
 // embeddedStdFile answers a file holding the embedded archive of a
 // standard package, written into the build cache the first time a process
-// that cannot read this binary asks for it.
+// that cannot read. This binary asks for it.
 func embeddedStdFile(importPath string, pkg *embedded.Package) string {
 	hash := cache.NewHash("embedded std archive")
 	fmt.Fprintf(hash, "%s %s %s\n", cfg.StdTarget(), importPath, pkg.BuildID)
@@ -102,8 +102,8 @@ func embeddedStdFile(importPath string, pkg *embedded.Package) string {
 }
 
 // fileForOutsideReader answers built as a path another process can open:
-// built itself for a file, and the build cache copy for an archive inside
-// this binary.
+// built itself for a file, and the build cache copy for an archive.
+// Inside this binary.
 func fileForOutsideReader(p *load.Package, built string) string {
 	if !cfg.EmbeddedStd || !embedded.IsSelf(built) {
 		return built

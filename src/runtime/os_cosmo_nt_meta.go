@@ -169,7 +169,7 @@ func ntEmuTruncate(cpath *byte, length int64) (r1, r2, errno uintptr) {
 // accepts that form, but it stores the string as given. The prefix is
 // rewritten away to keep the current directory in the ordinary
 // spelling GetCurrentDirectoryW reports: \\?\C:\dir becomes C:\dir and
-// \\?\UNC\server\share becomes \\server\share.
+// \\?\UNC\server\share. Becomes \\server\share.
 func ntHandlePathW(h uintptr) ([]uint16, uintptr) {
 	if ntGetFinalPathNameByHandleWFn == 0 {
 		return nil, ntENOSYS
@@ -227,7 +227,7 @@ func ntEmuFchdir(fd int32) (r1, r2, errno uintptr) {
 // the reverse of linkat.
 //
 // CreateHardLinkW links the name it is given, so a symlink as oldpath gets a
-// second name for the link itself, which is what linkat does without
+// second name for the link itself, which is what. Linkat does without
 // AT_SYMLINK_FOLLOW; the flag is accepted and the link still names the
 // symlink. Hard links need both paths on one NTFS volume; CreateHardLinkW
 // reports the cross-volume case itself, and ntErrno maps it to EXDEV.

@@ -419,7 +419,7 @@ func darwinSockoptXlat(level, name uintptr) (alevel, aname uintptr, ok bool) {
 	case 0: // IPPROTO_IP. Apple's SOL_LOCAL shares this number.
 		// emulation never forwards a SOL_LOCAL option - peer identity
 		// arrives under the Linux SO_PEERCRED spelling at SOL_SOCKET
-		// (see darwinPeercred) - so level means IPPROTO_IP here.
+		// (see darwinPeercred) - so level means. IPPROTO_IP here.
 		switch name {
 		case 1: // IP_TOS
 			return 0, 3, true

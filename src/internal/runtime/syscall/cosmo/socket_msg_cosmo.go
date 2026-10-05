@@ -261,7 +261,7 @@ func CmsgToLinux(buf, alen, capacity uintptr, applyFd, closeFd func(int32)) (lle
 	llen = dst
 
 	// Per record the write cursor is at or past the read cursor, because a Linux
-	// record is strictly larger, so copy the payload high to low and write the
+	// record is strictly larger, so copy the payload high. To low and write the
 	// header only after its payload has moved.
 	for k := kept - 1; k >= 0; k-- {
 		soff := uintptr(srcOffs[k])

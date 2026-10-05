@@ -87,7 +87,7 @@ func ntPreemptAck(mp *m) {
 // ntPreemptM sends an async-preemption request to mp: upstream os_windows.go
 // preemptM, on the NT function table. It suspends the target thread, waits
 // for the suspension with GetThreadContext - SuspendThread alone only queues
-// it - and, at an async-safe point, rewrites the saved CONTEXT so the thread
+// it - and, at an async-safe point, rewrites the saved. CONTEXT so the thread
 // calls asyncPreempt on resume. Every path acks, so the requester never spins
 // forever.
 //

@@ -87,7 +87,7 @@ jobs:
       - if: failure()
         uses: wow-look-at-my/actions@fail-fast#latest
 
-  # The ubuntu build leg, its own job so cosmo-checks, wasm and wasm-suite take its toolchain the moment it exists: needs waits on a whole matrix.
+  # The ubuntu build leg, its own job so cosmo-checks, wasm and wasm-suite take its toolchain the moment it exists: needs waits. On a whole matrix.
   build-linux:
     timeout-minutes: 45
     permissions:
@@ -158,7 +158,7 @@ jobs:
         shell: pwsh
         run: |
           $gb = 1GB
-          # Which drive has room decides whether this does anything: the workspace and RUNNER_TEMP are both on D:, and only the caches under the profile sit on C:.
+          # Which drive has room decides whether this does anything. The workspace and RUNNER_TEMP are both on D:, and only the caches under the profile sit on C:.
           Get-PSDrive -PSProvider FileSystem | Where-Object { $null -ne $_.Free } | ForEach-Object {
             Write-Host ("before: {0}: {1:N1} GB free of {2:N1} GB" -f $_.Name, ($_.Free/$gb), (($_.Free + $_.Used)/$gb))
           }
@@ -180,7 +180,7 @@ jobs:
             'C:\hostedtoolcache\windows\Python',
             'C:\hostedtoolcache\windows\node'
           )
-          # rd walks a tree one entry at a time. robocopy mirrors an empty directory over each tree with many threads instead, which frees the space and leaves a shell of empty directories nothing reads again.
+          # rd walks a tree one entry at a time. robocopy mirrors an empty directory over each tree with many threads instead. This frees the space and leaves a shell of empty directories nothing reads again.
           $empty = Join-Path $env:RUNNER_TEMP 'empty-for-mirror'
           New-Item -ItemType Directory -Force -Path $empty | Out-Null
           # An unlink is an MFT update and those serialize per volume, so four trees at eight threads is past the point where more helps.
@@ -219,7 +219,7 @@ jobs:
         shell: bash
         run: ./bin/go version
 
-      # Consider this image's gcc links. Those links libwinpthread as a DLL that lives in C:\mingw64\bin and nowhere else, so a binary carrying any cgo package reaches it through PATH alone and dies at load with 0xc0000135 once a test narrows PATH or hands a child an environment without one. The loader reads the system directory whatever the environment says. A copy there is found by every binary, and the stdlib archives the suite links against were built before this step runs.
+      # Consider this image's gcc links. Those links libwinpthread as a DLL that lives in C:\mingw64\bin and nowhere else, so a binary carrying any cgo package reaches it through. PATH alone and dies at load with 0xc0000135 once a test narrows PATH or hands a child an environment without one. The loader reads the system directory whatever the environment says. A copy there is found by every binary, and the stdlib archives the suite links against were built before this step runs.
       - name: Put the mingw runtime where the loader always looks (NT)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -689,13 +689,13 @@ jobs:
           node-version: '22'
 
       - name: Install wasmtime (wasip1 runtime)
-        # The exec wrapper's default engine, at the release upstream's wasip1 builder pins: v15 onward answers a FIFO read with ESPIPE (wasitest TestNonblock), and wazero sits 10 pages over test/wasmmemsize's ceiling.
+        # The exec wrapper's default engine, at the release upstream's wasip1 builder pins: v15 onward answers a FIFO read with ESPIPE (wasitest TestNonblock), and wazero sits 10 pages. Over test/wasmmemsize's ceiling.
         if: matrix.port == 'wasip1'
         timeout-minutes: 5
         shell: bash
         run: curl -sSfL https://wasmtime.dev/install.sh | bash -s -- --version v14.0.4
 
-      # wasmtime compiles each test binary's module before running it, and that compile is most of a cheap package: sort.test costs 2.53s cold against 1.05s warm.
+      # wasmtime compiles each test binary's module before running it. That compile is most of a cheap package: sort.test costs 2.53s cold against 1.05s warm.
       - name: Keep the compiled wasm modules between runs
         if: matrix.port == 'wasip1'
         uses: actions/cache@v4

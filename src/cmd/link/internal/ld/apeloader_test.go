@@ -114,9 +114,9 @@ func TestApeLoaderDarwinLoadsOnlyLibSystem(t *testing.T) {
 }
 
 // TestApeLoaderRegionsFitTheHeader walks every loader at once, the layout
-// that packs the most into the 64K header, and checks that the regions
-// stay in order and inside it. placeApeLoaders enforces the same thing at
-// link time; this fails on a build machine rather than on someone's host.
+// that packs the most into the 64K header, and checks that the regions stay
+// in order. And inside it. placeApeLoaders enforces the same thing at link
+// time; this fails on a build machine rather than on someone's host.
 func TestApeLoaderRegionsFitTheHeader(t *testing.T) {
 	loaders := apeLoadersFor(apeAllLoaderPlatforms())
 	if len(loaders) != len(apeLoaderSums) {

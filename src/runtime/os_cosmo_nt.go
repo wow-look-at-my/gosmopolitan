@@ -29,7 +29,7 @@ var ntiat [3]uintptr
 
 // Resolved win64 function pointers. Plain variables (not a struct) so
 // the assembly NT branches in sys_cosmo_amd64.s can reference them
-// directly by symbol name with no offset-rot risk, mirroring the
+// directly by symbol name with no offset-rot risk. Mirroring the
 // cosmoPthread*Fn precedent on arm64.
 var (
 	ntVirtualAllocFn           uintptr

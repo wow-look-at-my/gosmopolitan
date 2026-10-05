@@ -1540,8 +1540,8 @@ const ntLinuxDirentHdr = 19
 // Apple's __getdirentries64 plays in the darwin port. The directory HANDLE
 // holds the kernel-side enumeration cursor (RestartInfo on the first query
 // re-anchors it). Entries that were returned by the kernel but do not fit the
-// caller's buffer are parked in the fd's pending list so nothing is ever lost
-// between calls.
+// caller's buffer are parked in the fd's pending list so nothing is ever.
+// Lost between calls.
 func ntEmuGetdents(fd int32, buf unsafe.Pointer, count uintptr) (r1, r2, errno uintptr) {
 	e, ok := ntFDLookup(fd)
 	if !ok {

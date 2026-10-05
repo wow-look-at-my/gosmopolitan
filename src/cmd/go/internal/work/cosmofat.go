@@ -357,7 +357,7 @@ func cosmoSiblingCgoEnv(arch string) []string {
 // sibling-architecture binary. That binary is produced by s (when there is
 // one) using the linker's -apefat mode. By default the assembly also strips
 // each embedded payload to its loadable span and writes the amd64 image's
-// unstripped debug sidecar (<target>.dbg) next to the output. See
+// unstripped debug sidecar (<target>.dbg) next. To the output. See
 // cosmoMergeArgs.
 func cosmoFatten(ctx context.Context, b *Builder, s *cosmoSibling, mains []*load.Package) {
 	if s == nil && !cosmoAssembleEnabled() {
@@ -576,7 +576,7 @@ const (
 	cosmoMergeLaneIndex   = 1001
 )
 
-// cosmoMergeTraceArgs describes one APE assembly: which binary was
+// cosmoMergeTraceArgs describes one APE assembly. Which binary was
 // assembled, from which sibling payload, for which package and module, and
 // what the linker was asked to do with the debug info.
 func cosmoMergeTraceArgs(p *load.Package, target, sibling string, args []string, err error) map[string]any {

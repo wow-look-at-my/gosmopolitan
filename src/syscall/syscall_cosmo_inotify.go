@@ -8,7 +8,7 @@ package syscall
 import "unsafe"
 
 // The inotify group. GOOS=cosmo presents the Linux ABI, so a program written
-// against the linux port names these, and the linux port declares them in
+// against the linux port names these, and the linux port declares them. In
 // syscall_linux.go. Cosmo does not build that.
 
 func InotifyAddWatch(fd int, pathname string, mask uint32) (watchdesc int, err error) {

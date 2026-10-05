@@ -13,10 +13,10 @@ import (
 // temporary directory qualifies. Every other path a test reads is an input to
 // that test. Dropping the ones outside the module root is what let a changed
 // file replay a stale pass. A path that no longer resolves still has to answer,
-// because a test may read a file and then remove it, and it has to answer in the
-// spelling the test used. A test binary opens itself under the go command's
-// per-run build directory, which is gone by the next run and, on macOS, spelled
-// through a symlink.
+// because a test may read a file and then remove it, and it has. To answer in
+// the spelling the test used. A test binary opens itself under the go command's
+// per-run build directory, which is gone by the next run and, on macOS, spelled.
+// Through a symlink.
 func TestRunScratch(t *testing.T) {
 	tmp, err := filepath.EvalSymlinks(os.TempDir())
 	if err != nil {

@@ -113,7 +113,7 @@ func eventBeforeIdle(now, pollUntil int64) (gp *g, otherReady bool) {
 	if pollUntil == 0 && eventHandler != nil {
 		// The program has no timer to wake it, so findRunnable's cap on the idle
 		// sleep (see wasmForceGCDeadline in proc.go) does not apply and nothing
-		// would wake it for the next periodic forced GC.
+		// would wake it. For the next periodic forced GC.
 		if deadline := wasmForceGCDeadline(); deadline != 0 && (idleGCNudge == nil || idleGCNudge.diff(deadline) > 1e6) {
 			idleGCNudge.clear()
 

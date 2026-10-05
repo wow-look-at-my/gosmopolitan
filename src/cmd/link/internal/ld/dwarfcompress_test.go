@@ -44,7 +44,7 @@ func TestAPEDwarfCompressCodec(t *testing.T) {
 
 // TestAPEDwarfZstdRoundTrip verifies the zstd compressor produces
 // deterministic frames that the standard library decoder - the debug/elf uses
-// for ELFCOMPRESS_ZSTD sections - decompresses back to the input.
+// for ELFCOMPRESS_ZSTD sections - decompresses back. To the input.
 func TestAPEDwarfZstdRoundTrip(t *testing.T) {
 	var in bytes.Buffer
 	for i := 0; i < 1000; i++ {
@@ -126,7 +126,7 @@ func checkDebugSectionCodec(t *testing.T, path string, want elf.CompressionType)
 // TestAPECosmoZstdDebugSidecars builds a real GOOS=cosmo fat APE.
 // TestAPECosmoZstdDebugSidecars verifies both per-architecture debug sidecars
 // carry zstd-compressed (ELFCOMPRESS_ZSTD) .debug_* sections readable by
-// debug/elf - and that a GOOS=linux build from the same toolchain still uses
+// debug/elf - and that a GOOS=linux build. From the same toolchain still uses
 // zlib, pinning the upstream codec path for non-cosmo targets.
 func TestAPECosmoZstdDebugSidecars(t *testing.T) {
 	testenv.MustHaveGoBuild(t)

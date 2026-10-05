@@ -354,8 +354,8 @@ func TestGroupMain(ld *modload.Loader, ctx context.Context, opts PackageOpts, me
 }
 
 // GroupMembers partitions packages into the binaries their tests share: one
-// per PGO profile and per value of the GODEBUG settings a program reads only
-// as it starts. A profile is compiled into every package a binary links, the
+// per PGO profile and per value of the GODEBUG settings a program reads only.
+// As it starts. A profile is compiled into every package a binary links, the
 // runtime included. A binary applies the rest of a package's default GODEBUG
 // when it is started for that package. Every package still runs, and every one
 // still reports on its own.

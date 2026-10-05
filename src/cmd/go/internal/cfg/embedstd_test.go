@@ -58,7 +58,7 @@ func TestSameToolchainTreeTakesOnlyItsOwnVersion(test *testing.T) {
 
 // Consider a standard package whose Go. That package files are all tests
 // compiles to no archive, so embedstd writes its manifest entry with no
-// archive name and adds nothing to the blob. crypto/internal/fips140test is
+// archive name and adds nothing. To the blob. crypto/internal/fips140test is
 // one. Asking that entry for an archive reads the empty name out of the blob
 // and kills the build. It answers as a package this binary does not carry.
 func TestEmbeddedStdArchivedSkipsAPackageWithNoArchive(t *testing.T) {

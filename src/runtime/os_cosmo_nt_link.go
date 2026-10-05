@@ -331,7 +331,7 @@ func ntEmuDup(fd int32) (r1, r2, errno uintptr) {
 
 // ntEmuDup3 implements dup3(2), and dup2(2) through it. The duplicate
 // lands in newfd, closing whatever was there, in one step under the
-// table lock so no other opener can take the slot in between.
+// table lock so no other opener can take. The slot in between.
 func ntEmuDup3(oldfd, newfd, flags int32) (r1, r2, errno uintptr) {
 	if flags&^int32(_NT_O_CLOEXEC) != 0 || oldfd == newfd {
 		return ntFail3(ntEINVAL)

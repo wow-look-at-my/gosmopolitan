@@ -450,7 +450,7 @@ func TestDarwinFlock(t *testing.T) {
 
 	// Apple agrees on none of those. An untranslated type asks for the
 	// wrong lock - and a read lock where the caller wanted a write
-	// lock is a weaker lock rather than an error.
+	// lock is a weaker lock. Rather than an error.
 	for _, tc := range []struct{ linux, darwin int16 }{{0, 1}, {1, 3}, {2, 2}} {
 		got, ok := cosmo.DarwinLockType(tc.linux)
 		if !ok || got != tc.darwin {
@@ -493,7 +493,7 @@ func TestLinuxFlockMatchesFlock_t(t *testing.T) {
 
 // TestRawFcntlLock takes a record lock through the bare SYS_FCNTL call with
 // a Linux-shaped record, the way a libc translated from C (modernc.org/libc,
-// under SQLite) does, rather than through syscall.FcntlFlock.
+// under SQLite) does. Rather than through syscall.FcntlFlock.
 func TestRawFcntlLock(t *testing.T) {
 	f, err := os.CreateTemp(t.TempDir(), "flock")
 	if err != nil {

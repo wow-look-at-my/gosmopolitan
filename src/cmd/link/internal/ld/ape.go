@@ -309,7 +309,7 @@ var apeLoaderTmpl = template.Must(template.New("apeloader").Parse(
 // makeAPEHeaderForPayloads creates the 64K APE polyglot header that boots
 // the given payloads (at most one per architecture family). With both an
 // amd64 and an arm64 payload the result is a fat APE: the bootstrap script
-// and the embedded boot headers dispatch on the host architecture. The
+// and the embedded boot headers dispatch. On the host architecture. The
 // macOS ARM64 APE loader finds the aarch64 image by decoding every printf
 // statement in the first many bytes.
 //
@@ -694,7 +694,7 @@ func apeImageBase(elf []byte) uint64 {
 
 // apeVaddrFileOff translates the virtual address range [vaddr,
 // vaddr+size) to its payload-relative file offset, requiring the whole
-// range to be file-backed (within p_filesz) by a single PT_LOAD.
+// range to be file-backed (within p_filesz). By a single PT_LOAD.
 func apeVaddrFileOff(loads []apePhdr, vaddr, size uint64, what string) uint64 {
 	for _, l := range loads {
 		if vaddr >= l.vaddr && vaddr+size <= l.vaddr+l.filesz {
@@ -706,8 +706,8 @@ func apeVaddrFileOff(loads []apePhdr, vaddr, size uint64, what string) uint64 {
 }
 
 // apePrepareNTBoot resolves the NT boot symbols from the live link, patches
-// those RVA fields of the runtime.ntidata import blob in the payload bytes,
-// and attaches the header RVAs to the payload for writePECosmoAMD64. Runs on
+// those RVA fields of the runtime.ntidata import blob in the payload bytes.
+// And attaches the header RVAs to the payload for writePECosmoAMD64. Runs on
 // the thin amd64 path only (convertToAPE), where ctxt.loader is still alive.
 func apePrepareNTBoot(ctxt *Link, p *apePayload) {
 	ldr := ctxt.loader
@@ -785,7 +785,7 @@ type peCosmoSection struct {
 // PT_LOADs (skipping the payload's ELF-header page, which the PE
 // headers region occupies virtually), whose entry point is the
 // runtime's _rt0_cosmo_nt stub, and whose import directory points at
-// the runtime.ntidata blob patched by apePrepareNTBoot.
+// the runtime.ntidata blob. Patched by apePrepareNTBoot.
 func writePECosmoAMD64(header []byte, amd *apePayload) {
 	info := amd.pe
 	loads := apePayloadLoads(amd.elf)
@@ -956,8 +956,8 @@ func transplantPEHeader(header []byte, amd *apePayload) {
 }
 
 // It remains for outputs that cannot carry the real header: arm64-only APEs
-// (no NT support) and synthetic payloads without a live link or an input head
-// (ld tests).
+// (no NT support) and synthetic payloads without a live. Link or an input
+// head (ld tests).
 func writePEHeader(header []byte, arch sys.ArchFamily) {
 	peStart := 0x80
 

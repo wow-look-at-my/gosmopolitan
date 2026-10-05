@@ -3,8 +3,8 @@
 # on the host the test job runs on, over a binary a build leg made.
 #
 # readonly-boot.sh makes the APE's directory, the unpack directory and the
-# loader's directory read-only, then proves a write there fails before it
-# trusts the run. Root gets bind mounts, and anybody else gets a mode bit.
+# loader's directory read-only, then proves a write there fails before it.
+# Trusts the run. Root gets bind mounts, and anybody else gets a mode bit.
 #
 # The Windows half of this claim is in nt.dats: that host needs no loader.
 # This is because the OS maps the payload out of the PE the APE already

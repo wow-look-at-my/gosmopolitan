@@ -129,7 +129,7 @@ func appendAPEBlob(outfile, blobPath string) {
 // apeCompactDebugTail builds the compact debug tail for the payloads (in
 // their final order). It patches each payload's ELF header to reference
 // its section-header view by absolute file offset - both in the stored
-// payload and, via makeEmbeddedElfHeader's propagation, in the boot
+// payload and, via makeEmbeddedElfHeader's propagation. In the boot
 // header that self-assimilation writes over the file's first many bytes.
 // The tail lands past the last payload's end (8-aligned), outside every
 // loadable span: it is never mapped at runtime. Every APE boot path
@@ -160,7 +160,7 @@ func apeCompactDebugTail(payloads []*apePayload, pristine [][]byte) (tail []byte
 
 // appendAPEFileTail appends tail to the APE at outfile so that its first
 // byte lands at file offset tailOff, zero-padding the gap from the
-// current end of file.
+// current. End of file.
 func appendAPEFileTail(outfile string, tailOff uint64, tail []byte) {
 	f, err := os.OpenFile(outfile, os.O_WRONLY|os.O_APPEND, 0)
 	if err != nil {
@@ -193,7 +193,7 @@ func apeDebugSidecarName(outfile string) string {
 // writeAPEDebugSidecar writes payload p's debug sidecar for its architecture.
 // In the default -apedbgmode=full it is p's ELF image as its linker produced
 // it, with the OS ABI cleared (p_offset values payload-relative, symbol table
-// and DWARF intact): a complete standalone ELF executable, directly loadable
+// and DWARF intact): a complete standalone ELF. Executable, directly loadable
 // by debuggers.
 func writeAPEDebugSidecar(outfile string, p *apePayload) {
 	name := apeDebugSidecarName(outfile)
@@ -236,7 +236,7 @@ func payloadExtent(elf []byte) uint64 {
 
 // stripPayload cuts p's ELF image down to the span its program headers
 // reference and zeroes the ELF header's section fields (e_shoff, e_shnum,
-// e_shstrndx), which no longer point at anything.
+// e_shstrndx), which no longer. Point at anything.
 func stripPayload(p *apePayload) {
 	extent := payloadExtent(p.elf)
 	if extent > uint64(len(p.elf)) {
@@ -273,7 +273,7 @@ func payloadFromAPEOrELF(data []byte) (*apePayload, error) {
 
 // hasSecondAPEPayload reports whether the APE file data contains another ELF
 // image beyond the extent of the first payload at apeHeaderSize, meaning it
-// is already a fat APE. Merging such a file would silently ingest the first
+// is already. A fat APE. Merging such a file would silently ingest the first
 // payload's slice spanning both images, so apeFatMerge rejects it. The first
 // payload must already have passed payloadFromELF validation. layoutAPE
 // places every additional payload at an apePayloadAlign boundary at or after

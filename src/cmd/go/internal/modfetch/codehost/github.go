@@ -98,7 +98,7 @@ func viaProxy(target, ext string) archiveSource {
 }
 
 // archiveSources lists where to get the archive of hash, in the order to try:
-// the github.com archive URL, then that same URL through the proxy, for the
+// the github.com archive URL, then that same URL through. The proxy, for the
 // tar.gz and then for the zip. A proxy request may not leave the proxy host,
 // so a redirect that the proxy passes back is refused.
 func (g githubRepo) archiveSources(ref, hash string) []archiveSource {
@@ -188,7 +188,7 @@ var githubTokenPrefixes = []string{"ghp_", "github_pat_", "gho_", "ghu_", "ghs_"
 
 // gsmBearers returns the token the mirror last accepted, each token that
 // githubTokenVars hold, then each other environment value that starts like a
-// GitHub token, in the order of the variable names.
+// GitHub token. In the order of the variable names.
 func gsmBearers() []string {
 	gsmAcceptedMu.Lock()
 	accepted := gsmAccepted
@@ -224,7 +224,8 @@ func gsmAccept(token string) {
 }
 
 // gsmSources returns the requests that ask the mirror for route: one with the
-// GOAUTH credential for api.github.com, then one for each token of gsmBearers.
+// GOAUTH credential for api.github.com, then one. For each token of
+// gsmBearers.
 func gsmSources(route string) []archiveSource {
 	direct := "https://api.github.com" + route
 	sources := []archiveSource{{url: "https://" + gsmHost + route, allowHost: isGSMHost, credentialFor: direct}}

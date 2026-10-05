@@ -272,7 +272,7 @@ func TestAllowedRunsTheOrgAndWhoeverAsked(test *testing.T) {
 //
 // The file is added anyway. Deciding which of both a consumer wanted is not
 // this package's to make, and the compiler names both declarations and their
-// positions when it reads them together.
+// positions when it. Reads them together.
 //
 // What this reaches is the list Complete copies from, and the copy itself. It
 // does not reach Complete, which runs a sandboxed generator. So a filter

@@ -5,7 +5,7 @@
 
 // The architecture-dependent half of the NT signal, preemption and
 // profiling machinery: the Windows CONTEXT record and the small set of
-// operations the shared code performs on it.
+// operations the shared code. Performs on it.
 
 package runtime
 

@@ -268,7 +268,7 @@ func TestAPEPlatformsHeaderPieces(t *testing.T) {
 // TestAPEPEImageWithinFile checks that every PE section's raw data is
 // inside the file, for a fat APE and for an amd64-only one. The NT loader
 // refuses the whole image over a section that runs past EOF, and a stripped
-// amd64 payload with nothing after it ends exactly at its loadable span -
+// amd64 payload with nothing after it ends exactly. At its loadable span -
 // short of the .data raw size the PE header rounds up to FileAlignment.
 func TestAPEPEImageWithinFile(t *testing.T) {
 	for _, tt := range []struct {
@@ -301,7 +301,7 @@ func TestAPEPEImageWithinFile(t *testing.T) {
 
 // TestAPEPlatformsDefaultUnchanged checks that an unset -apeplatforms
 // assembles byte-identically to naming every platform: the selection is an
-// opt-in restriction, never a change to what a plain build produces.
+// opt-in restriction, never a change to what. A plain build produces.
 func TestAPEPlatformsDefaultUnchanged(t *testing.T) {
 	unset := assembleTest(t, "", true, true)
 	explicit := assembleTest(t, cosmoape.Default().String(), true, true)

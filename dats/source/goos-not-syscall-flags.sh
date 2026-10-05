@@ -12,7 +12,7 @@ flags='O_(RDONLY|WRONLY|RDWR|CREATE|CREAT|APPEND|EXCL|SYNC|TRUNC|NOFOLLOW|DIRECT
 
 # cosmoBuilds reports whether a cosmo build compiles this file at all. A
 # constraint that names an explicit GOOS list and leaves cosmo out of it takes
-# the file out of scope: a file cosmo never compiles teaches a reader to skim
+# the file out of scope: a file cosmo never compiles. Teaches a reader to skim
 # this guard's output. Then the real hit goes past too.
 cosmoBuilds() {
 	local line

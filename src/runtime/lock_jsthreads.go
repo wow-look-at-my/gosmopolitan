@@ -177,14 +177,14 @@ func notesleep(n *note) {
 	}
 }
 
-// wasmWorkerParkNote parks a worker M on its park note (stopm). The main
-// M's JavaScript timeout backstops idle-P timers only while the main M is
-// parked in the event loop; it can be blocked elsewhere (a timed note
-// sleep, a long-running goroutine). So parked worker Ms sleep with a
-// timeout when timers exist anywhere: on expiry, a worker whose timers
-// are due re-enters the scheduler on its own (remove itself from the idle
-// M list, take an idle P, self-complete the stopm protocol), and
-// findRunnable's timer checks fire the timers.
+// wasmWorkerParkNote parks a worker M on its park note (stopm). The main M's
+// JavaScript timeout backstops idle-P timers only while the main M is parked
+// in the event loop; it can be blocked elsewhere (a timed note sleep, a
+// long-running goroutine). So parked worker Ms sleep with a timeout when
+// timers exist anywhere: on expiry, a worker whose timers are due re-enters
+// the scheduler. On its own (remove itself from the idle M list, take an idle
+// P, self-complete the stopm protocol), and findRunnable's timer checks fire
+// the timers.
 func wasmWorkerParkNote(n *note) {
 	gp := getg()
 	wasmParkedWorkers.Add(1)
@@ -521,7 +521,7 @@ func wasmNewEventG() *g {
 // GOWASM=threads: the asynchronous counterpart of handleEvent (which keeps
 // serving the synchronous, nested case). It locks itself to the main M so
 // that an event handler that blocks and is readied from a worker thread still
-// continues on the main thread (JavaScript values and the events bookkeeping
+// continues. On the main thread (JavaScript values and the events bookkeeping
 // are main-thread-only). While it is blocked, the main M parks in stoplockedm
 // - in the event loop, via wasmMainParkNote - and the P moves to a worker.
 func wasmEventGoroutine() {

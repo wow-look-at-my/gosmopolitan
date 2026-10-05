@@ -340,9 +340,9 @@ func darwinXlatTermiosIoctl(req uintptr) (uintptr, bool) {
 }
 
 // DarwinXlatIoctl maps a Linux ioctl request to Apple's. The second
-// result is false for a request this emulation does not serve, which the
-// caller reports as ENOSYS rather than passing a Linux number to a
-// kernel that reads it as something else entirely.
+// result is false. This holds for a request this emulation does not
+// serve, which the caller reports as ENOSYS rather than passing a Linux
+// number to a kernel. That kernel reads it as something else entirely.
 func DarwinXlatIoctl(req uintptr) (uintptr, bool) {
 	switch uint32(req) {
 	case linuxTIOCSCTTY:

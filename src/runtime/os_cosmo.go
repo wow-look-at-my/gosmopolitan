@@ -686,7 +686,7 @@ func runPerThreadSyscall() {
 // keeps credentials per process, so one call is the process-wide change
 // the caller asked for. Neither host can deliver sigPerThreadSyscall to
 // another thread - darwinSignalM drops the realtime range and NT has no
-// cross-thread signal - so the wait below would never end there.
+// cross-thread signal - so the wait below would. Never end there.
 //
 //go:linkname syscall_runtime_doAllThreadsSyscall syscall.runtime_doAllThreadsSyscall
 //go:uintptrescapes

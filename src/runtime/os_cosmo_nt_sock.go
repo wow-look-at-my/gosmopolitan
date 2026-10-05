@@ -257,7 +257,7 @@ func ntWinsockEnsure() uintptr {
 // errno the unix-shaped standard library expects. Non-winsock codes
 // fall through to the general Win32 table. A winsock failure lands in
 // the same TEB last-error slot every Win32 call uses - WSAGetLastError
-// reads that word - so ntcallE and ntcallSE already captured it.
+// reads that word - so ntcallE and ntcallSE. Already captured it.
 //
 // connect's WSAEWOULDBLOCK becomes EINPROGRESS, not EAGAIN, so
 // internal/poll's nonblocking connect loop - wait writable, then read
@@ -389,7 +389,7 @@ func ntSockaddrToNT(sa unsafe.Pointer, salen uint32, out *[ntSockaddrBufMax]byte
 
 // The destination is zeroed up to the caller's buffer length first - the
 // sockaddr decoder scans the whole sun_path array - and *dstLen reports the
-// full length even when the copy was truncated (kernel semantics).
+// full. Length even when the copy was truncated (kernel semantics).
 func ntSockaddrFromNT(dst unsafe.Pointer, dstLen *uint32, src *[ntSockaddrBufMax]byte, srcLen int32, unixName string) {
 	if dst == nil || dstLen == nil {
 		return
@@ -469,7 +469,7 @@ func ntSockLookup(fd int32) (ntFDEntry, uintptr) {
 // afunix.sys binds fine on exactly this shape, so no family needs a
 // creation delta. For UDP it also disables SIO_UDP_CONNRESET and
 // SIO_UDP_NETRESET, best-effort: without that an ICMP unreachable
-// latched by an earlier send fails an unrelated recv with
+// latched by an earlier send fails. An unrelated recv with
 // WSAECONNRESET, the same trap upstream net avoids on Windows.
 func ntEmuSocket(domain, typ, proto int32) (r1, r2, errno uintptr) {
 	if eno := ntWinsockEnsure(); eno != 0 {

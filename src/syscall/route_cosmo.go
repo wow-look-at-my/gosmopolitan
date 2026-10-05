@@ -24,8 +24,8 @@ const (
 func cosmoDarwinSysctl(mib []uint32, out []byte) (int, bool)
 
 // RouteRIB fetches the routing information base from the host, the way
-// every BSD publishes it: a sysctl over the AF_ROUTE branch, sized by a
-// first call that writes nothing and then read by a second.
+// every BSD publishes it: a sysctl over the AF_ROUTE branch, sized. By
+// a first call that writes nothing and then read by a second.
 func RouteRIB(facility, param int) ([]byte, error) {
 	mib := []uint32{CTL_NET, darwinAFRoute, 0, 0, uint32(facility), uint32(param)}
 	n, ok := cosmoDarwinSysctl(mib, nil)
