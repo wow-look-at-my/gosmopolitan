@@ -1,6 +1,6 @@
 # Per-platform runtime status (GOOS=cosmo)
 
-Windows status (NT bring-up wave 3 COMPLETE plus the LookPath fix - CI-verified by the runtimeprobe gauntlet on windows-latest, against binaries built on all platforms).
+Windows status (NT bring-up a later wave COMPLETE plus the LookPath fix - CI-verified by the runtimeprobe gauntlet on windows-latest, against binaries built on all platforms).
 
 Basics: stdout/stderr (console CP_UTF8+VT), os.Args via GetCommandLineW, environment, os.Exit, VirtualAlloc memory, CreateThread Ms, WaitOnAddress futexes, KUSER clocks, NumCPU. Every user-level syscall routes through an NT emulation dispatcher (Linux numbers/errnos/structs in, Win32 out - src/runtime/os_cosmo_nt_sys.go). It covers process identity, ProcessPrng entropy, and the whole file I/O family with an fd table.
 
@@ -74,9 +74,11 @@ What Apple cannot serve: `Setresuid`, `Setresgid`, `Setfsuid`, `Setfsgid` and `m
 
 Locking, durability and the terminal followed: flock, fdatasync, sync, getrusage, gettimeofday, and ioctl. The ioctl support covers the window-size and job-control requests. It also covers the termios family (TCGETS/TCSETS/TCSETSW/TCSETSF) through Apple's TIOCGETA/TIOCSETA. A program can therefore put a terminal into raw mode here. termios converts the struct as well as the request. Apple has 64-bit flag words against 32, and twenty control characters against nineteen at different indices. Apple keeps speeds in their own fields, not inside c_cflag. Some bits collide: Linux IXON is Apple IXOFF.
 
+Process control followed (os_cosmo_nt_ctrl.go). sched_setaffinity and sched_getaffinity go over SetProcessAffinityMask and GetProcessAffinityMask. getpriority and setpriority go over GetPriorityClass and SetPriorityClass. The nice-to-class mapping is cosmo libc's (libc/proc/setpriority-nt.c). The SIGSTOP/SIGCONT pair goes over ntdll's NtSuspendProcess and NtResumeProcess. A stop signal stops a process here instead of ending it. Each call reaches a pid that names a process this runtime started. That is the same limit cosmo libc's own NT implementations have. No runtimeprobe check covers the calls yet, and the NT suite leg is waived, so none of them has run on an NT host.
+
 Windows serves flock over LockFileEx. That lock is mandatory: a reader of a locked file gets EACCES. The fcntl record locks (F_GETLK/F_SETLK/F_SETLKW) use LockFileEx too, with one duplicated handle per file identity (src/runtime/os_cosmo_nt_lock.go). As on Linux, a close of any descriptor of the file drops them. Windows serves getrusage over GetProcessTimes, GetThreadTimes and K32GetProcessMemoryInfo, with RUSAGE_CHILDREN summed from the children wait4 reaps. It serves gettimeofday from the runtime's wall clock, and statfs/fstatfs over GetVolumePathNameW, GetDiskFreeSpaceW, GetDiskFreeSpaceExW and GetVolumeInformationW.
 
-Runtimeprobe checks: flock, durable, rusage, ioctl, termios, volume. The ubuntu leg's unit tests pin the termios translation, but no CI runner has a terminal. As a result, its round trip has never run against a live driver - untested, not unbuilt.
+Runtimeprobe checks: flock, durable, rusage, ioctl, termios, volume. Process control has none. The ubuntu leg's unit tests pin the termios translation, but no CI runner has a terminal. As a result, its round trip has never run against a live driver - untested, not unbuilt.
 
 The remaining known macOS gap is AllThreadsSyscall (Linux-only rt-signal machinery, unused by the stdlib on cosmo).
 

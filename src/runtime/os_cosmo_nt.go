@@ -137,6 +137,14 @@ var (
 
 	ntGenerateConsoleCtrlEventFn uintptr
 
+	// The syscall-emulation layer's process control: affinity, priority class and suspend/resume.
+	ntSetProcessAffinityMaskFn uintptr
+	ntGetProcessAffinityMaskFn uintptr
+	ntSetPriorityClassFn       uintptr
+	ntGetPriorityClassFn       uintptr
+	ntNtSuspendProcessFn       uintptr
+	ntNtResumeProcessFn        uintptr
+
 	ntQueryInformationProcessFn uintptr // ntdll: getppid
 	ntProcessPrngFn             uintptr // bcryptprimitives ProcessPrng, or advapi32 SystemFunction036 (same signature)
 
@@ -241,6 +249,12 @@ var (
 	ntNameSetWaitableTimer  = []byte("SetWaitableTimer\x00")
 	ntNameSetThreadPriority = []byte("SetThreadPriority\x00")
 	ntNameGenConsoleCtrlEvt = []byte("GenerateConsoleCtrlEvent\x00")
+	ntNameSetProcAffinity   = []byte("SetProcessAffinityMask\x00")
+	ntNameGetProcAffinity   = []byte("GetProcessAffinityMask\x00")
+	ntNameSetPriorityCls    = []byte("SetPriorityClass\x00")
+	ntNameGetPriorityCls    = []byte("GetPriorityClass\x00")
+	ntNameNtSuspendProcess  = []byte("NtSuspendProcess\x00")
+	ntNameNtResumeProcess   = []byte("NtResumeProcess\x00")
 	ntNameNtdll             = []byte("ntdll.dll\x00")
 	ntNameNtQueryInfoProc   = []byte("NtQueryInformationProcess\x00")
 	ntNameBcryptPrimitives  = []byte("bcryptprimitives.dll\x00")
@@ -517,6 +531,12 @@ func ntResolve() {
 
 	ntGenerateConsoleCtrlEventFn = k32sym(&ntNameGenConsoleCtrlEvt[0])
 
+	// Process control (os_cosmo_nt_ctrl.go). The affinity and priority calls are kernel32 exports present since forever.
+	ntSetProcessAffinityMaskFn = k32sym(&ntNameSetProcAffinity[0])
+	ntGetProcessAffinityMaskFn = k32sym(&ntNameGetProcAffinity[0])
+	ntSetPriorityClassFn = k32sym(&ntNameSetPriorityCls[0])
+	ntGetPriorityClassFn = k32sym(&ntNameGetPriorityCls[0])
+
 	// WaitOnAddress and friends live in the api-ms-win-core-synch forwarder DLL (Win8+; real cosmo imports the same one).
 	synch := ntcall(lla, uintptr(unsafe.Pointer(&ntNameSynchDLL[0])), 0, 0, 0, 0, 0)
 	if synch == 0 {
@@ -532,6 +552,9 @@ func ntResolve() {
 		ntQueryInformationProcessFn = ntcall(gpa, ntdll, uintptr(unsafe.Pointer(&ntNameNtQueryInfoProc[0])), 0, 0, 0, 0)
 		// uname's release and version (ntEmuUname).
 		ntRtlGetVersionFn = ntcall(gpa, ntdll, uintptr(unsafe.Pointer(&ntNameRtlGetVersion[0])), 0, 0, 0, 0)
+		// A stopped process, for the SIGSTOP/SIGCONT pair (os_cosmo_nt_ctrl.go).
+		ntNtSuspendProcessFn = ntcall(gpa, ntdll, uintptr(unsafe.Pointer(&ntNameNtSuspendProcess[0])), 0, 0, 0, 0)
+		ntNtResumeProcessFn = ntcall(gpa, ntdll, uintptr(unsafe.Pointer(&ntNameNtResumeProcess[0])), 0, 0, 0, 0)
 	}
 	ntGetComputerNameWFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameGetComputerNameW[0])), 0, 0, 0, 0)
 	// The metadata wave (os_cosmo_nt_meta.go): utimensat, truncate, fchdir, linkat.
