@@ -102,9 +102,6 @@ func mainModulePath() string {
 // goLogger takes the cache's diagnostics.
 type goLogger struct{}
 
-// CacheDebugEnv turns the routine success reporting back on. Anything but the empty string enables it.
-const CacheDebugEnv = "GOCACHEDEBUG"
-
 // CacheLogEnv names a file that takes the cache's notices in place of stderr.
 const CacheLogEnv = "GOCACHELOG"
 
@@ -137,9 +134,6 @@ func cacheNotice(format string, args ...any) {
 }
 
 func (goLogger) Infof(format string, args ...any) {
-	if os.Getenv(CacheDebugEnv) == "" {
-		return
-	}
 	cacheNotice(format, args...)
 }
 
