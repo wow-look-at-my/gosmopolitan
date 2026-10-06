@@ -720,6 +720,18 @@ func runTest(ctx context.Context, cmd *base.Command, args []string) {
 	// cache starts no test binary, and the per-test install below is
 	// unreachable then.
 	base.StartSigHandlers()
+	// An interrupt has to reach the commands this build runs, not only the
+	// go command: a test binary that outlives the signal, and the children
+	// it started, hold the build open until the command's own timeout.
+	ctx, cancelInterrupted := context.WithCancel(ctx)
+	defer cancelInterrupted()
+	go func() {
+		select {
+		case <-base.Interrupted:
+			cancelInterrupted()
+		case <-ctx.Done():
+		}
+	}()
 	moduleLoader := modload.NewLoader()
 	pkgArgs, testArgs = testFlags(args)
 	moduleLoader.InitWorkfile() // The test command does custom flag processing; initialize workspaces after that.
