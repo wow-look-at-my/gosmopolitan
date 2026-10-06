@@ -715,6 +715,11 @@ var defaultVetFlags = []string{
 }
 
 func runTest(ctx context.Context, cmd *base.Command, args []string) {
+	// The handler that turns an interrupt into a nonzero exit must be in
+	// place before any work, because a run whose results all come from the
+	// cache starts no test binary, and the per-test install below is
+	// unreachable then.
+	base.StartSigHandlers()
 	moduleLoader := modload.NewLoader()
 	pkgArgs, testArgs = testFlags(args)
 	moduleLoader.InitWorkfile() // The test command does custom flag processing; initialize workspaces after that.
