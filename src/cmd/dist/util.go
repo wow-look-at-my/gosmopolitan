@@ -123,12 +123,6 @@ func runEnv(dir string, mode int, env []string, cmd ...string) string {
 
 var maxbg = 4 /* maximum number of jobs to run at once */
 
-// bgLimit is the number of jobs a machine of numCPU processors runs without oversubscribing them.
-func bgLimit(numCPU int) int {
-	// A dist test command is a go command running a test binary, which asks for more than one processor.
-	return max(2, numCPU/2)
-}
-
 var (
 	bgwork = make(chan func(), 1e5)
 
