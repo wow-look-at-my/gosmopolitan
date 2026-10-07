@@ -7,9 +7,11 @@ package work
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -112,6 +114,97 @@ func actionID(buildID string) string {
 // contentID returns the content ID half of a build ID.
 func contentID(buildID string) string {
 	return buildID[strings.LastIndex(buildID, buildIDSeparator)+1:]
+}
+
+// Export IDs
+//
+// A compile reads nothing of an imported package but its export data: the
+// __.PKGDEF entry of the archive, which holds the package's types, the bodies
+// of its inlinable functions and the escape facts of its functions. The
+// object code in the rest of the archive is read only by the linker. So the
+// action ID of a compile hashes each import's export ID, a hash of that entry
+// with the import's own build ID left out, and not the import's content ID. A
+// change to a function body the export data does not carry changes the
+// content ID of that one package and leaves every importer's compile a hit;
+// links, which hash content IDs, still see it.
+
+// exportKey is the cache key of the export ID of the compile with action ID id.
+func exportKey(id cache.ActionID) cache.ActionID {
+	return cache.Subkey(id, "export")
+}
+
+// importID returns the ID that a compile of a package importing dep's package
+// hashes for it: dep's export ID for a gc compile, its content ID otherwise.
+func (builder *Builder) importID(dep *Action) string {
+	if dep.Mode != "build" || cfg.BuildToolchainName != "gc" {
+		return contentID(dep.buildID)
+	}
+	if dep.exportID != "" {
+		return dep.exportID
+	}
+	if builder.IsCmdList || cfg.BuildN || !dep.needBuild && !builder.NeedExport {
+		// The import was looked up and not compiled. Its build ID holds its
+		// action ID, so this compile's key misses exactly when the import's does.
+		return contentID(dep.buildID)
+	}
+	base.Fatalf("go: internal error: compile of %s finished with no export ID", dep.Package.ImportPath)
+	panic("unreachable")
+}
+
+// loadExportID reads the export ID stored with the compile act is about to
+// reuse. A compile without one is not reused: its importers could not be keyed.
+func loadExportID(act *Action) bool {
+	if act.Mode != "build" || cfg.BuildToolchainName != "gc" {
+		return true
+	}
+	stored, _, err := cache.GetBytes(act.cache(), exportKey(act.actionID))
+	if err != nil {
+		return false
+	}
+	act.exportID = string(stored)
+	return true
+}
+
+// exportID returns the export ID of the archive file, whose own build ID is
+// buildID.
+func exportID(file, buildID string) (string, error) {
+	archive, err := os.Open(file)
+	if err != nil {
+		return "", err
+	}
+	defer archive.Close()
+	pkgdef, err := exportData(archive)
+	if err != nil {
+		return "", fmt.Errorf("%s: %v", file, err)
+	}
+	_, hash, err := buildid.FindAndHash(pkgdef, buildID, 0)
+	if err != nil {
+		return "", fmt.Errorf("%s: %v", file, err)
+	}
+	return buildid.HashToString(hash), nil
+}
+
+// exportData returns the __.PKGDEF entry of archive, which the compiler
+// writes first.
+func exportData(archive *os.File) (*io.SectionReader, error) {
+	const magic = "!<arch>\n"
+	const headerSize = 60
+	var head [len(magic) + headerSize]byte
+	if _, err := io.ReadFull(archive, head[:]); err != nil {
+		return nil, err
+	}
+	if string(head[:len(magic)]) != magic {
+		return nil, fmt.Errorf("not an archive")
+	}
+	header := head[len(magic):]
+	if name := strings.TrimRight(string(header[:16]), " "); name != "__.PKGDEF" {
+		return nil, fmt.Errorf("first archive entry is %q, not __.PKGDEF", name)
+	}
+	size, err := strconv.ParseInt(strings.TrimRight(string(header[48:58]), " "), 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("__.PKGDEF size: %v", err)
+	}
+	return io.NewSectionReader(archive, int64(len(head)), size), nil
 }
 
 // toolID returns the unique ID to use for the current copy of the
@@ -568,7 +661,7 @@ func (b *Builder) useCache(a *Action, actionHash cache.ActionID, target string, 
 
 	if target != "" {
 		buildID, _ := buildid.ReadFile(target)
-		if strings.HasPrefix(buildID, actionID+buildIDSeparator) {
+		if strings.HasPrefix(buildID, actionID+buildIDSeparator) && loadExportID(a) {
 			a.buildID = buildID
 			if a.json != nil {
 				a.json.BuildID = a.buildID
@@ -656,7 +749,7 @@ func (b *Builder) useCache(a *Action, actionHash cache.ActionID, target string, 
 			a.Target = "DO NOT USE - using cache"
 			return true
 		}
-		if buildID, err := buildid.ReadFile(file); err == nil {
+		if buildID, err := buildid.ReadFile(file); err == nil && loadExportID(a) {
 			if printOutput {
 				switch a.Mode {
 				case "link":
@@ -795,6 +888,12 @@ func (b *Builder) updateBuildID(a *Action, target string) error {
 	newID := a.buildID[:strings.LastIndex(a.buildID, buildIDSeparator)] + buildIDSeparator + buildid.HashToString(hash)
 	if len(newID) != len(a.buildID) {
 		return fmt.Errorf("internal error: build ID length mismatch %q vs %q", a.buildID, newID)
+	}
+	if a.Mode == "build" && cfg.BuildToolchainName == "gc" {
+		if a.exportID, err = exportID(target, a.buildID); err != nil {
+			return err
+		}
+		cache.PutBytes(c, exportKey(a.actionID), []byte(a.exportID))
 	}
 
 	// Replace with new content-based ID.
