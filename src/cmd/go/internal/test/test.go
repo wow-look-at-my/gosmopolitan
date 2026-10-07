@@ -1536,7 +1536,7 @@ func builderTest(ld *modload.Loader, b *work.Builder, ctx context.Context, pkgOp
 			Deps:       []*work.Action{buildAction},
 			Package:    p,
 			IgnoreFail: true, // run (prepare output) even if build failed
-			TryCache:   rta.c.tryCache,
+			TryCache:   rta.tryCache,
 		}
 		if writeCoverMetaAct != nil {
 			// If writeCoverMetaAct != nil, this indicates that our
@@ -2109,6 +2109,17 @@ func (r *runTestActor) Act(b *work.Builder, ctx context.Context, a *work.Action)
 		buf.Reset() // cmd.Stdout was going to os.Stdout already
 	}
 	return nil
+}
+
+// tryCache asks the cache for a package whose tests compiled. One whose tests
+// did not is left out of the generated main, and its run reports the failure.
+func (r *runTestActor) tryCache(builder *work.Builder, runAct *work.Action, linkAction *work.Action) bool {
+	for _, variant := range r.variants {
+		if variant.Failed != nil {
+			return false
+		}
+	}
+	return r.c.tryCache(builder, runAct, linkAction)
 }
 
 // tryCache is called just before the link attempt,
@@ -3316,9 +3327,11 @@ type testmainCompileActor struct {
 
 func (actor *testmainCompileActor) Act(b *work.Builder, ctx context.Context, a *work.Action) error {
 	drop := make(map[string]bool)
+	kept := make([]*work.Action, 0, len(a.Deps))
 	for _, dep := range a.Deps {
 		if dep.Failed == nil || dep.Package == nil {
-			continue // an action of no package only orders the ones that build
+			kept = append(kept, dep) // an action of no package only orders the ones that build
+			continue
 		}
 		unit, isMember := actor.units[dep]
 		if !isMember {
@@ -3326,6 +3339,9 @@ func (actor *testmainCompileActor) Act(b *work.Builder, ctx context.Context, a *
 		}
 		drop[unit] = true
 	}
+	// The main rendered without a unit imports nothing of it, so the compile
+	// neither hashes nor names a package that produced no object.
+	a.Deps = kept
 	if len(drop) > 0 {
 		content, err := load.RenderTestmainWithout(actor.testMain, drop)
 		if err != nil {

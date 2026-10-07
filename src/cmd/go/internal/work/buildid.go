@@ -136,6 +136,11 @@ func exportKey(id cache.ActionID) cache.ActionID {
 // importID returns the ID that a compile of a package importing dep's package
 // hashes for it: dep's export ID for a gc compile, its content ID otherwise.
 func (builder *Builder) importID(dep *Action) string {
+	if dep.Mode == "build-install" {
+		// installAction put itself in the build action's place; the compile is
+		// its first dependency.
+		dep = dep.Deps[0]
+	}
 	if dep.Mode != "build" || cfg.BuildToolchainName != "gc" {
 		return contentID(dep.buildID)
 	}
