@@ -4911,8 +4911,8 @@ func wakeNetPoller(when int64) {
 		//     watcher stays armed across resumes); gating would race the
 		//     park transition and lose the deadline;
 		//   - not gated on wasmParkedWorkers either: a worker parked AT
-		//     ADD TIME can be claimed by startm before its watchdog ever
-		//     ticks, leaving no agent that knows this deadline (observed:
+		//     ADD TIME can be claimed by startm before its timed park ever
+		//     ends, leaving no agent that knows this deadline (observed:
 		//     the liveness gate's 200ms timer silently slipping to the
 		//     end of the 2s busy phase in ~1/3 of runs when the nudge
 		//     was gated on parkedWorkers==0).
