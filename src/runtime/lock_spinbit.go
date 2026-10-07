@@ -63,9 +63,8 @@ const (
 	mutexMMask       = 0x3FF
 	mutexMOffset     = gc.MallocHeaderSize // alignment of heap-allocated Ms (those other than m0)
 
-	mutexActiveSpinCount  = 4
-	mutexActiveSpinSize   = 30
-	mutexPassiveSpinCount = 1
+	mutexActiveSpinCount = 4
+	mutexActiveSpinSize  = 30
 
 	mutexTailWakePeriod = 16
 
@@ -223,10 +222,6 @@ tryAcquire:
 		if weSpin || atTail || mutexPreferLowLatency(l) {
 			if i < spin {
 				procyield(mutexActiveSpinSize)
-				v = atomic.Loaduintptr(&l.key)
-				continue tryAcquire
-			} else if i < spin+mutexPassiveSpinCount {
-				osyield() // TODO: Consider removing this step. See https://go.dev/issue/69268.
 				v = atomic.Loaduintptr(&l.key)
 				continue tryAcquire
 			}
