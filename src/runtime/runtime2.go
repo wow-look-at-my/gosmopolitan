@@ -692,6 +692,9 @@ type m struct {
 	lockedExt         uint32      // tracking for external LockOSThread
 	lockedInt         uint32      // tracking for internal lockOSThread
 	mWaitList         mWaitList   // list of runtime lock waiters
+	waitAddrNote      note        // sleep of waitAddrSleep
+	waitAddr          uintptr     // word this M sleeps on in waitAddrSleep, 0 once a writer unlinks it
+	waitAddrNext      muintptr    // next M in the same waitAddrTable bucket
 	ditEnabled        bool        // set if DIT is currently enabled on this M
 
 	mLockProfile mLockProfile // fields relating to runtime.lock contention
@@ -834,6 +837,13 @@ type p struct {
 	// Note that while other P's may atomically CAS this to zero,
 	// only the owner P can CAS it to a valid G.
 	runnext guintptr
+
+	// runnextSeen is the runnext G a thief first found here, and
+	// runnextSeenAt the nanotime when it did. A thief leaves a runnext G
+	// to this P until it has sat for runnextStealDelay. Thieves write
+	// both without a lock; a torn pair only moves that point.
+	runnextSeen   atomic.Uintptr
+	runnextSeenAt atomic.Int64
 
 	// Available G's (status == Gdead)
 	gFree gList

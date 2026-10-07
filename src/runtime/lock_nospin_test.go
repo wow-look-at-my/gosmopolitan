@@ -68,6 +68,90 @@ func TestLocksNeverSpin(t *testing.T) {
 	}
 }
 
+// TestWaitsNeverSpin pins that the runtime's waits for another thread block
+// in the OS until that thread wakes them. Each listed function must not
+// call or pass along a spin, yield or poll-sleep primitive. A file listed
+// without functions is checked whole.
+func TestWaitsNeverSpin(t *testing.T) {
+	spinNames := map[string]bool{
+		"procyield":    true,
+		"osyield":      true,
+		"osyield_no_g": true,
+		"usleep":       true,
+		"usleep_no_g":  true,
+		"Gosched":      true,
+	}
+	sources := []struct {
+		path  string
+		funcs []string
+	}{
+		{"proc.go", []string{
+			"main",
+			"waitPanicDefers",
+			"panicDefersDone",
+			"casfrom_Gscanstatus",
+			"casgstatus",
+			"casGToPreemptScan",
+			"casGFromPreempted",
+			"execute",
+			"checkRunqsNoP",
+			"runnextStealAt",
+			"runqgrab",
+			"runqsteal",
+			"preemptSignalDone",
+			"syscall_runtime_BeforeExec",
+			"profSignalUnlock",
+			"setcpuprofilerate",
+		}},
+		{"preempt.go", []string{"suspendG", "resumeG"}},
+		{"mprof.go", []string{
+			"goroutineProfileWithLabelsConcurrent",
+			"tryRecordGoroutineProfileWB",
+			"tryRecordGoroutineProfile",
+		}},
+		{"coro.go", []string{"coroswitch_m"}},
+		{"waitaddr.go", nil},
+		{"signalnote.go", nil},
+		{"signalnote_cosmo_arm64.go", nil},
+		{"signalnote_darwin.go", nil},
+		{"signalnote_sema.go", nil},
+		{"signalnote_wasm.go", nil},
+	}
+	fset := token.NewFileSet()
+	for _, source := range sources {
+		file, err := parser.ParseFile(fset, source.path, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bodies := map[string]*ast.FuncDecl{}
+		for _, decl := range file.Decls {
+			if fn, ok := decl.(*ast.FuncDecl); ok && fn.Recv == nil {
+				bodies[fn.Name.Name] = fn
+			}
+		}
+		var nodes []ast.Node
+		if source.funcs == nil {
+			nodes = append(nodes, file)
+		}
+		for _, name := range source.funcs {
+			fn := bodies[name]
+			if fn == nil {
+				t.Errorf("%s: no func %s to check", source.path, name)
+				continue
+			}
+			nodes = append(nodes, fn)
+		}
+		for _, node := range nodes {
+			ast.Inspect(node, func(node ast.Node) bool {
+				if ident, ok := node.(*ast.Ident); ok && spinNames[ident.Name] {
+					t.Errorf("%s: uses %s", fset.Position(ident.Pos()), ident.Name)
+				}
+				return true
+			})
+		}
+	}
+}
+
 // TestSyncCanSpinIsFalse pins the answer the runtime gives packages that
 // reach sync.runtime_canSpin by linkname: spinning is never granted.
 func TestSyncCanSpinIsFalse(t *testing.T) {
