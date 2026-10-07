@@ -4,10 +4,20 @@
 package test
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/hex"
+	"encoding/pem"
+	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"cmd/go/internal/load"
 	"cmd/go/internal/work"
@@ -32,7 +42,7 @@ func TestLookupAnswer(t *testing.T) {
 	empty := write("empty", "# no entries\n")
 
 	answer := func(kind, file, query string) string {
-		sum, err := lookupAnswer(kind, file, query)
+		sum, err := lookupAnswer(kind, file, query, make(map[string][]rootCert))
 		if err != nil {
 			t.Fatalf("lookupAnswer(%s, %s, %q): %v", kind, file, query, err)
 		}
@@ -79,8 +89,80 @@ func TestLookupAnswer(t *testing.T) {
 		}
 	}
 
-	if _, err := lookupAnswer("nosuchparser", base, "x"); err == nil {
+	if _, err := lookupAnswer("nosuchparser", base, "x", make(map[string][]rootCert)); err == nil {
 		t.Errorf("lookupAnswer with an unknown parser succeeded")
+	}
+}
+
+// TestRootLookupAnswer pins that a lookup in a system root directory is keyed
+// on the roots it asked for. A certificate each host makes for itself, such as
+// a snakeoil, leaves a verification that never chained to it alone.
+func TestRootLookupAnswer(t *testing.T) {
+	issue := func(name string) ([]byte, []byte, []byte) {
+		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		template := &x509.Certificate{
+			SerialNumber:          big.NewInt(1),
+			Subject:               pkix.Name{CommonName: name},
+			NotBefore:             time.Unix(0, 0),
+			NotAfter:              time.Unix(1<<31, 0),
+			IsCA:                  true,
+			BasicConstraintsValid: true,
+		}
+		der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cert, err := x509.ParseCertificate(der)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), cert.RawSubject, der
+	}
+	caPEM, caSubject, caDER := issue("Shared Root CA")
+	oilPEM, oilSubject, _ := issue("runner-a")
+	otherOilPEM, _, _ := issue("runner-b")
+
+	write := func(dir, name string, data []byte) {
+		if err := os.MkdirAll(dir, 0o777); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), data, 0o666); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runnerA, runnerB := filepath.Join(t.TempDir(), "a"), filepath.Join(t.TempDir(), "b")
+	write(runnerA, "ca.pem", caPEM)
+	write(runnerA, "ssl-cert-snakeoil.pem", oilPEM)
+	write(runnerB, "ca.pem", caPEM)
+	write(runnerB, "ssl-cert-snakeoil.pem", otherOilPEM)
+
+	answer := func(dir, query string) string {
+		sum, err := lookupAnswer("x509dir", dir, query, make(map[string][]rootCert))
+		if err != nil {
+			t.Fatalf("lookupAnswer(x509dir, %s, %q): %v", dir, query, err)
+		}
+		return string(sum[:])
+	}
+	caSum := sha256.Sum224(caDER)
+	cases := []struct {
+		query string
+		same  bool
+	}{
+		{"issuer " + hex.EncodeToString(caSubject), true},
+		{"contains " + hex.EncodeToString(caSum[:]), true},
+		{"issuer " + hex.EncodeToString(oilSubject), false},
+		{"all", false},
+	}
+	for _, c := range cases {
+		if same := answer(runnerA, c.query) == answer(runnerB, c.query); same != c.same {
+			t.Errorf("x509dir %q on two runners: same answer = %v, want %v", c.query, same, c.same)
+		}
+	}
+	if _, err := lookupAnswer("x509dir", runnerA, "subjects", make(map[string][]rootCert)); err == nil {
+		t.Errorf("lookupAnswer with an unknown root query succeeded")
 	}
 }
 
@@ -136,5 +218,10 @@ func TestParsedFileInputs(t *testing.T) {
 	alsoRead := inputs("parse open hosts\nopen " + hosts + "\nopen " + hosts + "\n")
 	if strings.Count(alsoRead, "open "+hosts+" ") != 1 {
 		t.Errorf("the test's own open of the file is not hashed exactly once:\n%s", alsoRead)
+	}
+
+	saidAfter := inputs("open " + hosts + "\nparse open " + hosts + "\n")
+	if strings.Contains(saidAfter, "open ") {
+		t.Errorf("a read the parser claimed after it succeeded was hashed:\n%s", saidAfter)
 	}
 }

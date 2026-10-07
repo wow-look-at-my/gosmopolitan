@@ -8,6 +8,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/x509"
+	"encoding/hex"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"internal/coverage"
@@ -2517,10 +2520,12 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, []byte
 	if cache.DebugTest {
 		fmt.Fprintf(os.Stderr, "testcache: %s: GODEBUG=%q\n", a.Package.ImportPath, os.Getenv("GODEBUG"))
 	}
+	parsed, err := parsedReads(a.Package.Dir, testlog)
+	if err != nil {
+		return cache.ActionID{}, nil, err
+	}
+	sources := make(map[string][]rootCert)
 	pwd := a.Package.Dir
-	// parsed counts, by op and absolute name, the stats and opens a parser
-	// announced. Each cancels one logged line of its own op and name.
-	parsed := make(map[string]int)
 	for _, line := range bytes.Split(testlog, []byte("\n")) {
 		if len(line) == 0 {
 			continue
@@ -2551,14 +2556,7 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, []byte
 			}
 			fmt.Fprintf(h, "chdir %s %x\n", name, hashStat(name))
 		case "parse":
-			parseOp, file, ok := strings.Cut(name, " ")
-			if !ok || (parseOp != "stat" && parseOp != "open") {
-				return cache.ActionID{}, nil, fmt.Errorf("%w: %q", errBadTestInputs, line)
-			}
-			if !filepath.IsAbs(file) {
-				file = filepath.Join(pwd, file)
-			}
-			parsed[parseOp+" "+file]++
+			// Counted by parsedReads.
 		case "lookup":
 			kind, file, query, err := parseLookup(name)
 			if err != nil {
@@ -2570,7 +2568,7 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, []byte
 			if isRunScratch(file) || isBuildCache(file) {
 				break
 			}
-			answer, err := lookupAnswer(kind, file, query)
+			answer, err := lookupAnswer(kind, file, query, sources)
 			if err != nil {
 				return cache.ActionID{}, nil, fmt.Errorf("%w: %q: %v", errBadTestInputs, line, err)
 			}
@@ -2619,6 +2617,32 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, []byte
 	return sum.Sum(), lines.Bytes(), nil
 }
 
+// parsedReads counts, by op and absolute name, the stats and opens a parser
+// said it made. Each cancels one logged line of its own op and name, wherever
+// in the log the two stand: a parser may say so before the read or after it
+// succeeds.
+func parsedReads(dir string, testlog []byte) (map[string]int, error) {
+	parsed := make(map[string]int)
+	pwd := dir
+	for _, line := range bytes.Split(testlog, []byte("\n")) {
+		op, name, _ := strings.Cut(string(line), " ")
+		switch op {
+		case "chdir":
+			pwd = name
+		case "parse":
+			parseOp, file, ok := strings.Cut(name, " ")
+			if !ok || (parseOp != "stat" && parseOp != "open") {
+				return nil, fmt.Errorf("%w: %q", errBadTestInputs, line)
+			}
+			if !filepath.IsAbs(file) {
+				file = filepath.Join(pwd, file)
+			}
+			parsed[parseOp+" "+file]++
+		}
+	}
+	return parsed, nil
+}
+
 // parseLookup splits a lookup line's name into its parser kind, the file and
 // the query, which is quoted and stands between the two.
 func parseLookup(name string) (kind, file, query string, err error) {
@@ -2642,12 +2666,23 @@ func parseLookup(name string) (kind, file, query string, err error) {
 }
 
 // lookupAnswer hashes what file answers query through the parser kind
-// names, which is all a lookup takes from the file.
-func lookupAnswer(kind, file, query string) (cache.ActionID, error) {
+// names, which is all a lookup takes from the file. sources keeps the
+// certificates of each root source already read for this testlog.
+func lookupAnswer(kind, file, query string, sources map[string][]rootCert) (cache.ActionID, error) {
 	h := cache.NewHash("lookup")
 	switch kind {
 	default:
 		return cache.ActionID{}, fmt.Errorf("unknown lookup kind %q", kind)
+	case "x509file", "x509dir":
+		certs, ok := sources[kind+" "+file]
+		if !ok {
+			certs = readRootSource(kind, file)
+			sources[kind+" "+file] = certs
+		}
+		if err := answerRootQuery(h, certs, query); err != nil {
+			return cache.ActionID{}, err
+		}
+		return h.Sum(), nil
 	case "hostsname", "hostsaddr":
 		byName, byAddr, err := readHostsFile(file)
 		if err != nil {
@@ -2681,6 +2716,105 @@ func lookupAnswer(kind, file, query string) (cache.ActionID, error) {
 		}
 		return h.Sum(), nil
 	}
+}
+
+// rootCert is one certificate a root source holds, or a read of the source
+// that failed, which crypto/x509 skips.
+type rootCert struct {
+	subject []byte
+	raw     []byte
+	err     string
+}
+
+// readRootSource reads a root certificate file, or every file of a root
+// directory, as crypto/x509's system pool loader does.
+func readRootSource(kind, file string) []rootCert {
+	if kind == "x509file" {
+		data, err := os.ReadFile(file)
+		if err != nil {
+			return []rootCert{{err: err.Error()}}
+		}
+		return pemRootCerts(data)
+	}
+	entries, err := os.ReadDir(file)
+	if err != nil {
+		return []rootCert{{err: err.Error()}}
+	}
+	var certs []rootCert
+	for _, entry := range entries {
+		if entry.Type()&fs.ModeSymlink != 0 {
+			// A link to a file beside it names a root the directory already holds.
+			target, err := os.Readlink(filepath.Join(file, entry.Name()))
+			if err == nil && !strings.ContainsRune(target, filepath.Separator) {
+				continue
+			}
+		}
+		data, err := os.ReadFile(filepath.Join(file, entry.Name()))
+		if err != nil {
+			certs = append(certs, rootCert{err: entry.Name() + ": " + err.Error()})
+			continue
+		}
+		certs = append(certs, pemRootCerts(data)...)
+	}
+	return certs
+}
+
+// pemRootCerts is the certificates CertPool.AppendCertsFromPEM takes from data.
+func pemRootCerts(data []byte) []rootCert {
+	var certs []rootCert
+	for len(data) > 0 {
+		var block *pem.Block
+		block, data = pem.Decode(data)
+		if block == nil {
+			break
+		}
+		if block.Type != "CERTIFICATE" || len(block.Headers) != 0 {
+			continue
+		}
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			continue
+		}
+		certs = append(certs, rootCert{subject: cert.RawSubject, raw: cert.Raw})
+	}
+	return certs
+}
+
+// answerRootQuery writes what a root source answers query to h. "issuer X"
+// asks for the certificates whose subject is the hex-encoded X, "contains X"
+// whether one has the hex-encoded SHA-224 X, and "all" for every one.
+func answerRootQuery(h io.Writer, certs []rootCert, query string) error {
+	verb, arg, _ := strings.Cut(query, " ")
+	switch verb {
+	default:
+		return fmt.Errorf("unknown root query %q", query)
+	case "all":
+		for _, cert := range certs {
+			fmt.Fprintf(h, "cert %x err %q\n", cert.raw, cert.err)
+		}
+	case "issuer":
+		subject, err := hex.DecodeString(arg)
+		if err != nil {
+			return err
+		}
+		for _, cert := range certs {
+			if bytes.Equal(cert.subject, subject) {
+				fmt.Fprintf(h, "cert %x\n", cert.raw)
+			}
+		}
+	case "contains":
+		sum, err := hex.DecodeString(arg)
+		if err != nil {
+			return err
+		}
+		for _, cert := range certs {
+			if digest := sha256.Sum224(cert.raw); bytes.Equal(digest[:], sum) {
+				fmt.Fprintf(h, "contains\n")
+				break
+			}
+		}
+	}
+	return nil
 }
 
 // readResolvFile reads a resolv.conf as package net does, and names how its
