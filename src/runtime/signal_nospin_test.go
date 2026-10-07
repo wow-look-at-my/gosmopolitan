@@ -33,9 +33,9 @@ func TestSignalAndTraceWaitsNeverSpin(t *testing.T) {
 		funcs []string
 	}{
 		{"cpuprof.go", []string{"add", "addNonGo", "runtime_pprof_readProfile"}},
-		{"profbuf.go", []string{"read", "sleepReader", "wakeReader"}},
+		{"profbuf.go", []string{"read", "sleepReader", "wakeReader", "waitReadable"}},
 		{"pprof/pprof.go", []string{"profileWriter"}},
-		{"tracecpu.go", []string{"traceCPUSample"}},
+		{"tracecpu.go", []string{"traceCPUSample", "traceStartReadCPU", "traceStopReadCPU"}},
 		{"sigqueue.go", []string{"sigsend", "signal_recv", "signalWaitUntilIdle", "sigNotifyReceiver", "sigDeliveryDone"}},
 		{"signal_unix.go", []string{"dieFromSignal", "raisebadsignal", "crashWaitForMs"}},
 		{"trace.go", []string{"StartTrace", "traceAdvance"}},

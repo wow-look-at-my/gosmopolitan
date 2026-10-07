@@ -39,31 +39,26 @@ func traceStartReadCPU() {
 		throw("traceStartReadCPU called with trace disabled")
 	}
 	// Spin up the logger goroutine.
-	trace.cpuSleep = newWakeableSleep()
 	done := make(chan struct{}, 1)
 	go func() {
 		for traceEnabled() {
-			// Sleep here because traceReadCPU is non-blocking. This mirrors
-			// how the runtime/pprof package obtains CPU profile data.
-			//
-			// We can't do a blocking read here because Darwin can't do a
-			// wakeup from a signal handler, so all CPU profiling is just
-			// non-blocking. See #61768 for more details.
-			//
-			// Like the runtime/pprof package, even if that bug didn't exist
-			// we would still want to do a goroutine-level sleep in between
-			// reads to avoid frequent wakeups.
-			trace.cpuSleep.sleep(100_000_000)
-
 			tl := traceAcquire()
 			if !tl.ok() {
 				// Tracing disabled.
 				break
 			}
-			keepGoing := traceReadCPU(tl.gen)
+			gen := tl.gen
+			keepGoing, drained := traceReadCPU(gen)
 			traceRelease(tl)
 			if !keepGoing {
 				break
+			}
+			if drained {
+				// Sleep until the signal handlers have filled half the
+				// buffer, or overflowed it, or traceStopReadCPU closes
+				// it. traceAdvance wakes this sleep once it has read
+				// the buffer of the generation it ends.
+				trace.cpuLogRead[gen%2].waitReadable()
 			}
 		}
 		done <- struct{}{}
@@ -82,15 +77,12 @@ func traceStopReadCPU() {
 	// Once we close the profbuf, we'll be in one of two situations:
 	// - The logger goroutine has already exited because it observed
 	//   that the trace is disabled.
-	// - The logger goroutine is asleep.
-	//
-	// Wake the goroutine so it can observe that their the buffer is
-	// closed an exit.
+	// - The logger goroutine is asleep in waitReadable, which the close
+	//   wakes, so that it observes the buffer is closed and exits.
 	trace.cpuLogWrite[0].Store(nil)
 	trace.cpuLogWrite[1].Store(nil)
 	trace.cpuLogRead[0].close()
 	trace.cpuLogRead[1].close()
-	trace.cpuSleep.wake()
 
 	// Wait until the logger goroutine exits.
 	<-trace.cpuLogDone
@@ -99,12 +91,12 @@ func traceStopReadCPU() {
 	trace.cpuLogDone = nil
 	trace.cpuLogRead[0] = nil
 	trace.cpuLogRead[1] = nil
-	trace.cpuSleep.close()
 }
 
 // traceReadCPU attempts to read from the provided profBuf[gen%2] and write
-// into the trace. Returns true if there might be more to read or false
-// if the profBuf is closed or the caller should otherwise stop reading.
+// into the trace. keepGoing is true if there might be more to read, and
+// false if the profBuf is closed or the caller should otherwise stop
+// reading. drained is true if the read found no data.
 //
 // The caller is responsible for ensuring that gen does not change. Either
 // the caller must be in a traceAcquire/traceRelease block, or must be calling
@@ -115,10 +107,11 @@ func traceStopReadCPU() {
 //
 // Must not run on the system stack because profBuf.read performs race
 // operations.
-func traceReadCPU(gen uintptr) bool {
+func traceReadCPU(gen uintptr) (keepGoing, drained bool) {
 	var pcBuf [tracev2.MaxFramesPerStack]uintptr
 
 	data, tags, eof := trace.cpuLogRead[gen%2].read(profBufNonBlocking)
+	drained = len(data) == 0
 	for len(data) > 0 {
 		if len(data) < 4 || data[0] > uint64(len(data)) {
 			break // truncated profile
@@ -190,7 +183,7 @@ func traceReadCPU(gen uintptr) bool {
 
 		trace.cpuBuf[gen%2] = w.traceBuf
 	}
-	return !eof
+	return !eof, drained
 }
 
 // traceCPUFlush flushes trace.cpuBuf[gen%2]. The caller must be certain that gen

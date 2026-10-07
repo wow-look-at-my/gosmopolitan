@@ -249,7 +249,6 @@ var trace struct {
 	cpuLogRead  [2]*profBuf
 	signalLock  atomic.Uint32              // protects use of the following member, only usable in signal handlers
 	cpuLogWrite [2]atomic.Pointer[profBuf] // copy of cpuLogRead for use in signal handlers, set without signalLock
-	cpuSleep    *wakeableSleep
 	cpuLogDone  <-chan struct{}
 	cpuBuf      [2]*traceBuf
 
@@ -773,8 +772,12 @@ func traceAdvance(stopTrace bool) {
 	}
 	statusWriter.flush().end()
 
-	// Read everything out of the last gen's CPU profile buffer.
+	// Read everything out of the last gen's CPU profile buffer. Then wake
+	// the CPU logger if it sleeps on that buffer, to move on to the new
+	// generation's; a logger about to sleep there finds the extra flag set
+	// and does not.
 	traceReadCPU(gen)
+	trace.cpuLogRead[gen%2].wakeupExtra()
 
 	// Flush CPU samples, stacks, and strings for the last generation. This is safe,
 	// because we're now certain no M is writing to the last generation.

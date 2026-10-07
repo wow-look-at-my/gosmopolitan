@@ -449,6 +449,22 @@ func (b *profBuf) wakeupExtra() {
 	}
 }
 
+// waitReadable blocks the reader, whose last read returned no data, until
+// the writers fill half the buffer, or a pending overflow, eof or the extra
+// flag is published (wakeupExtra). It reads no reader-owned state, so it may
+// run while another goroutine reads b without blocking. It returns at once
+// if b already holds any of those.
+func (b *profBuf) waitReadable() {
+	for {
+		bw := b.w.load()
+		unread := countSub(bw.dataCount(), b.r.load().dataCount())
+		if unread != 0 || bw&profWriteExtra != 0 || b.hasOverflow() || b.eof.Load() > 0 {
+			return
+		}
+		b.sleepReader(bw)
+	}
+}
+
 // wakeReader wakes the reader that set profReaderSleeping. The caller has
 // cleared the flag, so it is the one writer to wake this sleep. It may run
 // in a signal handler, on a thread with no g.
