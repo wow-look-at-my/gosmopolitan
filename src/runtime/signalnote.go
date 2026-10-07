@@ -13,10 +13,10 @@ package runtime
 // The sleeping half differs per OS, because it must be woken by a call
 // that is async-signal-safe and needs no g: a handler for a signal that
 // lands on a thread Go did not create has none. The signalNote type and its
-// reset, post and await methods are declared per OS. Most systems sleep on
-// the waiting M's semaphore. Darwin's semaphore takes a pthread mutex, so
-// Darwin sleeps on a ulock, and cosmo, whose arm64 semaphore does the same
-// on XNU, on a futex word.
+// reset, post, await and awaitFor methods are declared per OS. Most systems
+// sleep on the waiting M's semaphore. Darwin's semaphore takes a pthread
+// mutex, so Darwin sleeps on a ulock, and cosmo, whose arm64 semaphore does
+// the same on XNU, on a futex word, as GOWASM=threads does.
 
 // arm prepares n for one wakeup.
 //
@@ -31,6 +31,15 @@ func (n *signalNote) arm() {
 //go:systemstack
 func (n *signalNote) sleep() {
 	n.await()
+}
+
+// sleepFor sleeps until a wake posts the armed n or ns nanoseconds pass,
+// and reports whether a wake posted it. After a timeout the waiter calls
+// disarm, which takes a wakeup that raced with the timeout.
+//
+//go:systemstack
+func (n *signalNote) sleepFor(ns int64) bool {
+	return n.awaitFor(ns)
 }
 
 // disarm withdraws an armed n whose waiter no longer needs to sleep. If a

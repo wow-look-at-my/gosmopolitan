@@ -112,7 +112,7 @@ func TestWaitsNeverSpin(t *testing.T) {
 		{"coro.go", []string{"coroswitch_m"}},
 		{"waitaddr.go", nil},
 		{"signalnote.go", nil},
-		{"signalnote_cosmo.go", nil},
+		{"signalnote_futex.go", nil},
 		{"signalnote_darwin.go", nil},
 		{"signalnote_sema.go", nil},
 		{"signalnote_wasm.go", nil},

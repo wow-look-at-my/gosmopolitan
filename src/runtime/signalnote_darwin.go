@@ -8,14 +8,6 @@ import (
 	"unsafe"
 )
 
-// Operation codes and flags of __ulock_wait and __ulock_wake, from XNU's
-// bsd/sys/ulock.h.
-const (
-	_UL_COMPARE_AND_WAIT = 1
-	_ULF_WAKE_ALL        = 0x00000100
-	_ULF_NO_ERRNO        = 0x01000000
-)
-
 // signalNote sleeps in __ulock_wait on word until a wake stores 1 there and
 // calls __ulock_wake, a system call a signal handler may make. Darwin's
 // semawakeup takes a pthread mutex, which a handler must not.
@@ -40,4 +32,16 @@ func (n *signalNote) await() {
 		// EINTR; the word decides.
 		ulock_wait(_UL_COMPARE_AND_WAIT|_ULF_NO_ERRNO, unsafe.Pointer(&n.word), 0, 0)
 	}
+}
+
+func (n *signalNote) awaitFor(ns int64) bool {
+	deadline := nanotime() + ns
+	for n.word.Load() == 0 {
+		left := deadline - nanotime()
+		if left <= 0 {
+			return false
+		}
+		ulock_wait(_UL_COMPARE_AND_WAIT|_ULF_NO_ERRNO, unsafe.Pointer(&n.word), 0, xnuUlockTimeout(left))
+	}
+	return true
 }

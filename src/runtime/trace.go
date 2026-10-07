@@ -293,13 +293,13 @@ var trace struct {
 
 	// exitingWait is where StartTrace sleeps until exitingSyscall drains.
 	// traceExitedSyscall wakes it.
-	exitingWait traceWait
+	exitingWait signalNote
 
 	// flushWait is where traceAdvance sleeps until an M it must flush
 	// leaves its write critical section. The M wakes it when it clears its
 	// write flag (traceWriterDone), which traceCPUSample does from a
-	// signal handler, so it is signal-safe.
-	flushWait traceWait
+	// signal handler.
+	flushWait signalNote
 
 	// cpuLostContended counts the CPU samples traceCPUSample dropped
 	// because another handler held signalLock.
@@ -340,16 +340,6 @@ func StartTrace() error {
 	// Hold traceAdvanceSema across trace start, since we'll want it on
 	// the other side of tracing being enabled globally.
 	semacquire(&traceAdvanceSema)
-
-	// traceCPUSample wakes flushWait from a signal handler, where notes
-	// are not async-signal-safe on some hosts.
-	if sigSafeEventNeeded() && !trace.flushWait.useEvent {
-		if !trace.flushWait.event.init() {
-			semrelease(&traceAdvanceSema)
-			return errorString("cannot create the kqueue tracing waits on")
-		}
-		trace.flushWait.useEvent = true
-	}
 
 	// Initialize CPU profile -> trace ingestion.
 	traceInitReadCPU()
@@ -441,14 +431,16 @@ func StartTrace() error {
 	// The critical section on each goroutine here is going to be quite short, so the likelihood
 	// that we observe a zero value is high. When it is not zero, sleep until the goroutine
 	// that brings it to zero wakes us (traceExitedSyscall).
-	for {
-		trace.exitingWait.prepare()
-		if trace.exitingSyscall.Load() == 0 {
-			trace.exitingWait.cancel()
-			break
+	systemstack(func() {
+		for {
+			trace.exitingWait.arm()
+			if trace.exitingSyscall.Load() == 0 {
+				trace.exitingWait.disarm()
+				return
+			}
+			trace.exitingWait.sleep()
 		}
-		trace.exitingWait.sleep()
-	}
+	})
 
 	// Record some initial pieces of information.
 	//
@@ -711,7 +703,7 @@ func traceAdvance(stopTrace bool) {
 			// Announce the wait before looking at any write flag: an M that
 			// clears its flag after this pass saw it set then finds the
 			// announcement and wakes us.
-			trace.flushWait.prepare()
+			trace.flushWait.arm()
 			prev := &mToFlush
 			for mp := *prev; mp != nil; {
 				if mp.trace.writing.Load() {
@@ -743,7 +735,7 @@ func traceAdvance(stopTrace bool) {
 			if mToFlush != nil {
 				trace.flushWait.sleep()
 			} else {
-				trace.flushWait.cancel()
+				trace.flushWait.disarm()
 			}
 
 			if debugDeadlock {
@@ -1257,68 +1249,4 @@ func (s *wakeableSleep) close() {
 	}
 	unlock(&s.lock)
 	return
-}
-
-// traceWait lets the tracer sleep until other Ms change a condition it
-// waits for, and lets those Ms wake it. One waiter uses it at a time. The
-// waiter calls prepare, then checks the condition, then calls sleep if the
-// condition does not hold or cancel if it does, and checks again after
-// sleep returns. An M that changes the condition calls release. Because
-// prepare is published before the check, a release that comes after the
-// check finds waiting set and wakes the sleep; at most one release wins
-// each round.
-//
-// The sleep blocks the waiting M in the OS: on note, or, when useEvent is
-// set, on event, which a signal handler can wake on hosts where notes
-// cannot be woken from one (sigSafeEventNeeded).
-type traceWait struct {
-	waiting  atomic.Uint32
-	note     note
-	useEvent bool
-	event    sigSafeEvent
-}
-
-// prepare announces that the waiter is about to check its condition.
-func (w *traceWait) prepare() {
-	if !w.useEvent {
-		noteclear(&w.note)
-	}
-	w.waiting.Store(1)
-}
-
-// sleep blocks until a release after the last prepare.
-func (w *traceWait) sleep() {
-	systemstack(func() {
-		if w.useEvent {
-			w.event.sleep(-1)
-			return
-		}
-		notesleep(&w.note)
-	})
-}
-
-// cancel withdraws the announcement after the condition was found to
-// hold. A release that already claimed the wakeup is consumed, so the
-// next prepare starts clean.
-func (w *traceWait) cancel() {
-	if !w.waiting.CompareAndSwap(1, 0) {
-		w.sleep()
-	}
-}
-
-// release wakes the waiter, if one has announced itself. It may run in a
-// signal handler, and on the syscall path where the stack cannot grow.
-//
-//go:nosplit
-func (w *traceWait) release() {
-	if w.waiting.Load() == 0 || !w.waiting.CompareAndSwap(1, 0) {
-		return
-	}
-	systemstack(func() {
-		if w.useEvent {
-			w.event.wake()
-			return
-		}
-		notewakeup(&w.note)
-	})
 }

@@ -274,7 +274,12 @@ func traceRelease(tl traceLocker) {
 //go:nosplit
 func traceWriterDone(mp *m) {
 	mp.trace.writing.Store(false)
-	trace.flushWait.release()
+	if trace.flushWait.waiting.Load() == 0 {
+		return
+	}
+	systemstack(func() {
+		trace.flushWait.wake()
+	})
 }
 
 // traceExitingSyscall marks a goroutine as exiting the syscall slow path.
@@ -288,7 +293,7 @@ func traceExitingSyscall() {
 // path. The last one out wakes StartTrace if it waits for them.
 func traceExitedSyscall() {
 	if trace.exitingSyscall.Add(-1) == 0 {
-		trace.exitingWait.release()
+		trace.exitingWait.wake()
 	}
 }
 

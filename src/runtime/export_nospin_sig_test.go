@@ -23,41 +23,43 @@ func CPUProfileAddContended() uint32 {
 	return dropped
 }
 
-// TraceWaitRounds runs rounds of the traceWait protocol between a waiter
-// and a releasing goroutine. In each round the releaser sets the
-// condition and releases, at whatever point the waiter has reached. The
-// waiter sleeps whenever it finds the condition unset, so it returns only
-// if no release is lost. The waiter blocks its M with its P, so the
-// releaser needs a second P. On hosts that need a sigSafeEvent, signal
-// selects the event the trace flush sleeps on there instead of the note.
-func TraceWaitRounds(rounds int, signal bool) {
-	wait := new(traceWait)
-	if signal && sigSafeEventNeeded() {
-		if !wait.event.init() {
-			panic("sigSafeEvent.init failed")
-		}
-		wait.useEvent = true
-	}
+// SignalNoteRounds runs rounds of the signalNote protocol between a waiter
+// and a waking goroutine. In each round the waker sets the condition and
+// wakes, at whatever point the waiter has reached. The waiter sleeps
+// whenever it finds the condition unset, so it returns only if no wakeup
+// is lost. The waiter blocks its M with its P, so the waker needs a second
+// P. With timeout > 0 the waiter sleeps with sleepFor and that timeout,
+// and disarms after each timeout, as the crash relay does.
+func SignalNoteRounds(rounds int, timeout int64) {
+	note := new(signalNote)
 	cond := new(atomic.Uint32)
 	next := make(chan uint32)
 	finished := make(chan struct{})
 	go func() {
 		for round := range next {
 			cond.Store(round)
-			wait.release()
+			note.wake()
 		}
 		close(finished)
 	}()
 	for round := uint32(1); round <= uint32(rounds); round++ {
 		next <- round
-		for {
-			wait.prepare()
-			if cond.Load() == round {
-				wait.cancel()
-				break
+		systemstack(func() {
+			for {
+				note.arm()
+				if cond.Load() == round {
+					note.disarm()
+					return
+				}
+				if timeout <= 0 {
+					note.sleep()
+					continue
+				}
+				if !note.sleepFor(timeout) {
+					note.disarm()
+				}
 			}
-			wait.sleep()
-		}
+		})
 	}
 	close(next)
 	<-finished

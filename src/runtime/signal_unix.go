@@ -620,46 +620,22 @@ func adjustSignalStack2(sig uint32, sp uintptr, mp *m, ssDisable bool) {
 // GOTRACEBACK=crash when a signal is received.
 var crashing atomic.Int32
 
-// crashGen counts the increments of crashing. The crash thread sleeps
-// until another M's increment wakes it (crashWake). Those Ms run in signal
-// handlers, so the sleep is one a handler can end: crashEvent on hosts
-// whose notes are not async-signal-safe (sigSafeEventNeeded), once
-// crashEventReady says the crash thread created it, and otherwise the
-// port's crashSleep.
-var (
-	crashGen        uint32
-	crashEvent      sigSafeEvent
-	crashEventReady atomic.Uint32
-)
-
-// crashWaitInit prepares the crash thread's sleep. It runs in the crash
-// thread's signal handler, before SIGQUIT is relayed to the other Ms.
-func crashWaitInit() {
-	crashSleepInit()
-	if sigSafeEventNeeded() && crashEvent.init() {
-		crashEventReady.Store(1)
-	}
-}
-
-// crashWake records an increment of crashing and wakes the crash thread.
-func crashWake() {
-	atomic.Xadd(&crashGen, 1)
-	if crashEventReady.Load() != 0 {
-		crashEvent.wake()
-		return
-	}
-	crashWakeSleeper()
-}
+// crashNote is where the crash thread sleeps while it waits for the other
+// Ms to take SIGQUIT. Each of them wakes it from its signal handler after
+// it increments crashing.
+var crashNote signalNote
 
 // crashWaitForMs blocks the crash thread until every M has taken SIGQUIT,
-// or until no M has taken it for timeout nanoseconds.
+// or until no M has taken it for timeout nanoseconds. It runs in the crash
+// thread's signal handler.
 func crashWaitForMs(timeout int64) {
 	deadline := nanotime() + timeout
 	maxCrashing := crashing.Load()
 	for {
-		gen := atomic.Load(&crashGen)
+		crashNote.arm()
 		count := crashing.Load()
 		if count >= mcount()-int32(extraMLength.Load()) {
+			crashNote.disarm()
 			return
 		}
 		now := nanotime()
@@ -669,13 +645,12 @@ func crashWaitForMs(timeout int64) {
 			deadline = now + timeout
 		}
 		if now >= deadline {
+			crashNote.disarm()
 			return
 		}
-		if crashEventReady.Load() != 0 {
-			crashEvent.sleep(deadline - now)
-			continue
+		if !crashNote.sleepFor(deadline - now) {
+			crashNote.disarm()
 		}
-		crashSleep(gen, deadline-now)
 	}
 }
 
@@ -854,10 +829,9 @@ func sighandler(sig uint32, info *siginfo, ctxt unsafe.Pointer, gp *g) {
 		isCrashThread := false
 		if crashing.CompareAndSwap(0, 1) {
 			isCrashThread = true
-			crashWaitInit()
 		} else {
 			crashing.Add(1)
-			crashWake()
+			crashNote.wake()
 		}
 		if crashing.Load() < mcount()-int32(extraMLength.Load()) {
 			// There are other m's that need to dump their stacks.
