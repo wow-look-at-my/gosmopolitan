@@ -2531,12 +2531,20 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, []byte
 			if isRunScratch(name) || isBuildCache(name) {
 				break
 			}
+			if rel, ok := inModCache(name); ok {
+				fmt.Fprintf(h, "stat $GOMODCACHE/%s modcache\n", rel)
+				break
+			}
 			fmt.Fprintf(h, "stat %s %x\n", name, hashStat(name))
 		case "open":
 			if !filepath.IsAbs(name) {
 				name = filepath.Join(pwd, name)
 			}
 			if isRunScratch(name) || isBuildCache(name) {
+				break
+			}
+			if rel, ok := inModCache(name); ok {
+				fmt.Fprintf(h, "open $GOMODCACHE/%s modcache\n", rel)
 				break
 			}
 			fh, err := hashOpen(name)
@@ -2716,6 +2724,23 @@ func isBuildCache(name string) bool {
 		return false
 	}
 	return search.InDir(name, dir) != ""
+}
+
+// inModCache reports where name sits in the module cache, as a slash path
+// relative to GOMODCACHE. A module cache is keyed by its names. The files of
+// a module version are fixed by the checksum database the moment the version
+// is downloaded, and the name carries the version. Whether a version is there
+// yet says only what ran here before: a test that downloads its own vectors
+// finds none before its first run on a fresh checkout.
+func inModCache(name string) (string, bool) {
+	if cfg.GOMODCACHE == "" {
+		return "", false
+	}
+	rel := search.InDir(name, cfg.GOMODCACHE)
+	if rel == "" {
+		return "", false
+	}
+	return filepath.ToSlash(rel), true
 }
 
 func hashGetenv(name string) cache.ActionID {

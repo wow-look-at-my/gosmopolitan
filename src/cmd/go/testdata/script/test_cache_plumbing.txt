@@ -17,6 +17,16 @@ env SOME_INPUT=changed
 go test -run=TestReadsPlumbing .
 stdout '^ok\s+m\s+[0-9.]+s$'
 
+# A module cache path is keyed by its name, which carries the version. A
+# version missing on one run and downloaded by the next changes nothing.
+env GOMODCACHE=$WORK/modcache
+go test -run=TestReadsModCache .
+stdout '^ok\s+m\s+[0-9.]+s$'
+mkdir $WORK/modcache/example.com/vectors@v1.0.0
+cp marker.txt $WORK/modcache/example.com/vectors@v1.0.0/vectors.json
+go test -run=TestReadsModCache .
+stdout '^ok\s+m\s+\(cached\)$'
+
 -- go.mod --
 module m
 
@@ -41,4 +51,10 @@ func TestReadsPlumbing(t *testing.T) {
 		t.Fatal(err)
 	}
 	os.Stat(filepath.Join(dir, "marker.txt"))
+}
+
+func TestReadsModCache(t *testing.T) {
+	dir := filepath.Join(os.Getenv("GOMODCACHE"), "example.com", "vectors@v1.0.0")
+	os.Stat(dir)
+	os.ReadFile(filepath.Join(dir, "vectors.json"))
 }
