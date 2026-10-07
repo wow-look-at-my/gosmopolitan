@@ -36,7 +36,7 @@ func openCache(dir string) (Cache, error) {
 	// one exits through base.Exit without returning.
 	base.AtExit(func() {
 		cacheclient.CloseStore()
-		cacheclient.StopBroker()
+		cacheclient.Exit()
 	})
 	return cache, nil
 }
