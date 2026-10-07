@@ -26,12 +26,15 @@ func TestSignalAndTraceWaitsNeverSpin(t *testing.T) {
 		"Gosched":      true,
 		"sched_yield":  true,
 		"timeSleep":    true,
+		"Sleep":        true,
 	}
 	sources := []struct {
 		path  string
 		funcs []string
 	}{
 		{"cpuprof.go", []string{"add", "addNonGo", "runtime_pprof_readProfile"}},
+		{"profbuf.go", []string{"read", "sleepReader", "wakeReader"}},
+		{"pprof/pprof.go", []string{"profileWriter"}},
 		{"tracecpu.go", []string{"traceCPUSample"}},
 		{"sigqueue.go", []string{"sigsend", "signal_recv", "signalWaitUntilIdle", "sigNotifyReceiver", "sigDeliveryDone"}},
 		{"signal_unix.go", []string{"dieFromSignal", "raisebadsignal", "crashWaitForMs"}},
@@ -63,8 +66,15 @@ func TestSignalAndTraceWaitsNeverSpin(t *testing.T) {
 				if !ok {
 					return true
 				}
-				if ident, ok := call.Fun.(*ast.Ident); ok && spinCalls[ident.Name] {
-					t.Errorf("%s: %s calls %s", fset.Position(call.Pos()), fn.Name.Name, ident.Name)
+				name := ""
+				switch fun := call.Fun.(type) {
+				case *ast.Ident:
+					name = fun.Name
+				case *ast.SelectorExpr:
+					name = fun.Sel.Name
+				}
+				if spinCalls[name] {
+					t.Errorf("%s: %s calls %s", fset.Position(call.Pos()), fn.Name.Name, name)
 				}
 				return true
 			})
