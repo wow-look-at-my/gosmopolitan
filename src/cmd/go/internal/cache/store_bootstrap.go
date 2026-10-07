@@ -14,3 +14,9 @@ func openCache(dir string) (Cache, error) { return cachedisk.Open(dir) }
 
 // SetSharedModule has no store to name a module to.
 func SetSharedModule(string) {}
+
+// MissNotices is false: go_bootstrap builds the toolchain and runs no tests.
+func MissNotices() bool { return false }
+
+// MissNotice has no notice file to write to.
+func MissNotice(string, ...any) {}
