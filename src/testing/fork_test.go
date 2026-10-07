@@ -494,8 +494,8 @@ func TestTakeForkLogRefusesALogItCannotRead(t *T) {
 }
 
 // TestWriteTestLogReplacesTheFileWhole: a child that ran with the same
-// -test.testlogfile left a longer log there. The run's own log replaces all
-// of it rather than writing over its start.
+// -test.testlogfile left a longer log there, and the run's own log replaces
+// all of it rather than writing over its start.
 func TestWriteTestLogReplacesTheFileWhole(t *T) {
 	file := filepath.Join(t.TempDir(), "testlog.txt")
 	child := "# test log\nopen /a/much/longer/path/than/the/run/reads\nopen /another\n"
