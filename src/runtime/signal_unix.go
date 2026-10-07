@@ -369,15 +369,24 @@ const preemptMSupported = true
 // safe-point, it will preempt the goroutine. It always atomically
 // increments mp.preemptGen after handling a preemption request.
 func preemptM(mp *m) {
-	// On Darwin, don't try to preempt threads during exec.
-	// Issue #41702.
-	if hostIsDarwin() {
-		execLock.rlock()
-	}
-
 	if mp.signalPending.CompareAndSwap(0, 1) {
+		// On Darwin, don't try to preempt threads during exec.
+		// Issue #41702. The signal is counted before execPreemptOff is
+		// read, and syscall_runtime_BeforeExec sets execPreemptOff
+		// before it reads the count, so either the exec waits for this
+		// signal or this M sees the exec and sends none. A request it
+		// drops counts as handled, so suspendG resends it.
 		if hostIsDarwin() {
 			pendingPreemptSignals.Add(1)
+			if execPreemptOff.Load() != 0 {
+				// An exiting mp may have counted the signal out
+				// already; whoever clears signalPending does.
+				if mp.signalPending.CompareAndSwap(1, 0) {
+					preemptSignalDone()
+				}
+				mp.preemptGen.Add(1)
+				return
+			}
 		}
 
 		// If multiple threads are preempting the same M, it may send many
@@ -386,10 +395,6 @@ func preemptM(mp *m) {
 		// issue #37741.
 		// Only send a signal if there isn't already one pending.
 		signalM(mp, sigPreempt)
-	}
-
-	if hostIsDarwin() {
-		execLock.runlock()
 	}
 }
 

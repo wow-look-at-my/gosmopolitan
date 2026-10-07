@@ -2601,7 +2601,7 @@ found:
 	if hostIsDarwin() {
 		// Make sure pendingPreemptSignals is correct when an M exits.
 		// For #41702.
-		if mp.signalPending.Load() != 0 {
+		if mp.signalPending.Swap(0) != 0 {
 			preemptSignalDone()
 		}
 	}
@@ -6165,6 +6165,11 @@ var pendingPreemptSignals atomic.Int32
 // pendingPreemptSignals reaches zero.
 var execPreemptWait signalNote
 
+// execPreemptOff is 1 from syscall_runtime_BeforeExec to
+// syscall_runtime_AfterExec. preemptM sends no preemption signal while it
+// is set. Only Darwin hosts read it.
+var execPreemptOff atomic.Uint32
+
 // preemptSignalDone counts one preemption signal as received, and wakes
 // syscall_runtime_BeforeExec when none is left in flight. Signal handlers
 // call it.
@@ -6194,10 +6199,16 @@ func syscall_runtime_BeforeExec() {
 	// execs past them, and the new image dies with SIGILL under load.
 	// syscall's TestExec is what showed it.
 	//
-	// execLock keeps preemptM from sending more, so only the signals in
-	// flight remain, and the handler that takes the last one wakes this
-	// M.
-	if hostIsDarwin() && pendingPreemptSignals.Load() > 0 {
+	// execPreemptOff keeps preemptM from sending more, so only the
+	// signals in flight remain, and the handler that takes the last one
+	// wakes this M. preemptM does not take execLock: it runs under
+	// sched.lock, and syscall.Exec makes system calls while it holds
+	// execLock, whose exitsyscall can need sched.lock.
+	if !hostIsDarwin() {
+		return
+	}
+	execPreemptOff.Store(1)
+	if pendingPreemptSignals.Load() > 0 {
 		systemstack(func() {
 			for pendingPreemptSignals.Load() > 0 {
 				execPreemptWait.arm()
@@ -6215,6 +6226,7 @@ func syscall_runtime_BeforeExec() {
 //
 //go:linkname syscall_runtime_AfterExec syscall.runtime_AfterExec
 func syscall_runtime_AfterExec() {
+	execPreemptOff.Store(0)
 	execLock.unlock()
 }
 
