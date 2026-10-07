@@ -692,6 +692,7 @@ type m struct {
 	lockedExt         uint32      // tracking for external LockOSThread
 	lockedInt         uint32      // tracking for internal lockOSThread
 	mWaitList         mWaitList   // list of runtime lock waiters
+	sweepWait         sweepWaiter // entry on sweep.spanWaiters while in ensureSwept
 	ditEnabled        bool        // set if DIT is currently enabled on this M
 
 	mLockProfile mLockProfile // fields relating to runtime.lock contention
@@ -902,7 +903,9 @@ type p struct {
 	runSafePointFn uint32 // if 1, run sched.safePointFn at next safe point
 
 	// statsSeq is a counter indicating whether this P is currently
-	// writing any stats. Its value is even when not, odd when it is.
+	// writing any stats, with a bit a waiting reader sets. Its
+	// statsSeqWriting bit is set while it is writing; see
+	// statsSeqReaderWaiting in mstats.go.
 	statsSeq atomic.Uint32
 
 	// Timer heap.
