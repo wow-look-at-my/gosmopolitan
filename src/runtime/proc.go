@@ -745,6 +745,23 @@ func wasmWorkPending(pp *p) bool {
 // timers, letting wasmWorkPending treat those as not-pending.
 var wasmParkedWorkers atomic.Int32
 
+// wasmKickedWorkers counts the parked Ms (GOWASM=threads) that found a
+// timer due with every P busy, kicked the owners, and sleep until a P runs
+// timers: worker Ms in wasmWorkerParkNote and the main M in
+// wasmMainParkArmBackstop. A Go atomic is sequentially consistent, and
+// such an M counts itself before it reads the earliest deadline, so either
+// it reads the deadline the timers left or wasmTimersRan wakes it.
+var wasmKickedWorkers atomic.Int32
+
+// wasmTimersRan wakes the Ms counted in wasmKickedWorkers after this M ran
+// timers, so that they read the next deadline.
+func wasmTimersRan() {
+	if goarch.IsWasm == 1 && wasmThreadsEnabled && wasmKickedWorkers.Load() != 0 {
+		wasmSchedNudgeWake()
+		wasmWakeMainThread()
+	}
+}
+
 // wasmArmLoopPreempt arms the loop preemption checks of the goroutine
 // currently running on this M, if any. It is called when work appears that
 // an already-running goroutine could not otherwise observe: a goroutine is
@@ -4184,7 +4201,10 @@ top:
 	// which may steal timers. It's important that between now
 	// and then, nothing blocks, so these numbers remain mostly
 	// relevant.
-	now, pollUntil, _ := pp.timers.check(0, nil)
+	now, pollUntil, ranTimers := pp.timers.check(0, nil)
+	if ranTimers {
+		wasmTimersRan()
+	}
 
 	// stealAt, if not 0, is when a runnext G that was left to its own P
 	// may be stolen.
@@ -4714,6 +4734,7 @@ func stealWork(now int64) (gp *g, inheritTime bool, rnow, pollUntil, stealAt int
 					pollUntil = w
 				}
 				if ran {
+					wasmTimersRan()
 					// Running the timers may have
 					// made an arbitrary number of G's
 					// ready and added them to this P's
@@ -4901,6 +4922,9 @@ func wakeNetPoller(when int64) {
 		// the cost is at most one main-thread resume per batch of
 		// earliest-deadline changes.
 		wasmWakeMainThread()
+		// The parked worker Ms sleep until the earliest deadline they read,
+		// and a worker in beforeIdle until its P's; both read it again.
+		wasmSchedNudgeWake()
 	}
 	if sched.lastpoll.Load() == 0 {
 		// In findRunnable we ensure that when polling the pollUntil
@@ -7482,11 +7506,10 @@ func checkdead() {
 		// counts can transiently cover every M although wakes are in
 		// flight (observed: mput's checkdead on the last parking M threw
 		// while the main M was awake mid-wake-path with two globrunq gs
-		// whose wake nudge was pending). Progress is guaranteed without
-		// this checkdead: parked workers' watchdog parks re-examine the
-		// run queues at most 250ms out (wasmWorkerParkNote) and a host
-		// resume re-enters the scheduler (wasmMainParkWake); nudge both
-		// so the pickup is immediate rather than a watchdog tick away.
+		// whose wake nudge was pending). The nudge below wakes the parked
+		// workers, which take an idle P for queued work
+		// (wasmWorkerParkNote), and the main M, whose resume re-enters
+		// the scheduler (wasmMainParkWake).
 		// Real deadlocks (no runnable goroutines anywhere) still fall
 		// through to the checks below, and are reported once the host's
 		// exit-time deadlock probe fires (eventLoopCanWake).

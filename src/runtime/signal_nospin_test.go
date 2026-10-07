@@ -38,6 +38,7 @@ func TestSignalAndTraceWaitsNeverSpin(t *testing.T) {
 		{"trace.go", []string{"StartTrace", "traceAdvance"}},
 		{"traceruntime.go", []string{"traceRelease", "traceWriterDone", "traceExitedSyscall"}},
 		{"lock_wasip1.go", []string{"notewakeup", "notetsleepg"}},
+		{"lock_jsthreads.go", []string{"wasmWorkerParkNote", "wasmWorkerUnpark", "beforeIdle", "wasmMainParkArmBackstop"}},
 		{"netpoll_wasip1.go", []string{"netpoll"}},
 	}
 	fset := token.NewFileSet()
