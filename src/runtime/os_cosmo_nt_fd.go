@@ -69,18 +69,31 @@ var (
 )
 
 // ntFilePos serializes one slot's Win32 file pointer, which is per HANDLE.
-var ntFilePos [ntFDMax]uint32
+var ntFilePos [ntFDMax]ntFilePosMutex
+
+// ntFilePosMutex is a goroutine mutex. held counts the holder and its
+// waiters. A waiter parks on sema, and the unlocker hands the lock to one.
+type ntFilePosMutex struct {
+	held uint32
+	sema uint32
+}
 
 // ntFilePosLock takes slot fd's file-pointer lock.
 func ntFilePosLock(fd int32) {
-	for !atomic.Cas(&ntFilePos[fd], 0, 1) {
-		Gosched()
+	mu := &ntFilePos[fd]
+	if atomic.Xadd(&mu.held, 1) == 1 {
+		return
 	}
+	semacquire(&mu.sema)
 }
 
 // ntFilePosUnlock releases it.
 func ntFilePosUnlock(fd int32) {
-	atomic.Store(&ntFilePos[fd], 0)
+	mu := &ntFilePos[fd]
+	if atomic.Xadd(&mu.held, -1) == 0 {
+		return
+	}
+	semrelease(&mu.sema)
 }
 
 // ntFDAlloc claims the lowest free slot (unix semantics) for the given handle
