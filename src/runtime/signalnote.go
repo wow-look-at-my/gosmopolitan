@@ -16,7 +16,8 @@ package runtime
 // reset, post and await methods are declared per OS. Most systems sleep on
 // the waiting M's semaphore. Darwin's semaphore takes a pthread mutex, so
 // Darwin sleeps on a ulock, and cosmo, whose arm64 semaphore does the same
-// on XNU, on a futex word.
+// on XNU, on a futex word. Linux sleeps on a futex word as well, so a wake
+// fits in the nosplit stack a profiling signal leaves.
 
 // arm prepares n for one wakeup.
 //
