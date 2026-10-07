@@ -5,6 +5,7 @@
 package runtime
 
 import (
+	"internal/goarch"
 	"internal/runtime/atomic"
 	"unsafe"
 )
@@ -103,7 +104,13 @@ type profBuf struct {
 	// owned by reader
 	rNext       profIndex
 	overflowBuf []uint64 // for use by reader to return overflow record
-	wait        note
+
+	// The blocked reader sleeps on readerWake, which a signal handler can
+	// wake, on every port with signals; on wasm, which has none, it parks
+	// its goroutine on wait. The writer that clears profReaderSleeping
+	// wakes it.
+	readerWake signalNote
+	wait       note
 }
 
 // A profAtomic is the atomically-accessed word holding a profIndex.
@@ -404,7 +411,7 @@ func (b *profBuf) write(tagPtr *unsafe.Pointer, now int64, hdr []uint64, stk []u
 		if unread >= wakeupThreshold && old&profReaderSleeping != 0 {
 			// NB: if we reach this point, then the sleeping bit is
 			// cleared in the new b.w value
-			notewakeup(&b.wait)
+			b.wakeReader()
 		}
 		break
 	}
@@ -436,10 +443,49 @@ func (b *profBuf) wakeupExtra() {
 			continue
 		}
 		if old&profReaderSleeping != 0 {
-			notewakeup(&b.wait)
+			b.wakeReader()
 		}
 		break
 	}
+}
+
+// wakeReader wakes the reader that set profReaderSleeping. The caller has
+// cleared the flag, so it is the one writer to wake this sleep. It may run
+// in a signal handler, on a thread with no g.
+//
+//go:nosplit
+func (b *profBuf) wakeReader() {
+	if goarch.IsWasm == 1 {
+		notewakeup(&b.wait)
+		return
+	}
+	b.readerWake.wake()
+}
+
+// sleepReader sets profReaderSleeping in b.w if b.w still holds bw, and if
+// it did, sleeps until the writer that clears the flag wakes the reader.
+// readerWake is armed before the flag is published, so that writer always
+// finds it armed. The goroutine stays on its M from the arming to the
+// sleep because it is in a system call throughout, with its P handed off.
+func (b *profBuf) sleepReader(bw profIndex) {
+	if goarch.IsWasm == 1 {
+		if !b.w.cas(bw, bw|profReaderSleeping) {
+			return
+		}
+		notetsleepg(&b.wait, -1)
+		noteclear(&b.wait)
+		return
+	}
+	entersyscallblock()
+	systemstack(func() {
+		b.readerWake.arm()
+		if !b.w.cas(bw, bw|profReaderSleeping) {
+			b.readerWake.disarm()
+			return
+		}
+		b.readerWake.sleep()
+	})
+	exitsyscall()
 }
 
 // profBufReadMode specifies whether to block when no data is available to read.
@@ -513,15 +559,9 @@ Read:
 		// Nothing to read right now.
 		// Return or sleep according to mode.
 		if mode == profBufNonBlocking {
-			// Necessary on Darwin, notetsleepg below does not work in signal handler, root cause of #61768.
 			return nil, nil, false
 		}
-		if !b.w.cas(bw, bw|profReaderSleeping) {
-			goto Read
-		}
-		// Committed to sleeping.
-		notetsleepg(&b.wait, -1)
-		noteclear(&b.wait)
+		b.sleepReader(bw)
 		goto Read
 	}
 	data = b.data[br.dataCount()%uint32(len(b.data)):]
