@@ -405,7 +405,7 @@ import (
 	"flag"
 	"fmt"
 	"internal/race"
-	"internal/testlog"
+	actionlog "internal/testlog"
 	"io"
 	"math/rand"
 	"os"
@@ -2164,7 +2164,7 @@ func (t *T) runForked() ([]byte, error) {
 		return output, errors.New("the forked run of " + t.Name() + " " + state.String())
 	}
 	if childLog != "" {
-		if err := takeForkLog(childLog, startDir, testlog.Logger()); err != nil {
+		if err := takeForkLog(childLog, startDir, actionlog.Logger()); err != nil {
 			return output, err
 		}
 	}
@@ -2206,7 +2206,7 @@ func forkTestLog(args []string, own string) (string, error) {
 // against it: the child started in dir, and its own chdir lines move it. A
 // chdir is recorded here as a stat of that directory, which is what cmd/go
 // hashes for it, so this run's own relative names keep their directory.
-func takeForkLog(file, dir string, logger testlog.Interface) error {
+func takeForkLog(file, dir string, logger actionlog.Interface) error {
 	data, err := os.ReadFile(file)
 	if err != nil {
 		return errors.New("the forked run wrote no test log: " + err.Error())

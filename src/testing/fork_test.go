@@ -435,7 +435,7 @@ func TestForkTestLogWithoutALogLeavesTheArgs(t *T) {
 	}
 }
 
-// recordedLog takes test log events as testlog.Interface.
+// recordedLog takes test log events as internal/testlog's Interface.
 type recordedLog struct{ events []string }
 
 func (log *recordedLog) Getenv(key string) { log.events = append(log.events, "getenv "+key) }
