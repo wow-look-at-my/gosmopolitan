@@ -13,6 +13,7 @@ import (
 	"internal/platform"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1663,6 +1664,10 @@ type runCache struct {
 	// code that runs a test is generated rather than compiled from a package,
 	// so no compile action carries it and the key must name it directly.
 	unitDigest string
+
+	// misses says why each lookup found no result. They are reported once the
+	// test is known to run, since a later lookup can still find one.
+	misses []func()
 }
 
 func coverProfTempFile(a *work.Action) string {
@@ -1833,6 +1838,9 @@ func (r *runTestActor) Act(b *work.Builder, ctx context.Context, a *work.Action)
 		}
 		a.TestOutput = r.c.buf
 		return nil
+	}
+	for _, explain := range r.c.misses {
+		explain()
 	}
 
 	if err := sh.Mkdir(a.Objdir); err != nil {
@@ -2343,10 +2351,13 @@ func (c *runCache) tryCacheWithID(b *work.Builder, a *work.Action, id string) bo
 				fmt.Fprintf(os.Stderr, "testcache: %s: input list malformed\n", a.Package.ImportPath)
 			}
 		}
+		if cache.MissNotices() {
+			c.misses = append(c.misses, func() { explainBinaryMiss(a, cacheArgs, id) })
+		}
 		return false
 	}
 	inputList := data
-	testInputsID, err := computeTestInputsID(a, data)
+	testInputsID, inputLines, err := computeTestInputsID(a, data)
 	if err != nil {
 		return false
 	}
@@ -2393,6 +2404,9 @@ func (c *runCache) tryCacheWithID(b *work.Builder, a *work.Action, id string) bo
 				fmt.Fprintf(os.Stderr, "testcache: %s: test output malformed\n", a.Package.ImportPath)
 			}
 		}
+		if cache.MissNotices() {
+			c.misses = append(c.misses, func() { explainInputsMiss(a, testID, inputLines) })
+		}
 		return false
 	}
 	if entry.Time.Before(testCacheExpire) {
@@ -2427,6 +2441,7 @@ func (c *runCache) tryCacheWithID(b *work.Builder, a *work.Action, id string) bo
 		}
 		if readErr == nil {
 			cache.PutNoVerify(cache.Default(), c.id1, bytes.NewReader(inputList))
+			cache.PutNoVerify(cache.Default(), inputLinesKey(c.id1), bytes.NewReader(inputLines))
 			cache.PutNoVerify(cache.Default(), testAndInputKey(c.id1, testInputsID), bytes.NewReader(data))
 			if testCoverProfile != "" || c.covMeta != (cache.ActionID{}) {
 				cache.PutNoVerify(cache.Default(), coverProfileAndInputKey(c.id1, testInputsID, c.covMeta), bytes.NewReader(profile))
@@ -2448,19 +2463,20 @@ func (c *runCache) tryCacheWithID(b *work.Builder, a *work.Action, id string) bo
 var errBadTestInputs = errors.New("error parsing test inputs")
 var testlogMagic = []byte("# test log\n") // known to testing/internal/testdeps/deps.go
 
+// runtimeEnv is the environment the runtime reads at start without telling the
+// testlog. Each one changes how every test runs.
+var runtimeEnv = []string{"GODEBUG", "GOGC", "GOMAXPROCS", "GOMEMLIMIT", "GOTRACEBACK"}
+
 // computeTestInputsID computes the "test inputs ID"
 // (see comment in tryCacheWithID above) for the
-// test log.
-func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, error) {
+// test log. It also answers every line it hashed, which is what names the input
+// that moved when a result goes missing (explainInputsMiss).
+func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, []byte, error) {
 	testlog = bytes.TrimPrefix(testlog, testlogMagic)
 	sum := cache.NewHash("testInputs")
-	// Under gocachetest every hashed line is also printed, so two runs whose
-	// input IDs differ can be diffed down to the environment variable or file
-	// that moved.
-	var h io.Writer = sum
 	var lines bytes.Buffer
+	h := io.MultiWriter(sum, &lines)
 	if cache.DebugTest {
-		h = io.MultiWriter(sum, &lines)
 		defer func() {
 			seen := make(map[string]struct{})
 			for line := range strings.Lines(lines.String()) {
@@ -2472,8 +2488,9 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, error)
 			}
 		}()
 	}
-	// The runtime always looks at GODEBUG, without telling us in the testlog.
-	fmt.Fprintf(h, "env GODEBUG %x\n", hashGetenv("GODEBUG"))
+	for _, name := range runtimeEnv {
+		fmt.Fprintf(h, "env %s %x\n", name, hashGetenv(name))
+	}
 	if cache.DebugTest {
 		fmt.Fprintf(os.Stderr, "testcache: %s: GODEBUG=%q\n", a.Package.ImportPath, os.Getenv("GODEBUG"))
 	}
@@ -2488,14 +2505,14 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, error)
 			if cache.DebugTest {
 				fmt.Fprintf(os.Stderr, "testcache: %s: input list malformed (%q)\n", a.Package.ImportPath, line)
 			}
-			return cache.ActionID{}, errBadTestInputs
+			return cache.ActionID{}, nil, fmt.Errorf("%w: %q", errBadTestInputs, line)
 		}
 		switch op {
 		default:
 			if cache.DebugTest {
 				fmt.Fprintf(os.Stderr, "testcache: %s: input list malformed (%q)\n", a.Package.ImportPath, line)
 			}
-			return cache.ActionID{}, errBadTestInputs
+			return cache.ActionID{}, nil, fmt.Errorf("%w: %q", errBadTestInputs, line)
 		case "getenv":
 			fmt.Fprintf(h, "env %s %x\n", name, hashGetenv(name))
 		case "chdir":
@@ -2524,12 +2541,132 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, error)
 				if cache.DebugTest {
 					fmt.Fprintf(os.Stderr, "testcache: %s: input file %s: %s\n", a.Package.ImportPath, name, err)
 				}
-				return cache.ActionID{}, err
+				return cache.ActionID{}, nil, err
 			}
 			fmt.Fprintf(h, "open %s %x\n", name, fh)
 		}
 	}
-	return sum.Sum(), nil
+	return sum.Sum(), lines.Bytes(), nil
+}
+
+// inputLinesKey is where the lines behind a test result's inputs ID are kept,
+// beside the testlog that lists them.
+func inputLinesKey(testID cache.ActionID) cache.ActionID {
+	return cache.Subkey(testID, "inputlines")
+}
+
+// explainInputsMiss names what moved when a test ran with a known binary and
+// arguments but its result was not under the inputs this run computed. The
+// lines saved with the last result are compared with now's, one input at a
+// time: a line is an operation and a name, then the hash of what it read.
+func explainInputsMiss(a *work.Action, testID cache.ActionID, lines []byte) {
+	saved, _, err := cache.GetBytes(cache.Default(), inputLinesKey(testID))
+	if err != nil {
+		cache.MissNotice("testcache: %s: no saved inputs to compare with this run's (%v); it read:", a.Package.ImportPath, err)
+		for line := range strings.Lines(string(lines)) {
+			cache.MissNotice("testcache: %s:   %s", a.Package.ImportPath, strings.TrimSuffix(line, "\n"))
+		}
+		return
+	}
+	before := inputHashes(saved)
+	after := inputHashes(lines)
+	moved := 0
+	for _, name := range slices.Sorted(maps.Keys(after)) {
+		was, known := before[name]
+		switch {
+		case !known:
+			cache.MissNotice("testcache: %s: input %s is new", a.Package.ImportPath, name)
+		case was != after[name]:
+			cache.MissNotice("testcache: %s: input %s changed", a.Package.ImportPath, name)
+		default:
+			continue
+		}
+		moved++
+	}
+	for _, name := range slices.Sorted(maps.Keys(before)) {
+		if _, kept := after[name]; !kept {
+			cache.MissNotice("testcache: %s: input %s is gone", a.Package.ImportPath, name)
+			moved++
+		}
+	}
+	if moved == 0 {
+		cache.MissNotice("testcache: %s: every input matches the last run's, and its result is not in the cache", a.Package.ImportPath)
+	}
+}
+
+// inputHashes maps each input line's operation and name to its hash. A name
+// read twice in one run hashes the same both times.
+func inputHashes(lines []byte) map[string]string {
+	hashes := make(map[string]string)
+	for line := range strings.Lines(string(lines)) {
+		line = strings.TrimSuffix(line, "\n")
+		at := strings.LastIndexByte(line, ' ')
+		if at < 0 {
+			continue
+		}
+		hashes[line[:at]] = line[at+1:]
+	}
+	return hashes
+}
+
+// identityKey is where the description of the last binary a package's tests
+// ran from is kept, for these arguments and this kind of identity.
+func identityKey(a *work.Action, cacheArgs []string, kind string) cache.ActionID {
+	h := cache.NewHash("testIdentity")
+	fmt.Fprintf(h, "package %s args %q execcmd %q kind %s", a.Package.ImportPath, cacheArgs, work.ExecCmd, kind)
+	return h.Sum()
+}
+
+// explainBinaryMiss names what differs between the binary this run asks about
+// and the last one the package's tests were looked up with, when no testlog is
+// known for this one. An identity is a list of words; a word holding '=' is a
+// package and the code it compiled to, and the rest stand by position.
+func explainBinaryMiss(a *work.Action, cacheArgs []string, id string) {
+	kind := "compiles"
+	if strings.HasPrefix(id, "reach ") {
+		kind = "reach"
+	}
+	key := identityKey(a, cacheArgs, kind)
+	saved, _, err := cache.GetBytes(cache.Default(), key)
+	cache.PutNoVerify(cache.Default(), key, strings.NewReader(id))
+	if err != nil {
+		cache.MissNotice("testcache: %s: no result for this %s identity, and none saved to compare it with", a.Package.ImportPath, kind)
+		return
+	}
+	before := identityWords(string(saved))
+	after := identityWords(id)
+	var moved []string
+	for _, name := range slices.Sorted(maps.Keys(after)) {
+		if before[name] != after[name] {
+			moved = append(moved, name)
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(before)) {
+		if _, kept := after[name]; !kept {
+			moved = append(moved, name)
+		}
+	}
+	if len(moved) == 0 {
+		cache.MissNotice("testcache: %s: the %s identity matches the last one looked up, and no testlog is saved for it", a.Package.ImportPath, kind)
+		return
+	}
+	cache.MissNotice("testcache: %s: the %s identity moved in %s", a.Package.ImportPath, kind, strings.Join(moved, " "))
+}
+
+// identityWords splits an identity into named parts. A word holding '=' names
+// itself; any other word is named for where it stands among the unnamed ones.
+func identityWords(id string) map[string]string {
+	words := make(map[string]string)
+	unnamed := 0
+	for _, word := range strings.Fields(id) {
+		name, value, named := strings.Cut(word, "=")
+		if !named {
+			name, value = "#"+strconv.Itoa(unnamed), word
+			unnamed++
+		}
+		words[name] = value
+	}
+	return words
 }
 
 // isRunScratch reports whether name is scratch space this run created, which is
@@ -2672,10 +2809,17 @@ func (c *runCache) saveOutput(a *work.Action) {
 				fmt.Fprintf(os.Stderr, "testcache: %s: reading testlog: malformed\n", a.Package.ImportPath)
 			}
 		}
+		if err != nil {
+			cache.MissNotice("testcache: %s: result not saved: %v", a.Package.ImportPath, err)
+		} else {
+			cache.MissNotice("testcache: %s: result not saved: the testlog of %d bytes is malformed: starts %q, ends %q",
+				a.Package.ImportPath, len(testlog), testlog[:min(len(testlog), 64)], testlog[max(0, len(testlog)-64):])
+		}
 		return
 	}
-	testInputsID, err := computeTestInputsID(a, testlog)
+	testInputsID, inputLines, err := computeTestInputsID(a, testlog)
 	if err != nil {
+		cache.MissNotice("testcache: %s: result not saved: %v", a.Package.ImportPath, err)
 		return
 	}
 	var coverProfile []byte
@@ -2693,6 +2837,7 @@ func (c *runCache) saveOutput(a *work.Action) {
 			fmt.Fprintf(os.Stderr, "testcache: %s: save test ID %x => input ID %x => %x\n", a.Package.ImportPath, c.id1, testInputsID, testAndInputKey(c.id1, testInputsID))
 		}
 		cache.PutNoVerify(cache.Default(), c.id1, bytes.NewReader(testlog))
+		cache.PutNoVerify(cache.Default(), inputLinesKey(c.id1), bytes.NewReader(inputLines))
 		cache.PutNoVerify(cache.Default(), testAndInputKey(c.id1, testInputsID), bytes.NewReader(a.TestOutput.Bytes()))
 		if coverProfile != nil {
 			cache.PutNoVerify(cache.Default(), coverProfileAndInputKey(c.id1, testInputsID, c.covMeta), bytes.NewReader(coverProfile))
@@ -2707,6 +2852,7 @@ func (c *runCache) saveOutput(a *work.Action) {
 			fmt.Fprintf(os.Stderr, "testcache: %s: save test ID %x => input ID %x => %x\n", a.Package.ImportPath, c.id2, testInputsID, testAndInputKey(c.id2, testInputsID))
 		}
 		cache.PutNoVerify(cache.Default(), c.id2, bytes.NewReader(testlog))
+		cache.PutNoVerify(cache.Default(), inputLinesKey(c.id2), bytes.NewReader(inputLines))
 		cache.PutNoVerify(cache.Default(), testAndInputKey(c.id2, testInputsID), bytes.NewReader(a.TestOutput.Bytes()))
 		if coverProfile != nil {
 			cache.PutNoVerify(cache.Default(), coverProfileAndInputKey(c.id2, testInputsID, c.covMeta), bytes.NewReader(coverProfile))

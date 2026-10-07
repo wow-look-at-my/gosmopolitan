@@ -136,6 +136,20 @@ func cacheNotice(format string, args ...any) {
 	fmt.Fprintf(cacheLogFile, stamp+format+"\n", args...)
 }
 
+// MissNotices reports whether a test result the cache did not have is
+// explained.
+func MissNotices() bool {
+	return os.Getenv(CacheLogEnv) != ""
+}
+
+// MissNotice writes one line of such an explanation to the notice file.
+func MissNotice(format string, args ...any) {
+	if !MissNotices() {
+		return
+	}
+	cacheNotice(format, args...)
+}
+
 func (goLogger) Infof(format string, args ...any) {
 	if os.Getenv(CacheDebugEnv) == "" {
 		return

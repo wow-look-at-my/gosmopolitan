@@ -1414,7 +1414,6 @@ func (t *tester) registerTests() {
 				timeout: 120 * time.Second,
 				cpu:     "10",
 				pkg:     "sync",
-				shared:  true,
 			})
 	}
 
@@ -1455,9 +1454,8 @@ func (t *tester) registerTests() {
 					gcflags: gogcflags,
 					// We set GOMAXPROCS=2 in addition to -cpu=1,2,4 in order to test runtime bootstrap code,
 					// creation of first goroutines and first garbage collections in the parallel setting.
-					env:    []string{"GOMAXPROCS=2"},
-					pkg:    "runtime",
-					shared: true,
+					env: []string{"GOMAXPROCS=2"},
+					pkg: "runtime",
 				})
 		}
 	}

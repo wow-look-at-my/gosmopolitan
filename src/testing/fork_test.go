@@ -5,6 +5,7 @@ package testing
 
 import (
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -395,6 +396,101 @@ func TestAllocsPerRunRefusesBesideASibling(t *T) {
 		}()
 		AllocsPerRun(1, func() {})
 	})
+}
+
+func TestForkTestLogGivesTheChildItsOwnFile(t *T) {
+	args := []string{"bin", "-test.v", "-test.testlogfile=/work/b001/testlog.txt", "-test.run=^TestX$"}
+	file, err := forkTestLog(args, "/work/b001/testlog.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(filepath.Dir(file))
+	if file == "/work/b001/testlog.txt" || !strings.HasPrefix(file, os.TempDir()) {
+		t.Fatalf("the child's log is %q, want a file of its own under %q", file, os.TempDir())
+	}
+	want := []string{"bin", "-test.v", "-test.testlogfile=" + file, "-test.run=^TestX$"}
+	if !slices.Equal(args, want) {
+		t.Errorf("args = %q, want %q", args, want)
+	}
+
+	split := []string{"bin", "--test.testlogfile", "/work/b001/testlog.txt"}
+	file, err = forkTestLog(split, "/work/b001/testlog.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(filepath.Dir(file))
+	if split[2] != file {
+		t.Errorf("the flag's own argument is %q, want %q", split[2], file)
+	}
+}
+
+func TestForkTestLogWithoutALogLeavesTheArgs(t *T) {
+	args := []string{"bin", "-test.v"}
+	file, err := forkTestLog(args, "")
+	if err != nil || file != "" {
+		t.Fatalf("forkTestLog = %q, %v; want no file", file, err)
+	}
+	if !slices.Equal(args, []string{"bin", "-test.v"}) {
+		t.Errorf("args = %q, want them as they were", args)
+	}
+}
+
+// recordedLog takes test log events as testlog.Interface.
+type recordedLog struct{ events []string }
+
+func (log *recordedLog) Getenv(key string) { log.events = append(log.events, "getenv "+key) }
+func (log *recordedLog) Stat(file string)  { log.events = append(log.events, "stat "+file) }
+func (log *recordedLog) Open(file string)  { log.events = append(log.events, "open "+file) }
+func (log *recordedLog) Chdir(dir string)  { log.events = append(log.events, "chdir "+dir) }
+
+func TestTakeForkLogRecordsWhatTheChildRead(t *T) {
+	scratch := t.TempDir()
+	start := filepath.Join(scratch, "pkg")
+	moved := filepath.Join(scratch, "elsewhere")
+	file := filepath.Join(scratch, "testlog.txt")
+	child := "# test log\n" +
+		"getenv HOME\n" +
+		"open testdata/in.txt\n" +
+		"chdir " + moved + "\n" +
+		"stat out.txt\n" +
+		"open " + filepath.Join(scratch, "abs.txt") + "\n"
+	if err := os.WriteFile(file, []byte(child), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	var log recordedLog
+	if err := takeForkLog(file, start, &log); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"getenv HOME",
+		"open " + filepath.Join(start, "testdata/in.txt"),
+		"stat " + moved,
+		"stat " + filepath.Join(moved, "out.txt"),
+		"open " + filepath.Join(scratch, "abs.txt"),
+	}
+	if !slices.Equal(log.events, want) {
+		t.Errorf("recorded %q, want %q", log.events, want)
+	}
+}
+
+func TestTakeForkLogRefusesALogItCannotRead(t *T) {
+	scratch := t.TempDir()
+	for _, tc := range []struct{ name, content string }{
+		{"not a test log", "getenv HOME\n"},
+		{"a line with no name", "# test log\nopen\n"},
+		{"an unknown operation", "# test log\nunlink /x\n"},
+	} {
+		file := filepath.Join(scratch, strings.ReplaceAll(tc.name, " ", "-"))
+		if err := os.WriteFile(file, []byte(tc.content), 0o666); err != nil {
+			t.Fatal(err)
+		}
+		if err := takeForkLog(file, scratch, &recordedLog{}); err == nil {
+			t.Errorf("%s: takeForkLog took %q", tc.name, tc.content)
+		}
+	}
+	if err := takeForkLog(filepath.Join(scratch, "absent"), scratch, &recordedLog{}); err == nil {
+		t.Error("takeForkLog took a log the child never wrote")
+	}
 }
 
 func TestForkRunPattern(t *T) {

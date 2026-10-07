@@ -405,6 +405,7 @@ import (
 	"flag"
 	"fmt"
 	"internal/race"
+	"internal/testlog"
 	"io"
 	"math/rand"
 	"os"
@@ -2123,11 +2124,22 @@ func (t *T) runForked() ([]byte, error) {
 	}
 
 	args := append([]string{exe}, forkArgs(t.Name(), os.Args[1:])...)
+	childLog, err := forkTestLog(args, *testlog)
+	if err != nil {
+		return nil, err
+	}
+	startDir, err := os.Getwd()
+	if err != nil {
+		return nil, err
+	}
 
 	// One pipe for both streams keeps the child's interleaving intact.
 	pr, pw, err := os.Pipe()
 	if err != nil {
 		return nil, err
+	}
+	if childLog != "" {
+		defer os.RemoveAll(filepath.Dir(childLog))
 	}
 	proc, err := os.StartProcess(exe, args, &os.ProcAttr{
 		Env:   forkEnv(startEnv, t.Name()),
@@ -2151,7 +2163,84 @@ func (t *T) runForked() ([]byte, error) {
 	case !state.Success():
 		return output, errors.New("the forked run of " + t.Name() + " " + state.String())
 	}
+	if childLog != "" {
+		if err := takeForkLog(childLog, startDir, testlog.Logger()); err != nil {
+			return output, err
+		}
+	}
 	return output, readErr
+}
+
+// forkTestLog gives a child's test log a file of its own, when this run keeps
+// one (own, for cmd/go), and answers that file. The child is started with this
+// run's arguments, and a child handed this run's own file truncates it. What
+// the child read would then be missing from the inputs its result is cached
+// under.
+func forkTestLog(args []string, own string) (string, error) {
+	if own == "" {
+		return "", nil
+	}
+	// The temporary directory is scratch to cmd/go, so this run reading the
+	// file back is no input of its own.
+	dir, err := os.MkdirTemp("", "testlog-fork-")
+	if err != nil {
+		return "", err
+	}
+	file := filepath.Join(dir, "testlog.txt")
+	for idx, arg := range args {
+		name, _, hasValue := forkFlag(arg)
+		if name != "test.testlogfile" {
+			continue
+		}
+		if hasValue {
+			args[idx] = "-test.testlogfile=" + file
+		} else if idx+1 < len(args) {
+			args[idx+1] = file
+		}
+	}
+	return file, nil
+}
+
+// takeForkLog adds what a child's test log records to logger, this run's own. A
+// name the child gave relative to its working directory is made absolute
+// against it: the child started in dir, and its own chdir lines move it. A
+// chdir is recorded here as a stat of that directory, which is what cmd/go
+// hashes for it, so this run's own relative names keep their directory.
+func takeForkLog(file, dir string, logger testlog.Interface) error {
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return errors.New("the forked run wrote no test log: " + err.Error())
+	}
+	lines := strings.Split(string(data), "\n")
+	if lines[0] != "# test log" {
+		return errors.New("the forked run's test log does not start as one: " + strconv.Quote(lines[0]))
+	}
+	for _, line := range lines[1:] {
+		if line == "" {
+			continue
+		}
+		op, name, found := strings.Cut(line, " ")
+		if !found {
+			return errors.New("the forked run's test log holds " + strconv.Quote(line))
+		}
+		if op != "getenv" && !filepath.IsAbs(name) {
+			name = filepath.Join(dir, name)
+		}
+		switch op {
+		case "getenv":
+			logger.Getenv(name)
+		case "open":
+			logger.Open(name)
+		case "stat":
+			logger.Stat(name)
+		case "chdir":
+			dir = name
+			logger.Stat(name)
+		default:
+			return errors.New("the forked run's test log holds " + strconv.Quote(line))
+		}
+	}
+	return nil
 }
 
 // startEnv is the environment this test binary was started with. A child
