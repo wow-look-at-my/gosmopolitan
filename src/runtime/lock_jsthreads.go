@@ -160,7 +160,12 @@ func wasmWorkerParkNote(n *note) {
 	wasmParkedWorkers.Add(1)
 	// kicked is a due deadline this M found with every P busy and kicked the owners for.
 	kicked := int64(0)
+	counted := false
 	for {
+		if kicked != 0 && !counted {
+			wasmKickedWorkers.Add(1)
+			counted = true
+		}
 		seen := atomic.Load(&wasmParkWake)
 		if atomic.Load(key32(&n.key)) != 0 {
 			break // real wakeup: nextp installed by the waker
@@ -170,6 +175,10 @@ func wasmWorkerParkNote(n *note) {
 			wasmWakeMainThread()
 		}
 		next := wasmEarliestTimerWake()
+		if counted && next != kicked {
+			wasmKickedWorkers.Add(-1)
+			counted = false
+		}
 		now := nanotime()
 		due := next != 0 && next <= now && next != kicked
 		queued := sched.runq.size != 0 && sched.npidle.Load() != 0
@@ -189,9 +198,6 @@ func wasmWorkerParkNote(n *note) {
 					break
 				}
 				// Re-arm the running goroutines' preemption checks so an owner yields and runs the due timer.
-				if kicked == 0 {
-					wasmKickedWorkers.Add(1)
-				}
 				kicked = next
 				wasmThreadsKick()
 				continue
@@ -201,7 +207,7 @@ func wasmWorkerParkNote(n *note) {
 		futexsleep(&wasmParkWake, seen, ns)
 		gp.m.blocked = false
 	}
-	if kicked != 0 {
+	if counted {
 		wasmKickedWorkers.Add(-1)
 	}
 	wasmParkedWorkers.Add(-1)

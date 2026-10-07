@@ -746,20 +746,34 @@ func wasmWorkPending(pp *p) bool {
 var wasmParkedWorkers atomic.Int32
 
 // wasmKickedWorkers counts the parked Ms (GOWASM=threads) that found a
-// timer due with every P busy, kicked the owners, and sleep until a P runs
-// timers: worker Ms in wasmWorkerParkNote and the main M in
+// timer due with every P busy, kicked the owners, and sleep until a P's
+// timers change: worker Ms in wasmWorkerParkNote and the main M in
 // wasmMainParkArmBackstop. A Go atomic is sequentially consistent, and
 // such an M counts itself before it reads the earliest deadline, so either
-// it reads the deadline the timers left or wasmTimersRan wakes it.
+// it reads the deadline the check left or wasmTimersChecked wakes it.
 var wasmKickedWorkers atomic.Int32
 
-// wasmTimersRan wakes the Ms counted in wasmKickedWorkers after this M ran
-// timers, so that they read the next deadline.
-func wasmTimersRan() {
-	if goarch.IsWasm == 1 && wasmThreadsEnabled && wasmKickedWorkers.Load() != 0 {
-		wasmSchedNudgeWake()
-		wasmWakeMainThread()
+// wasmTimersWake is ts's earliest deadline under GOWASM=threads, for
+// wasmTimersChecked, and zero elsewhere.
+func wasmTimersWake(ts *timers) int64 {
+	if goarch.IsWasm != 1 || !wasmThreadsEnabled {
+		return 0
 	}
+	return ts.wakeTime()
+}
+
+// wasmTimersChecked wakes the Ms counted in wasmKickedWorkers after a
+// check of ts ran timers or moved its earliest deadline from before, so
+// that they read the next deadline.
+func wasmTimersChecked(ts *timers, before int64, ran bool) {
+	if goarch.IsWasm != 1 || !wasmThreadsEnabled || wasmKickedWorkers.Load() == 0 {
+		return
+	}
+	if !ran && ts.wakeTime() == before {
+		return
+	}
+	wasmSchedNudgeWake()
+	wasmWakeMainThread()
 }
 
 // wasmArmLoopPreempt arms the loop preemption checks of the goroutine
@@ -4201,10 +4215,9 @@ top:
 	// which may steal timers. It's important that between now
 	// and then, nothing blocks, so these numbers remain mostly
 	// relevant.
+	timersBefore := wasmTimersWake(&pp.timers)
 	now, pollUntil, ranTimers := pp.timers.check(0, nil)
-	if ranTimers {
-		wasmTimersRan()
-	}
+	wasmTimersChecked(&pp.timers, timersBefore, ranTimers)
 
 	// stealAt, if not 0, is when a runnext G that was left to its own P
 	// may be stolen.
@@ -4728,13 +4741,14 @@ func stealWork(now int64) (gp *g, inheritTime bool, rnow, pollUntil, stealAt int
 			// timerpMask tells us whether the P may have timers at all. If it
 			// can't, no need to check at all.
 			if stealTimersOrRunNextG && timerpMask.read(enum.position()) {
+				timersBefore := wasmTimersWake(&p2.timers)
 				tnow, w, ran := p2.timers.check(now, nil)
+				wasmTimersChecked(&p2.timers, timersBefore, ran)
 				now = tnow
 				if w != 0 && (pollUntil == 0 || w < pollUntil) {
 					pollUntil = w
 				}
 				if ran {
-					wasmTimersRan()
 					// Running the timers may have
 					// made an arbitrary number of G's
 					// ready and added them to this P's
