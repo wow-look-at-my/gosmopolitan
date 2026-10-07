@@ -291,6 +291,20 @@ var trace struct {
 	// Number of goroutines in syscall exiting slow path.
 	exitingSyscall atomic.Int32
 
+	// exitingWait is where StartTrace sleeps until exitingSyscall drains.
+	// traceExitedSyscall wakes it.
+	exitingWait signalNote
+
+	// flushWait is where traceAdvance sleeps until an M it must flush
+	// leaves its write critical section. The M wakes it when it clears its
+	// write flag (traceWriterDone), which traceCPUSample does from a
+	// signal handler.
+	flushWait signalNote
+
+	// cpuLostContended counts the CPU samples traceCPUSample dropped
+	// because another handler held signalLock.
+	cpuLostContended atomic.Uint32
+
 	// seqGC is the sequence counter for GC begin/end.
 	//
 	// Mutated only during stop-the-world.
@@ -415,10 +429,18 @@ func StartTrace() error {
 	// well as trace.enabled being set to true.
 	//
 	// The critical section on each goroutine here is going to be quite short, so the likelihood
-	// that we observe a zero value is high.
-	for trace.exitingSyscall.Load() != 0 {
-		osyield()
-	}
+	// that we observe a zero value is high. When it is not zero, sleep until the goroutine
+	// that brings it to zero wakes us (traceExitedSyscall).
+	systemstack(func() {
+		for {
+			trace.exitingWait.arm()
+			if trace.exitingSyscall.Load() == 0 {
+				trace.exitingWait.disarm()
+				return
+			}
+			trace.exitingWait.sleep()
+		}
+	})
 
 	// Record some initial pieces of information.
 	//
@@ -678,6 +700,10 @@ func traceAdvance(stopTrace bool) {
 		detectedDeadlock := false
 
 		for mToFlush != nil {
+			// Announce the wait before looking at any write flag: an M that
+			// clears its flag after this pass saw it set then finds the
+			// announcement and wakes us.
+			trace.flushWait.arm()
 			prev := &mToFlush
 			for mp := *prev; mp != nil; {
 				if mp.trace.writing.Load() {
@@ -704,9 +730,12 @@ func traceAdvance(stopTrace bool) {
 				mp.trace.link = nil
 				mp = *prev
 			}
-			// Yield only if we're going to be going around the loop again.
+			// Sleep only if we're going to be going around the loop again,
+			// until one of the Ms still writing clears its write flag.
 			if mToFlush != nil {
-				osyield()
+				trace.flushWait.sleep()
+			} else {
+				trace.flushWait.disarm()
 			}
 
 			if debugDeadlock {

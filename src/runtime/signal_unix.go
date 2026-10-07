@@ -620,6 +620,40 @@ func adjustSignalStack2(sig uint32, sp uintptr, mp *m, ssDisable bool) {
 // GOTRACEBACK=crash when a signal is received.
 var crashing atomic.Int32
 
+// crashNote is where the crash thread sleeps while it waits for the other
+// Ms to take SIGQUIT. Each of them wakes it from its signal handler after
+// it increments crashing.
+var crashNote signalNote
+
+// crashWaitForMs blocks the crash thread until every M has taken SIGQUIT,
+// or until no M has taken it for timeout nanoseconds. It runs in the crash
+// thread's signal handler.
+func crashWaitForMs(timeout int64) {
+	deadline := nanotime() + timeout
+	maxCrashing := crashing.Load()
+	for {
+		crashNote.arm()
+		count := crashing.Load()
+		if count >= mcount()-int32(extraMLength.Load()) {
+			crashNote.disarm()
+			return
+		}
+		now := nanotime()
+		if count > maxCrashing {
+			// Progress: give the next M the whole timeout again (see issue #64752).
+			maxCrashing = count
+			deadline = now + timeout
+		}
+		if now >= deadline {
+			crashNote.disarm()
+			return
+		}
+		if !crashNote.sleepFor(deadline - now) {
+			crashNote.disarm()
+		}
+	}
+}
+
 // testSigtrap and testSigusr1 are used by the runtime tests. If
 // non-nil, it is called on SIGTRAP/SIGUSR1. If it returns true, the
 // normal behavior on this signal is suppressed.
@@ -790,14 +824,14 @@ func sighandler(sig uint32, info *siginfo, ctxt unsafe.Pointer, gp *g) {
 	}
 
 	if docrash {
-		var crashSleepMicros uint32 = 5000
-		var watchdogTimeoutMicros uint32 = 2000 * crashSleepMicros
+		var watchdogTimeoutMicros uint32 = 10000000
 
 		isCrashThread := false
 		if crashing.CompareAndSwap(0, 1) {
 			isCrashThread = true
 		} else {
 			crashing.Add(1)
+			crashNote.wake()
 		}
 		if crashing.Load() < mcount()-int32(extraMLength.Load()) {
 			// There are other m's that need to dump their stacks.
@@ -816,21 +850,9 @@ func sighandler(sig uint32, info *siginfo, ctxt unsafe.Pointer, gp *g) {
 			raiseproc(_SIGQUIT)
 		}
 		if isCrashThread {
-			// Sleep for short intervals so that we can crash quickly after all ms have received SIGQUIT.
-			// Reset the timer whenever we see more ms received SIGQUIT
-			// to make it have enough time to crash (see issue #64752).
-			timeout := watchdogTimeoutMicros
-			maxCrashing := crashing.Load()
-			for timeout > 0 && (crashing.Load() < mcount()-int32(extraMLength.Load())) {
-				usleep(crashSleepMicros)
-				timeout -= crashSleepMicros
-
-				if c := crashing.Load(); c > maxCrashing {
-					// We make progress, so reset the watchdog timeout
-					maxCrashing = c
-					timeout = watchdogTimeoutMicros
-				}
-			}
+			// Sleep until every m has received SIGQUIT, woken by each m that
+			// takes it, so that we crash as soon as the last one has.
+			crashWaitForMs(int64(watchdogTimeoutMicros) * 1000)
 		} else {
 			maxCrashing := int32(0)
 			c := crashing.Load()
@@ -979,22 +1001,12 @@ func dieFromSignal(sig uint32) {
 	atomic.Store(&handlingSig[sig], 0)
 	raise(sig)
 
-	// That should have killed us. On some systems, though, raise
-	// sends the signal to the whole process rather than to just
-	// the current thread, which means that the signal may not yet
-	// have been delivered. Give other threads a chance to run and
-	// pick up the signal.
-	osyield()
-	osyield()
-	osyield()
-
-	// If that didn't work, try _SIG_DFL.
+	// That should have killed us. raise sends the signal to this thread
+	// on every port, and sig is unblocked, so it has been delivered by
+	// the time raise returns, as POSIX raise promises: a forwarded
+	// handler ran and returned. Try _SIG_DFL.
 	setsig(sig, _SIG_DFL)
 	raise(sig)
-
-	osyield()
-	osyield()
-	osyield()
 
 	// If we are still somehow running, this probably means we're PID 1
 	// immune to signals with default-terminate. Use a shell convention
@@ -1050,12 +1062,9 @@ func raisebadsignal(sig uint32, c *sigctxt) {
 		return
 	}
 
+	// raise sends the signal to this thread and it is unblocked, so it
+	// has been delivered by the time raise returns.
 	raise(sig)
-
-	// Give the signal a chance to be delivered.
-	// In almost all real cases the program is about to crash,
-	// so sleeping here is not a waste of time.
-	usleep(1000)
 
 	// If the signal didn't cause the program to exit, restore the
 	// Go signal handler and carry on.

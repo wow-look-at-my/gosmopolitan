@@ -35,7 +35,7 @@ package runtime
 import (
 	"internal/goos"
 	"internal/runtime/atomic"
-	_ "unsafe" // for go:linkname
+	"unsafe"
 )
 
 // sig handles communication between the signal handler and os/signal.
@@ -58,6 +58,13 @@ var sig struct {
 	state      atomic.Uint32
 	delivering atomic.Uint32
 	inuse      bool
+
+	// idleWaiters holds the goroutines parked in signalWaitUntilIdle,
+	// under idleLock. idleWaiting is 1 while the list is non-empty, so
+	// that sigsend can read it without the lock.
+	idleLock    mutex
+	idleWaiters gList
+	idleWaiting atomic.Uint32
 }
 
 const (
@@ -97,7 +104,7 @@ func sigsend(s uint32) bool {
 	// We are running in the signal handler; defer is not available.
 
 	if w := atomic.Load(&sig.wanted[s/32]); w&bit == 0 {
-		sig.delivering.Add(-1)
+		sigDeliveryDone()
 		return false
 	}
 
@@ -105,7 +112,7 @@ func sigsend(s uint32) bool {
 	for {
 		mask := sig.mask[s/32]
 		if mask&bit != 0 {
-			sig.delivering.Add(-1)
+			sigDeliveryDone()
 			return true // signal already in queue
 		}
 		if atomic.Cas(&sig.mask[s/32], mask, mask|bit) {
@@ -114,32 +121,67 @@ func sigsend(s uint32) bool {
 	}
 
 	// Notify receiver that queue has new bit.
-Send:
+	sigNotifyReceiver()
+
+	sigDeliveryDone()
+	return true
+}
+
+// sigNotifyReceiver tells signal_recv that there is something to look
+// at: it wakes the receiver if it is blocked, and otherwise leaves
+// sigSending for it to find. It runs from the signal handler, and from
+// signalWaitUntilIdle.
+func sigNotifyReceiver() {
 	for {
 		switch sig.state.Load() {
 		default:
 			throw("sigsend: inconsistent state")
 		case sigIdle:
 			if sig.state.CompareAndSwap(sigIdle, sigSending) {
-				break Send
+				return
 			}
 		case sigSending:
 			// notification already pending
-			break Send
+			return
 		case sigReceiving:
 			if sig.state.CompareAndSwap(sigReceiving, sigIdle) {
 				if usesSigNote() {
 					sigNoteWakeup(&sig.note)
-					break Send
+					return
 				}
 				notewakeup(&sig.note)
-				break Send
+				return
 			}
 		}
 	}
+}
 
-	sig.delivering.Add(-1)
-	return true
+// sigDeliveryDone ends one sigsend delivery. When the last delivery in
+// flight ends while signalWaitUntilIdle callers wait, it sends signal_recv
+// round its loop once more, so that the receiver sees no delivery in
+// flight and readies them. It runs from the signal handler.
+func sigDeliveryDone() {
+	if sig.delivering.Add(-1) == 0 && sig.idleWaiting.Load() != 0 {
+		sigNotifyReceiver()
+	}
+}
+
+// sigReadyIdleWaiters readies the signalWaitUntilIdle callers if no
+// sigsend is in flight. signal_recv calls it each time it has entered
+// sigReceiving and is about to block, which is the moment every signal
+// it returned before has been processed by os/signal.
+func sigReadyIdleWaiters() {
+	if sig.idleWaiting.Load() == 0 || sig.delivering.Load() != 0 {
+		return
+	}
+	lock(&sig.idleLock)
+	waiters := sig.idleWaiters
+	sig.idleWaiters = gList{}
+	sig.idleWaiting.Store(0)
+	unlock(&sig.idleLock)
+	for !waiters.empty() {
+		goready(waiters.pop(), 1)
+	}
 }
 
 // Called to receive the next queued signal.
@@ -164,6 +206,7 @@ func signal_recv() uint32 {
 				throw("signal_recv: inconsistent state")
 			case sigIdle:
 				if sig.state.CompareAndSwap(sigIdle, sigReceiving) {
+					sigReadyIdleWaiters()
 					if usesSigNote() {
 						sigNoteSleep(&sig.note)
 						break Receive
@@ -194,23 +237,35 @@ func signal_recv() uint32 {
 // that all the signals have been delivered to the user channels
 // by the os/signal package.
 //
+// Although the signals we care about have been removed from sig.wanted,
+// another thread may have received a signal, read sig.wanted, and not yet
+// finished updating sig.mask and waking the receiver. So idle means both
+// that no sigsend is in flight and that signal_recv has gone back to
+// sigReceiving (the sigIdle state is really more like sigProcessing). The
+// caller parks until signal_recv sees both at once (sigReadyIdleWaiters).
+// It first sends the receiver round its loop, so that a receiver already
+// blocked looks again; a sigsend still in flight does the same when it
+// finishes (sigDeliveryDone).
+//
 //go:linkname signalWaitUntilIdle os/signal.signalWaitUntilIdle
 func signalWaitUntilIdle() {
-	// Although the signals we care about have been removed from
-	// sig.wanted, it is possible that another thread has received
-	// a signal, has read from sig.wanted, is now updating sig.mask,
-	// and has not yet woken up the processor thread. We need to wait
-	// until all current signal deliveries have completed.
-	for sig.delivering.Load() != 0 {
-		Gosched()
+	if !sig.inuse {
+		// No signal was ever enabled, so none can be in flight.
+		return
 	}
+	lock(&sig.idleLock)
+	sig.idleWaiters.push(getg())
+	sig.idleWaiting.Store(1)
+	gopark(sigIdleWaitPark, nil, waitReasonSignalDeliveryIdle, traceBlockGeneric, 1)
+}
 
-	// Although WaitUntilIdle seems like the right name for this
-	// function, the state we are looking for is sigReceiving, not
-	// sigIdle.  The sigIdle state is really more like sigProcessing.
-	for sig.state.Load() != sigReceiving {
-		Gosched()
-	}
+// sigIdleWaitPark is signalWaitUntilIdle's gopark callback. The caller
+// is already waiting when the receiver is sent round, so signal_recv may
+// ready it at once.
+func sigIdleWaitPark(gp *g, _ unsafe.Pointer) bool {
+	unlock(&sig.idleLock)
+	sigNotifyReceiver()
+	return true
 }
 
 // Must only be called from a single goroutine at a time.

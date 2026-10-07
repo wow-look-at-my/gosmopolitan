@@ -14,8 +14,8 @@ package runtime
 
 import (
 	"internal/goos"
-	"internal/goarch"
 	"internal/abi"
+	"internal/runtime/atomic"
 	"internal/runtime/sys"
 	"unsafe"
 )
@@ -56,6 +56,14 @@ type cpuProfile struct {
 	numExtra   int
 	lostExtra  uint64 // count of frames lost because extra is full
 	lostAtomic uint64 // count of frames lost because of being in atomic64 on mips/arm; updated racily
+
+	// lostContended counts samples dropped because prof.signalLock was
+	// held when their signal arrived. A signal handler cannot wait for
+	// the holder, which may be descheduled or be the interrupted code on
+	// this very thread, so it counts the sample here and returns. It is
+	// 32 bits wide because mips and arm emulate 64-bit atomics with a
+	// lock, which a signal handler must not take.
+	lostContended atomic.Uint32
 }
 
 var cpuprof cpuProfile
@@ -106,14 +114,16 @@ func SetCPUProfileRate(hz int) {
 //
 //go:nowritebarrierrec
 func (p *cpuProfile) add(tagPtr *unsafe.Pointer, stk []uintptr) {
-	// Simple cas-lock to coordinate with setcpuprofilerate.
-	for !prof.signalLock.CompareAndSwap(0, 1) {
-		// TODO: Is it safe to osyield here? https://go.dev/issue/52672
-		osyield()
+	// prof.signalLock serializes the log's single writer with other
+	// handlers and with setcpuprofilerate. A handler cannot wait for it,
+	// so a sample that finds it held is counted and dropped.
+	if !prof.signalLock.CompareAndSwap(0, 1) {
+		p.lostContended.Add(1)
+		return
 	}
 
 	if prof.hz.Load() != 0 { // implies cpuprof.log != nil
-		if p.numExtra > 0 || p.lostExtra > 0 || p.lostAtomic > 0 {
+		if p.numExtra > 0 || p.lostExtra > 0 || p.lostAtomic > 0 || p.lostContended.Load() > 0 {
 			p.addExtra()
 		}
 		hdr := [1]uint64{1}
@@ -138,15 +148,12 @@ func (p *cpuProfile) add(tagPtr *unsafe.Pointer, stk []uintptr) {
 //go:nosplit
 //go:nowritebarrierrec
 func (p *cpuProfile) addNonGo(stk []uintptr) {
-	// Simple cas-lock to coordinate with SetCPUProfileRate.
-	// (Other calls to add or addNonGo should be blocked out
-	// by the fact that only one SIGPROF can be handled by the
-	// process at a time. If not, this lock will serialize those too.
-	// The use of timer_create(2) on Linux to request process-targeted
-	// signals may have changed this.)
-	for !prof.signalLock.CompareAndSwap(0, 1) {
-		// TODO: Is it safe to osyield here? https://go.dev/issue/52672
-		osyield()
+	// prof.signalLock serializes extra with add on other threads and
+	// with SetCPUProfileRate. As in add, a sample that finds it held is
+	// counted and dropped rather than waited for.
+	if !prof.signalLock.CompareAndSwap(0, 1) {
+		cpuprof.lostContended.Add(1)
+		return
 	}
 
 	if cpuprof.numExtra+1+len(stk) < len(cpuprof.extra) {
@@ -196,7 +203,19 @@ func (p *cpuProfile) addExtra() {
 		p.lostAtomic = 0
 	}
 
+	if lost := p.lostContended.Swap(0); lost > 0 {
+		hdr := [1]uint64{uint64(lost)}
+		lostStk := [2]uintptr{
+			abi.FuncPCABIInternal(_LostContendedProfileLock) + sys.PCQuantum,
+			abi.FuncPCABIInternal(_System) + sys.PCQuantum,
+		}
+		p.log.write(nil, 0, hdr[:], lostStk[:])
+	}
 }
+
+// _LostContendedProfileLock names the samples a profiling signal dropped
+// because prof.signalLock was held (cpuProfile.lostContended).
+func _LostContendedProfileLock() { _LostContendedProfileLock() }
 
 // CPUProfile panics.
 // It formerly provided raw access to chunks of
@@ -250,22 +269,7 @@ func runtime_pprof_readProfile() ([]uint64, []unsafe.Pointer, bool) {
 	if goos.IsDarwin == 1 || goos.IsIos == 1 {
 		readMode = profBufNonBlocking // For #61768; on Darwin notes are not async-signal-safe.  See sigNoteSetup in os_darwin.go.
 	}
-	if goarch.IsWasm == 1 {
-		// Wasm cannot use the blocking read either: on wasip1 a
-		// goroutine blocked in notetsleepg can only busy-wait
-		// (lock_wasip1.go), so a blocking reader would burn a full CPU
-		// for the whole profiling session. Poll with non-blocking
-		// reads instead, paced by the timer sleep below (timers park
-		// properly on both wasm ports). This mirrors the Darwin
-		// non-blocking mode and its 100ms pacing in
-		// runtime/pprof.profileWriter, except that the pacing has to
-		// live here: profileWriter only sleeps on Darwin.
-		readMode = profBufNonBlocking
-	}
 	data, tags, eof := log.read(readMode)
-	if goarch.IsWasm == 1 && len(data) == 0 && !eof {
-		timeSleep(100 * 1000 * 1000) // 100ms, matching profileWriter's pacing
-	}
 	if len(data) == 0 && eof {
 		lock(&cpuprof.lock)
 		cpuprof.log = nil

@@ -29,3 +29,7 @@ func (n *signalNote) post() {
 func (n *signalNote) await() {
 	semasleep(-1)
 }
+
+func (n *signalNote) awaitFor(ns int64) bool {
+	return semasleep(ns) == 0
+}

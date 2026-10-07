@@ -53,14 +53,7 @@ func futexsleep(addr *uint32, val uint32, ns int64) {
 	futex(unsafe.Pointer(addr), _FUTEX_WAIT_PRIVATE, val, &ts, nil, 0)
 }
 
-// The XNU futex operations, named as bsd/sys/ulock.h names them.
-const (
-	_UL_COMPARE_AND_WAIT = 1
-	_ULF_WAKE_ALL        = 0x00000100
-	_ULF_NO_ERRNO        = 0x01000000
-
-	_ENOENT_xnu = 2
-)
+const _ENOENT_xnu = 2
 
 // xnuFutexsleep is futexsleep on an XNU host. The kernel compares *addr with
 // val and sleeps until an xnuFutexwakeup on addr, the timeout, or a signal.
@@ -68,24 +61,6 @@ const (
 //go:nosplit
 func xnuFutexsleep(addr *uint32, val uint32, ns int64) {
 	xnuUlockWait(_UL_COMPARE_AND_WAIT|_ULF_NO_ERRNO, addr, uint64(val), xnuUlockTimeout(ns))
-}
-
-// xnuUlockTimeout converts nanoseconds into __ulock_wait's microseconds,
-// where no timeout at all waits forever.
-//
-//go:nosplit
-func xnuUlockTimeout(ns int64) uint32 {
-	if ns < 0 {
-		return 0
-	}
-	usec := (ns + 999) / 1000
-	if usec == 0 {
-		return 1
-	}
-	if usec > 1<<32-1 {
-		return 1<<32 - 1
-	}
-	return uint32(usec)
 }
 
 // xnuFutexwakeup is futexwakeup on an XNU host. ENOENT means nothing waits

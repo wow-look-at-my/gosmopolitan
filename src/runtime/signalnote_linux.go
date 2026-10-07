@@ -33,3 +33,15 @@ func (n *signalNote) await() {
 		futexsleep((*uint32)(unsafe.Pointer(&n.word)), 0, -1)
 	}
 }
+
+func (n *signalNote) awaitFor(ns int64) bool {
+	deadline := nanotime() + ns
+	for n.word.Load() == 0 {
+		left := deadline - nanotime()
+		if left <= 0 {
+			return false
+		}
+		futexsleep((*uint32)(unsafe.Pointer(&n.word)), 0, left)
+	}
+	return true
+}

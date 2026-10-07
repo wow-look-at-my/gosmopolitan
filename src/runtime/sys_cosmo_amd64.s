@@ -444,21 +444,22 @@ TEXT runtime·raise(SB),NOSPLIT,$0
 	SYSCALL
 	RET
 raise_darwin:
-	// kill(getpid(), sig, posix=1) with the APPLE signal number. A
-	// signal with no Apple number is dropped: the table answers 0, and
-	// kill(pid, 0) is an existence probe.
-	MOVL	sig+0(FP), SI
-	CMPL	SI, $65
+	// __pthread_kill(thread_self_trap(), sig) with the APPLE signal
+	// number: the signal goes to this thread, as Apple libc raise sends
+	// it, so an unblocked signal is delivered before raise returns. A
+	// signal with no Apple number is dropped: the table answers 0.
+	MOVL	sig+0(FP), R12
+	CMPL	R12, $65
 	JAE	raise_darwin_drop
 	MOVQ	$runtime·cosmoSigL2ATab(SB), R11
-	MOVBLZX	(R11)(SI*1), SI
-	CMPL	SI, $0
+	MOVBLZX	(R11)(R12*1), R12
+	CMPL	R12, $0
 	JEQ	raise_darwin_drop
-	MOVL	$XNU_getpid, AX
+	MOVL	$MACH_thread_self, AX
 	SYSCALL
-	MOVL	AX, DI		// pid
-	MOVL	$1, DX		// posix
-	MOVL	$XNU_kill, AX
+	MOVL	AX, DI		// this thread's mach port
+	MOVL	R12, SI		// Apple signal number
+	MOVL	$XNU_pthread_kill, AX
 	SYSCALL
 raise_darwin_drop:
 	RET
