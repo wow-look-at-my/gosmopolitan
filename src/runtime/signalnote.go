@@ -15,7 +15,8 @@ package runtime
 // lands on a thread Go did not create has none. The signalNote type and its
 // reset, post and await methods are declared per OS. Most systems sleep on
 // the waiting M's semaphore. Darwin's semaphore takes a pthread mutex, so
-// Darwin sleeps on a ulock, and cosmo arm64 on a pipe when its host is XNU.
+// Darwin sleeps on a ulock, and cosmo, whose arm64 semaphore does the same
+// on XNU, on a futex word.
 
 // arm prepares n for one wakeup.
 //
