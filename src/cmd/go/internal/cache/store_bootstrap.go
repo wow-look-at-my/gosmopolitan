@@ -20,3 +20,6 @@ func MissNotices() bool { return false }
 
 // MissNotice has no notice file to write to.
 func MissNotice(string, ...any) {}
+
+// PlumbingEnv is empty: go_bootstrap has no notice file and no broker.
+var PlumbingEnv []string
