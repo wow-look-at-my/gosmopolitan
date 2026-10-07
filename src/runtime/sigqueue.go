@@ -274,6 +274,7 @@ func sigIdleWaitPark(gp *g, _ unsafe.Pointer) bool {
 func signal_enable(s uint32) {
 	if !sig.inuse {
 		// This is the first call to signal_enable. Initialize.
+		lockInit(&sig.idleLock, lockRankSigIdle)
 		sig.inuse = true // enable reception of signals; cannot disable
 		if usesSigNote() {
 			sigNoteSetup(&sig.note)
