@@ -11,7 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"internal/coverage"
-	"internal/hostsfile"
+	"internal/netconf"
 	"internal/platform"
 	"io"
 	"io/fs"
@@ -2655,19 +2655,55 @@ func lookupAnswer(kind, file, query string) (cache.ActionID, error) {
 			return h.Sum(), nil
 		}
 		if kind == "hostsname" {
-			entry := byName[hostsfile.NameKey(query)]
+			entry := byName[netconf.NameKey(query)]
 			fmt.Fprintf(h, "addrs %q canonical %q\n", entry.Addrs, entry.Canonical)
 			return h.Sum(), nil
 		}
-		addr := hostsfile.AddrKey(query)
+		addr := netconf.AddrKey(query)
 		fmt.Fprintf(h, "addr %q names %q\n", addr, byAddr[addr])
 		return h.Sum(), nil
+	case "resolvorder", "resolvnames", "resolvservers":
+		conf, openErr := readResolvFile(file)
+		switch kind {
+		case "resolvorder":
+			fmt.Fprintf(h, "err %s unknownopt %v lookup %q\n", openErr, conf.UnknownOpt, conf.Lookup)
+		case "resolvnames":
+			search := conf.Search
+			if len(search) == 0 {
+				// The host's own domain stands in, as package net reads it.
+				hostname, _ := os.Hostname()
+				search = netconf.DefaultSearch(hostname)
+			}
+			fmt.Fprintf(h, "names %q\n", netconf.NameList(query, conf.Ndots, search))
+		case "resolvservers":
+			fmt.Fprintf(h, "servers %q timeout %v attempts %d rotate %v tcp %v trustad %v single %v\n",
+				conf.Servers, conf.Timeout, conf.Attempts, conf.Rotate, conf.UseTCP, conf.TrustAD, conf.SingleRequest)
+		}
+		return h.Sum(), nil
+	}
+}
+
+// readResolvFile reads a resolv.conf as package net does, and names how its
+// open failed: "" when it did not. A file that does not open reads as one
+// with nothing in it.
+func readResolvFile(file string) (netconf.Resolv, string) {
+	conf, err := os.Open(file)
+	switch {
+	case err == nil:
+		defer conf.Close()
+		return netconf.ReadResolv(conf), ""
+	case errors.Is(err, fs.ErrNotExist):
+		return netconf.ReadResolv(strings.NewReader("")), "notexist"
+	case errors.Is(err, fs.ErrPermission):
+		return netconf.ReadResolv(strings.NewReader("")), "permission"
+	default:
+		return netconf.ReadResolv(strings.NewReader("")), err.Error()
 	}
 }
 
 // readHostsFile reads a hosts file as package net does. A file that is
 // missing or unreadable answers nothing, and any other error is the answer.
-func readHostsFile(file string) (map[string]hostsfile.ByName, map[string][]string, error) {
+func readHostsFile(file string) (map[string]netconf.ByName, map[string][]string, error) {
 	hosts, err := os.Open(file)
 	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, fs.ErrPermission) {
 		return nil, nil, nil
@@ -2676,7 +2712,7 @@ func readHostsFile(file string) (map[string]hostsfile.ByName, map[string][]strin
 		return nil, nil, err
 	}
 	defer hosts.Close()
-	byName, byAddr := hostsfile.Read(hosts)
+	byName, byAddr := netconf.ReadHosts(hosts)
 	return byName, byAddr, nil
 }
 

@@ -13,9 +13,9 @@ import (
 	"cmd/go/internal/work"
 )
 
-// TestLookupAnswer pins that a hosts lookup is keyed on its answer. A line
-// for a name nobody asked about can differ from host to host and leaves the
-// key alone; a change to the queried entry moves it.
+// TestLookupAnswer pins that a hosts or resolv.conf lookup is keyed on its
+// answer. A line nobody asked about can differ from host to host and leaves
+// the key alone; a change to what the lookup used moves it.
 func TestLookupAnswer(t *testing.T) {
 	dir := t.TempDir()
 	write := func(name, text string) string {
@@ -57,6 +57,28 @@ func TestLookupAnswer(t *testing.T) {
 			t.Errorf("%s %q in %s and %s: same answer = %v, want %v", c.kind, c.query, filepath.Base(c.left), filepath.Base(c.right), left == right, c.same)
 		}
 	}
+	runnerA := write("resolv-a", "# stub\nnameserver 127.0.0.53\noptions edns0 trust-ad\nsearch a1.internal.cloudapp.net\n")
+	runnerB := write("resolv-b", "# stub, another runner\nnameserver 127.0.0.53\noptions edns0 trust-ad\nsearch b2.internal.cloudapp.net\n")
+	tcp := write("resolv-tcp", "nameserver 127.0.0.53\noptions edns0 trust-ad use-vc\nsearch a1.internal.cloudapp.net\n")
+	resolvCases := []struct {
+		kind, query string
+		left, right string
+		same        bool
+	}{
+		{"resolvorder", "", runnerA, runnerB, true},
+		{"resolvservers", "", runnerA, runnerB, true},
+		{"resolvservers", "", runnerA, tcp, false},
+		{"resolvnames", "localhost.", runnerA, runnerB, true},
+		{"resolvnames", "golang.org", runnerA, runnerB, false},
+		{"resolvorder", "", runnerA, missing, false},
+	}
+	for _, c := range resolvCases {
+		left, right := answer(c.kind, c.left, c.query), answer(c.kind, c.right, c.query)
+		if (left == right) != c.same {
+			t.Errorf("%s %q in %s and %s: same answer = %v, want %v", c.kind, c.query, filepath.Base(c.left), filepath.Base(c.right), left == right, c.same)
+		}
+	}
+
 	if _, err := lookupAnswer("nosuchparser", base, "x"); err == nil {
 		t.Errorf("lookupAnswer with an unknown parser succeeded")
 	}

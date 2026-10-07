@@ -6,7 +6,7 @@ package net
 
 import (
 	"errors"
-	"internal/hostsfile"
+	"internal/netconf"
 	"internal/testlog"
 	"io/fs"
 	"sync"
@@ -16,7 +16,7 @@ import (
 const cacheMaxAge = 5 * time.Second
 
 func parseLiteralIP(addr string) string {
-	return hostsfile.AddrKey(addr)
+	return netconf.AddrKey(addr)
 }
 
 // hosts contains known host entries.
@@ -27,7 +27,7 @@ var hosts struct {
 	// name. It would be part of DNS labels, a FQDN or an absolute
 	// FQDN.
 	// For now the key is converted to lower case for convenience.
-	byName map[string]hostsfile.ByName
+	byName map[string]netconf.ByName
 
 	// Key for the list of host names must be a literal IP address
 	// including IPv6 address with zone identifier.
@@ -63,11 +63,11 @@ func readHosts() {
 		}
 	}
 
-	hs := make(map[string]hostsfile.ByName)
+	hs := make(map[string]netconf.ByName)
 	is := make(map[string][]string)
 	if file != nil {
 		defer file.close()
-		hs, is = hostsfile.Read(file.file)
+		hs, is = netconf.ReadHosts(file.file)
 	}
 	// Update the data cache.
 	hosts.expire = now.Add(cacheMaxAge)
@@ -85,7 +85,7 @@ func lookupStaticHost(host string) ([]string, string) {
 	testlog.Lookup("hostsname", hostsFilePath, host)
 	readHosts()
 	if len(hosts.byName) != 0 {
-		if byName, ok := hosts.byName[hostsfile.NameKey(host)]; ok {
+		if byName, ok := hosts.byName[netconf.NameKey(host)]; ok {
 			ipsCp := make([]string, len(byName.Addrs))
 			copy(ipsCp, byName.Addrs)
 			return ipsCp, byName.Canonical
