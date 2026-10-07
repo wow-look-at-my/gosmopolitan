@@ -1167,11 +1167,22 @@ func (t *tester) registerTests() {
 			// same packages, the same binary, the same results. It shares that
 			// snapshot's module cache, so a test that reads a file there reads
 			// it at the same path, and runs once the snapshot's own run ends.
+			//
+			// The module cache is also where the crypto tests download their
+			// test vectors (cryptotest.FetchModule), and a test result's key
+			// names each file the test opened. A result comes from the cache
+			// only where that path is the same on every run, which a path
+			// under GOROOT is and one under the per-run workdir is not.
 			module := fipsModule(fipsDir, version)
 			snapshot := &goTest{
 				variant: "gofips140-" + version,
 				pkg:     "crypto/...",
-				env:     []string{"GOFIPS140=" + version, "GOMODCACHE=" + filepath.Join(workdir, "fips-"+module)},
+				env: []string{
+					"GOFIPS140=" + version,
+					"GOMODCACHE=" + filepath.Join(goroot, "pkg/obj/fips140", module),
+					// Writable, so the tree a checkout keeps can be deleted.
+					"GOFLAGS=" + strings.TrimSpace(os.Getenv("GOFLAGS")+" -modcacherw"),
+				},
 				// A snapshot is upstream's frozen module. Nobody can add a
 				// t.Serial to its tests, so it is vetted with upstream's list.
 				vet: upstreamTestVet,
@@ -1435,28 +1446,19 @@ func (t *tester) registerTests() {
 
 	// Runtime CPU tests.
 	if !t.compileOnly && t.hasParallelism() {
-		// A whole runtime run takes most of its deadline with a core to
-		// itself. Four together on a 3-core runner starve each other, so these
-		// and gccheckmark run two at a time: each waits for the one two ahead.
-		deadlineBound := []string{testName("runtime", "gccheckmark")}
 		for i := 1; i <= 4; i *= 2 {
-			cpuTest := &goTest{
-				variant: "cpu" + strconv.Itoa(i),
-				timeout: 300 * time.Second,
-				cpu:     strconv.Itoa(i),
-				gcflags: gogcflags,
-				// We set GOMAXPROCS=2 in addition to -cpu=1,2,4 in order to test runtime bootstrap code,
-				// creation of first goroutines and first garbage collections in the parallel setting.
-				env:    []string{"GOMAXPROCS=2"},
-				pkg:    "runtime",
-				shared: true,
-				first:  true,
-			}
-			if len(deadlineBound) >= 2 {
-				cpuTest.after = deadlineBound[len(deadlineBound)-2]
-			}
-			deadlineBound = append(deadlineBound, testName(cpuTest.pkg, cpuTest.variant))
-			t.registerTest(fmt.Sprintf("GOMAXPROCS=2 runtime -cpu=%d", i), cpuTest)
+			t.registerTest(fmt.Sprintf("GOMAXPROCS=2 runtime -cpu=%d", i),
+				&goTest{
+					variant: "cpu" + strconv.Itoa(i),
+					timeout: 300 * time.Second,
+					cpu:     strconv.Itoa(i),
+					gcflags: gogcflags,
+					// We set GOMAXPROCS=2 in addition to -cpu=1,2,4 in order to test runtime bootstrap code,
+					// creation of first goroutines and first garbage collections in the parallel setting.
+					env:    []string{"GOMAXPROCS=2"},
+					pkg:    "runtime",
+					shared: true,
+				})
 		}
 	}
 
