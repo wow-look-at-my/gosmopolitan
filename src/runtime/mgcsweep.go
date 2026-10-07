@@ -25,6 +25,7 @@
 package runtime
 
 import (
+	"internal/goarch"
 	"internal/runtime/atomic"
 	"unsafe"
 )
@@ -552,14 +553,31 @@ func (span *mspan) sweptAt(sweepgen uint32) bool {
 	return spangen == sweepgen || spangen == sweepgen+3
 }
 
+// singleThreadedRuntime is true on the wasm ports that run every
+// goroutine on one thread. There a wait on state another thread would
+// change can never end: the holder is the waiter's own thread.
+const singleThreadedRuntime = goarch.IsWasm == 1 && !wasmThreadsEnabled
+
+// sweepWaitDeadlocks reports whether waiting for span to be swept in
+// sweep generation sweepgen could never end. On a single-threaded
+// runtime a sweeper runs without preemption, so a span still being swept
+// is held by the caller's own thread.
+func (span *mspan) sweepWaitDeadlocks(sweepgen uint32) bool {
+	return singleThreadedRuntime && !span.sweptAt(sweepgen)
+}
+
 // waitSwept sleeps the M until another sweeper finishes sweeping span
 // and calls publishSwept on it. The caller is non-preemptible, so the M
-// keeps its P and sleeps in the OS on its own note.
+// keeps its P and sleeps in the OS on its own note. A wait that could
+// never end throws instead.
 //
 // The waiter adds itself to the count before it reads span.sweepgen,
 // and publishSwept stores span.sweepgen before it reads the count, so
 // either the waiter sees the span swept or publishSwept sees the waiter.
 func (span *mspan) waitSwept(sweepgen uint32) {
+	if span.sweepWaitDeadlocks(sweepgen) {
+		throw("ensureSwept: the span is being swept on this thread, the only one")
+	}
 	self := getg().m
 	waiters := &sweep.spanWaiters
 	for {

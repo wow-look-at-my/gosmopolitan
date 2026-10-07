@@ -850,10 +850,22 @@ func (stats *consistentHeapStats) wakeReader(proc *p) {
 	}
 }
 
+// writerWaitDeadlocks reports whether waiting for proc's writer could
+// never end. On a single-threaded runtime a write section runs without
+// preemption, so a section still open is held by the reader's own
+// thread.
+func (stats *consistentHeapStats) writerWaitDeadlocks(proc *p) bool {
+	return singleThreadedRuntime && proc.statsSeq.Load()&statsSeqWriting != 0
+}
+
 // waitWriter returns once proc has no writer between acquire and
 // release. While one is, read sleeps in the OS on stats.readerWake, and
-// the writer's release wakes it.
+// the writer's release wakes it. A wait that could never end throws
+// instead.
 func (stats *consistentHeapStats) waitWriter(proc *p) {
+	if stats.writerWaitDeadlocks(proc) {
+		throw("consistentHeapStats.read: a write section is open on this thread, the only one")
+	}
 	for {
 		seq := proc.statsSeq.Load()
 		if seq&statsSeqWriting == 0 {

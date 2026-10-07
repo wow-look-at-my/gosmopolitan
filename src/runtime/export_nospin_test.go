@@ -41,6 +41,30 @@ func (claim SweepClaim) EnsureSwept() {
 	releasem(pinned)
 }
 
+// WaitDeadlocks reports whether ensureSwept on the claimed span would
+// throw rather than wait, because no other thread exists to finish it.
+func (claim SweepClaim) WaitDeadlocks() bool {
+	return claim.span.sweepWaitDeadlocks(claim.gen)
+}
+
+// SingleThreadedRuntime is true on the wasm ports that run every
+// goroutine on one thread.
+const SingleThreadedRuntime = singleThreadedRuntime
+
+// HeapStatsWriterWaitDeadlocks reports whether a heap-stats read would
+// throw rather than wait on the calling goroutine's P, while a write
+// section is open on it and after the section closes.
+func HeapStatsWriterWaitDeadlocks() (open, closed bool) {
+	pinned := acquirem()
+	proc := pinned.p.ptr()
+	memstats.heapStats.acquire()
+	open = memstats.heapStats.writerWaitDeadlocks(proc)
+	memstats.heapStats.release()
+	closed = memstats.heapStats.writerWaitDeadlocks(proc)
+	releasem(pinned)
+	return open, closed
+}
+
 // Publish marks the claimed span swept again, the way sweep does.
 func (claim SweepClaim) Publish() {
 	claim.span.publishSwept(claim.gen)
