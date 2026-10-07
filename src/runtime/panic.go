@@ -1369,7 +1369,7 @@ func recovery(gp *g) {
 			break
 		}
 
-		runningPanicDefers.Add(-1)
+		panicDefersDone()
 	}
 	gp._panic = p
 
@@ -1503,7 +1503,7 @@ func fatalpanic(msgs *_panic) {
 			// startpanic_m set panicking, which will
 			// block main from exiting, so now OK to
 			// decrement runningPanicDefers.
-			runningPanicDefers.Add(-1)
+			panicDefersDone()
 
 			printpanics(msgs)
 		}

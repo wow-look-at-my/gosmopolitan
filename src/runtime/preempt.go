@@ -110,16 +110,22 @@ func suspendG(gp *g) suspendGState {
 		throw("suspendG from non-preemptible goroutine")
 	}
 
-	// See https://golang.org/cl/21503 for justification of the yield delay.
-	const yieldDelay = 10 * 1000
-	var nextYield int64
+	// A preemption signal that lands at an unsafe point leaves gp running.
+	// While gp runs, the M sleeps until gp's status changes or the resend
+	// interval passes, and the interval doubles on each resend up to
+	// preemptResendMax.
+	const (
+		preemptResendMin = 10 * 1000
+		preemptResendMax = 1000 * 1000
+	)
+	resendWait := int64(preemptResendMin)
+	var nextPreemptM int64
 
 	// Drive the goroutine to a preemption point.
 	stopped := false
 	var asyncM *m
 	var asyncGen uint32
-	var nextPreemptM int64
-	for i := 0; ; i++ {
+	for {
 		switch s := readgstatus(gp); s {
 		default:
 			if s&_Gscan != 0 {
@@ -128,7 +134,8 @@ func suspendG(gp *g) suspendGState {
 				//
 				// TODO: It would be nicer if we could
 				// coalesce suspends.
-				break
+				gStatusWait(gp, s, -1)
+				continue
 			}
 
 			dumpgstatus(gp)
@@ -143,15 +150,17 @@ func suspendG(gp *g) suspendGState {
 			return suspendGState{dead: true}
 
 		case _Gcopystack:
-			// The stack is being copied. We need to wait
-			// until this is done.
+			// The stack is being copied. Sleep until the
+			// copy ends.
+			gStatusWait(gp, s, -1)
+			continue
 
 		case _Gpreempted:
 			// We (or someone else) suspended the G. Claim
 			// ownership of it by transitioning it to
 			// _Gwaiting.
 			if !casGFromPreempted(gp, _Gpreempted, _Gwaiting) {
-				break
+				continue
 			}
 
 			// We stopped the G, so we have to ready it later.
@@ -165,7 +174,7 @@ func suspendG(gp *g) suspendGState {
 			// This may race with execution or readying of gp.
 			// The scan bit keeps it from transition state.
 			if !castogscanstatus(gp, s, s|_Gscan) {
-				break
+				continue
 			}
 
 			// Clear the preemption request. It's safe to
@@ -190,74 +199,73 @@ func suspendG(gp *g) suspendGState {
 			return suspendGState{g: gp, stopped: stopped}
 
 		case _Grunning:
-			// Optimization: if there is already a pending preemption request
-			// (from the previous loop iteration), don't bother with the atomics.
-			if gp.preemptStop && gp.preempt && gp.stackguard0 == stackPreempt && asyncM == gp.m && asyncM.preemptGen.Load() == asyncGen {
-				break
-			}
+			// A request from an earlier pass is still pending unless gp
+			// moved to another M or that M's signal handler acknowledged
+			// the asynchronous preemption without stopping gp.
+			pending := gp.preemptStop && gp.preempt && gp.stackguard0 == stackPreempt && asyncM == gp.m && asyncM.preemptGen.Load() == asyncGen
+			if !pending {
+				// Temporarily block state transitions.
+				if !castogscanstatus(gp, _Grunning, _Gscanrunning) {
+					continue
+				}
 
-			// Temporarily block state transitions.
-			if !castogscanstatus(gp, _Grunning, _Gscanrunning) {
-				break
-			}
+				// Request synchronous preemption.
+				gp.preemptStop = true
+				gp.preempt = true
+				gp.stackguard0 = stackPreempt
+				if goarch.IsWasm == 1 {
+					// Wasm has no async preemption; the compiler-inserted
+					// loop backedge checks compare sp against stackguard1,
+					// so they must be armed too or a call-free loop on
+					// another thread (GOWASM=threads) never reaches a
+					// safe point and suspendG never returns. Mirrors
+					// preemptone.
+					gp.stackguard1 = stackPreempt
+				}
 
-			// Request synchronous preemption.
-			gp.preemptStop = true
-			gp.preempt = true
-			gp.stackguard0 = stackPreempt
-			if goarch.IsWasm == 1 {
-				// Wasm has no async preemption; the compiler-inserted
-				// loop backedge checks compare sp against stackguard1,
-				// so they must be armed too or a call-free loop on
-				// another thread (GOWASM=threads) never reaches a
-				// safe point and suspendG spins forever. Mirrors
-				// preemptone.
-				gp.stackguard1 = stackPreempt
-			}
+				// Prepare for asynchronous preemption.
+				asyncM2 := gp.m
+				asyncGen2 := asyncM2.preemptGen.Load()
+				needAsync := asyncM != asyncM2 || asyncGen != asyncGen2
+				asyncM = asyncM2
+				asyncGen = asyncGen2
 
-			// Prepare for asynchronous preemption.
-			asyncM2 := gp.m
-			asyncGen2 := asyncM2.preemptGen.Load()
-			needAsync := asyncM != asyncM2 || asyncGen != asyncGen2
-			asyncM = asyncM2
-			asyncGen = asyncGen2
+				casfrom_Gscanstatus(gp, _Gscanrunning, _Grunning)
 
-			casfrom_Gscanstatus(gp, _Gscanrunning, _Grunning)
-
-			// Send asynchronous preemption. We do this
-			// after CASing the G back to _Grunning
-			// because preemptM may be synchronous and we
-			// don't want to catch the G just spinning on
-			// its status.
-			if preemptMSupported && debug.asyncpreemptoff == 0 && needAsync {
-				// Rate limit preemptM calls. This is
-				// particularly important on Windows
-				// where preemptM is actually
-				// synchronous and the spin loop here
-				// can lead to live-lock.
-				now := nanotime()
-				if now >= nextPreemptM {
-					nextPreemptM = now + yieldDelay/2
-					preemptM(asyncM)
+				// Send asynchronous preemption. We do this
+				// after CASing the G back to _Grunning
+				// because preemptM may be synchronous and we
+				// don't want to catch the G just sleeping on
+				// its status.
+				if preemptMSupported && debug.asyncpreemptoff == 0 && needAsync {
+					// Rate limit preemptM calls. This is
+					// particularly important on Windows
+					// where preemptM is actually
+					// synchronous and a resend on every
+					// wakeup can lead to live-lock.
+					now := nanotime()
+					if now >= nextPreemptM {
+						nextPreemptM = now + resendWait
+						resendWait = min(2*resendWait, preemptResendMax)
+						preemptM(asyncM)
+					}
 				}
 			}
-		}
 
-		// TODO: Don't busy wait. This loop should really only
-		// be a simple read/decide/CAS loop that only fails if
-		// there's an active race. Once the CAS succeeds, we
-		// should queue up the preemption (which will require
-		// it to be reliable in the _Grunning case, not
-		// best-effort) and then sleep until we're notified
-		// that the goroutine is suspended.
-		if i == 0 {
-			nextYield = nanotime() + yieldDelay
-		}
-		if nanotime() < nextYield {
-			procyield(10)
-		} else {
-			osyield()
-			nextYield = nanotime() + yieldDelay/2
+			// Sleep until gp leaves _Grunning: it stops at a
+			// preemption point, blocks, or enters a system call, and
+			// that transition wakes this M. With asynchronous
+			// preemption in play, also wake when the next resend is
+			// due.
+			if preemptMSupported && debug.asyncpreemptoff == 0 {
+				wait := nextPreemptM - nanotime()
+				if wait <= 0 {
+					wait = preemptResendMin
+				}
+				gStatusWait(gp, _Grunning, wait)
+			} else {
+				gStatusWait(gp, _Grunning, -1)
+			}
 		}
 	}
 }

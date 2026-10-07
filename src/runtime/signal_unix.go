@@ -356,7 +356,7 @@ func doSigPreempt(gp *g, ctxt *sigctxt) {
 	gp.m.signalPending.Store(0)
 
 	if hostIsDarwin() {
-		pendingPreemptSignals.Add(-1)
+		preemptSignalDone()
 	}
 }
 
@@ -456,7 +456,7 @@ func sigtrampgo(sig uint32, info *siginfo, ctx unsafe.Pointer) {
 			// The default behavior for sigPreempt is to ignore
 			// the signal, so badsignal will be a no-op anyway.
 			if hostIsDarwin() {
-				pendingPreemptSignals.Add(-1)
+				preemptSignalDone()
 			}
 			return
 		}

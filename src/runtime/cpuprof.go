@@ -134,7 +134,7 @@ func (p *cpuProfile) add(tagPtr *unsafe.Pointer, stk []uintptr) {
 		cpuprof.log.write(tagPtr, nanotime(), hdr[:], stk)
 	}
 
-	prof.signalLock.Store(0)
+	profSignalUnlock()
 }
 
 // addNonGo adds the non-Go stack trace to the profile.
@@ -165,7 +165,7 @@ func (p *cpuProfile) addNonGo(stk []uintptr) {
 		cpuprof.lostExtra++
 	}
 
-	prof.signalLock.Store(0)
+	profSignalUnlock()
 }
 
 // addExtra adds the "extra" profiling events,
