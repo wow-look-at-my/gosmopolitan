@@ -429,6 +429,9 @@ var depsRules = `
 	os, net/netip
 	< internal/routebsd;
 
+	io, net/netip
+	< internal/hostsfile;
+
 	# net is unavoidable when doing any networking,
 	# so large dependencies must be kept out.
 	# This is a long-looking list but most of these
@@ -437,6 +440,7 @@ var depsRules = `
 	golang.org/x/net/dns/dnsmessage,
 	golang.org/x/net/lif,
 	internal/godebug,
+	internal/hostsfile,
 	internal/nettrace,
 	internal/poll,
 	internal/routebsd,

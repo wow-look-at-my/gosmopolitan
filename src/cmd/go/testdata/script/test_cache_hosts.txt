@@ -1,0 +1,32 @@
+# A test that resolves a name through the hosts file reads the answer for
+# that name, not the file. The other lines differ from host to host, so the
+# file stands in the inputs as the lookup, not as a stat and an open.
+
+env GOCACHE=$WORK/gocache
+env GODEBUG=gocachetest=1
+go test -run=TestResolvesLocalhost .
+stdout '^ok\s+m\s+[0-9.]+s$'
+stderr 'testcache: m: input lookup hostsname "localhost" \S+ [0-9a-f]+$'
+! stderr 'testcache: m: input (stat|open) \S*hosts [0-9a-f]+$'
+
+go test -run=TestResolvesLocalhost .
+stdout '^ok\s+m\s+\(cached\)$'
+
+-- go.mod --
+module m
+
+go 1.27
+-- m_test.go --
+package m
+
+import (
+	"context"
+	"net"
+	"testing"
+)
+
+func TestResolvesLocalhost(t *testing.T) {
+	resolver := &net.Resolver{PreferGo: true}
+	addrs, err := resolver.LookupHost(context.Background(), "localhost")
+	t.Log(addrs, err)
+}

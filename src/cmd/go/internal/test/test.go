@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"internal/coverage"
+	"internal/hostsfile"
 	"internal/platform"
 	"io"
 	"io/fs"
@@ -2517,6 +2518,9 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, []byte
 		fmt.Fprintf(os.Stderr, "testcache: %s: GODEBUG=%q\n", a.Package.ImportPath, os.Getenv("GODEBUG"))
 	}
 	pwd := a.Package.Dir
+	// parsed counts, by op and absolute name, the stats and opens a parser
+	// announced. Each cancels one logged line of its own op and name.
+	parsed := make(map[string]int)
 	for _, line := range bytes.Split(testlog, []byte("\n")) {
 		if len(line) == 0 {
 			continue
@@ -2546,9 +2550,38 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, []byte
 				break
 			}
 			fmt.Fprintf(h, "chdir %s %x\n", name, hashStat(name))
+		case "parse":
+			parseOp, file, ok := strings.Cut(name, " ")
+			if !ok || (parseOp != "stat" && parseOp != "open") {
+				return cache.ActionID{}, nil, fmt.Errorf("%w: %q", errBadTestInputs, line)
+			}
+			if !filepath.IsAbs(file) {
+				file = filepath.Join(pwd, file)
+			}
+			parsed[parseOp+" "+file]++
+		case "lookup":
+			kind, file, query, err := parseLookup(name)
+			if err != nil {
+				return cache.ActionID{}, nil, fmt.Errorf("%w: %q", errBadTestInputs, line)
+			}
+			if !filepath.IsAbs(file) {
+				file = filepath.Join(pwd, file)
+			}
+			if isRunScratch(file) || isBuildCache(file) {
+				break
+			}
+			answer, err := lookupAnswer(kind, file, query)
+			if err != nil {
+				return cache.ActionID{}, nil, fmt.Errorf("%w: %q: %v", errBadTestInputs, line, err)
+			}
+			fmt.Fprintf(h, "lookup %s %s %s %x\n", kind, strconv.Quote(query), file, answer)
 		case "stat":
 			if !filepath.IsAbs(name) {
 				name = filepath.Join(pwd, name)
+			}
+			if parsed["stat "+name] > 0 {
+				parsed["stat "+name]--
+				break
 			}
 			if isRunScratch(name) || isBuildCache(name) {
 				break
@@ -2561,6 +2594,10 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, []byte
 		case "open":
 			if !filepath.IsAbs(name) {
 				name = filepath.Join(pwd, name)
+			}
+			if parsed["open "+name] > 0 {
+				parsed["open "+name]--
+				break
 			}
 			if isRunScratch(name) || isBuildCache(name) {
 				break
@@ -2580,6 +2617,67 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, []byte
 		}
 	}
 	return sum.Sum(), lines.Bytes(), nil
+}
+
+// parseLookup splits a lookup line's name into its parser kind, the file and
+// the query, which is quoted and stands between the two.
+func parseLookup(name string) (kind, file, query string, err error) {
+	kind, rest, ok := strings.Cut(name, " ")
+	if !ok {
+		return "", "", "", errBadTestInputs
+	}
+	quoted, err := strconv.QuotedPrefix(rest)
+	if err != nil {
+		return "", "", "", err
+	}
+	query, err = strconv.Unquote(quoted)
+	if err != nil {
+		return "", "", "", err
+	}
+	file, ok = strings.CutPrefix(rest[len(quoted):], " ")
+	if !ok || file == "" {
+		return "", "", "", errBadTestInputs
+	}
+	return kind, file, query, nil
+}
+
+// lookupAnswer hashes what file answers query through the parser kind
+// names, which is all a lookup takes from the file.
+func lookupAnswer(kind, file, query string) (cache.ActionID, error) {
+	h := cache.NewHash("lookup")
+	switch kind {
+	default:
+		return cache.ActionID{}, fmt.Errorf("unknown lookup kind %q", kind)
+	case "hostsname", "hostsaddr":
+		byName, byAddr, err := readHostsFile(file)
+		if err != nil {
+			fmt.Fprintf(h, "err %v\n", err)
+			return h.Sum(), nil
+		}
+		if kind == "hostsname" {
+			entry := byName[hostsfile.NameKey(query)]
+			fmt.Fprintf(h, "addrs %q canonical %q\n", entry.Addrs, entry.Canonical)
+			return h.Sum(), nil
+		}
+		addr := hostsfile.AddrKey(query)
+		fmt.Fprintf(h, "addr %q names %q\n", addr, byAddr[addr])
+		return h.Sum(), nil
+	}
+}
+
+// readHostsFile reads a hosts file as package net does. A file that is
+// missing or unreadable answers nothing, and any other error is the answer.
+func readHostsFile(file string) (map[string]hostsfile.ByName, map[string][]string, error) {
+	hosts, err := os.Open(file)
+	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, fs.ErrPermission) {
+		return nil, nil, nil
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	defer hosts.Close()
+	byName, byAddr := hostsfile.Read(hosts)
+	return byName, byAddr, nil
 }
 
 // maxTestlogs bounds how many distinct testlogs one test binary keeps.
