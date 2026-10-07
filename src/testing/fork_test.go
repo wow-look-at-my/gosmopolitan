@@ -493,6 +493,35 @@ func TestTakeForkLogRefusesALogItCannotRead(t *T) {
 	}
 }
 
+// TestWriteTestLogReplacesTheFileWhole: a child that ran with the same
+// -test.testlogfile left a longer log there. The run's own log replaces all
+// of it rather than writing over its start.
+func TestWriteTestLogReplacesTheFileWhole(t *T) {
+	file := filepath.Join(t.TempDir(), "testlog.txt")
+	child := "# test log\nopen /a/much/longer/path/than/the/run/reads\nopen /another\n"
+	if err := os.WriteFile(file, []byte(child), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	own := "# test log\ngetenv HOME\n"
+	if err := writeTestLog(file, []byte(own)); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != own {
+		t.Errorf("the test log reads %q, want %q", got, own)
+	}
+	entries, err := os.ReadDir(filepath.Dir(file))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Errorf("the directory holds %d files, want the log alone", len(entries))
+	}
+}
+
 func TestForkRunPattern(t *T) {
 	for _, tc := range []struct{ name, want string }{
 		{"TestFoo", "^TestFoo$"},

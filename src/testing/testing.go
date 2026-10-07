@@ -514,9 +514,9 @@ var (
 
 	haveExamples bool // are there examples?
 
-	cpuList     []int
-	testlogFile *os.File
-	artifactDir string
+	cpuList       []int
+	testlogBuffer bytes.Buffer // the test log, written to -test.testlogfile at the end
+	artifactDir   string
 
 	numFailed atomic.Uint32 // number of test failures
 
@@ -3463,22 +3463,12 @@ func (m *M) before() {
 	if *testlog != "" {
 		// Note: Not using toOutputDir.
 		// This file is for use by cmd/go, not users.
-		var f *os.File
-		var err error
-		if m.numRun == 1 {
-			f, err = os.Create(*testlog)
-		} else {
-			f, err = os.OpenFile(*testlog, os.O_WRONLY, 0)
-			if err == nil {
-				f.Seek(0, io.SeekEnd)
-			}
-		}
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "testing: %s\n", err)
-			os.Exit(2)
-		}
-		m.deps.StartTestLog(f)
-		testlogFile = f
+		//
+		// The log is kept here and written whole at the end. A test that
+		// starts this binary again with its own arguments hands the child this
+		// same file, and a child that truncated it under a log being streamed
+		// left cmd/go a file with a hole where the start of this run's log was.
+		m.deps.StartTestLog(&testlogBuffer)
 	}
 	if *panicOnExit0 {
 		m.deps.SetPanicOnExit0(true)
@@ -3499,13 +3489,26 @@ func (m *M) after() {
 	}
 }
 
+// writeTestLog puts log at file in one step: it is written beside it under a
+// name this process owns, then renamed over it. A child this binary started
+// with the same arguments writes the same file, and whichever process ends
+// last leaves its log whole. This run waits for its children, so that is this
+// run.
+func writeTestLog(file string, log []byte) error {
+	written := file + "." + strconv.Itoa(os.Getpid())
+	if err := os.WriteFile(written, log, 0o666); err != nil {
+		return err
+	}
+	return os.Rename(written, file)
+}
+
 func (m *M) writeProfiles() {
 	if *testlog != "" {
 		if err := m.deps.StopTestLog(); err != nil {
 			fmt.Fprintf(os.Stderr, "testing: can't write %s: %s\n", *testlog, err)
 			os.Exit(2)
 		}
-		if err := testlogFile.Close(); err != nil {
+		if err := writeTestLog(*testlog, testlogBuffer.Bytes()); err != nil {
 			fmt.Fprintf(os.Stderr, "testing: can't write %s: %s\n", *testlog, err)
 			os.Exit(2)
 		}
