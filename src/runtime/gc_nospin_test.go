@@ -202,7 +202,9 @@ var nospinSink []byte
 
 // TestEnsureSweptSleepsUntilPublished pins that ensureSwept on a span
 // another sweeper owns sleeps until that sweeper publishes the span, and
-// that the publish is what wakes it.
+// that the publish is what wakes it. On a single-threaded runtime no
+// other thread can own the span, so the same claim is a self-deadlock
+// that ensureSwept throws on, and the publish clears it.
 func TestEnsureSweptSleepsUntilPublished(t *testing.T) {
 	t.Serial() // A GC while the span is claimed would find it mid-sweep.
 	defer runtime.GOMAXPROCS(widenProcs())
@@ -211,6 +213,21 @@ func TestEnsureSweptSleepsUntilPublished(t *testing.T) {
 
 	nospinSink = make([]byte, 128<<10)
 	claim := runtime.ClaimSweptSpan(unsafe.Pointer(&nospinSink[0]))
+	if runtime.SingleThreadedRuntime {
+		if !claim.WaitDeadlocks() {
+			t.Error("a span claimed on the only thread does not read as a self-deadlock")
+		}
+		claim.Publish()
+		if claim.WaitDeadlocks() {
+			t.Error("a published span still reads as a self-deadlock")
+		}
+		claim.EnsureSwept()
+		nospinSink = nil
+		return
+	}
+	if claim.WaitDeadlocks() {
+		t.Fatal("a span claimed with other threads available reads as a self-deadlock")
+	}
 	var published atomic.Bool
 	go func() {
 		for runtime.SpanSweepWaiters() == 0 {
@@ -231,11 +248,26 @@ func TestEnsureSweptSleepsUntilPublished(t *testing.T) {
 
 // TestHeapStatsReadSleepsOnWriter pins that a heap-stats reader facing
 // a P inside a write section marks that P and sleeps until the writer's
-// release, rather than spinning on its sequence number.
+// release, rather than spinning on its sequence number. On a
+// single-threaded runtime a section open while the stats are read is the
+// reader's own, so read throws on it rather than waiting.
 func TestHeapStatsReadSleepsOnWriter(t *testing.T) {
 	t.Serial() // A stop-the-world while the write section is open would wait on it.
 	defer runtime.GOMAXPROCS(widenProcs())
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	open, closed := runtime.HeapStatsWriterWaitDeadlocks()
+	if closed {
+		t.Error("a closed write section reads as a self-deadlock")
+	}
+	if runtime.SingleThreadedRuntime {
+		if !open {
+			t.Error("a write section open on the only thread does not read as a self-deadlock")
+		}
+		return
+	}
+	if open {
+		t.Error("a write section open with other threads available reads as a self-deadlock")
+	}
 	if !runtime.HeapStatsReadSleepsOnWriter(int64(time.Minute)) {
 		t.Fatal("the reader did not sleep on the open write section until its release")
 	}
