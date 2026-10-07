@@ -49,6 +49,22 @@ type sweepdata struct {
 	// Reset at mark termination.
 	// Used by mheap.nextSpanForSweep.
 	centralIndex sweepClass
+
+	// spanWaiters holds the Ms asleep in ensureSwept on a span another
+	// sweeper owns. publishSwept wakes those waiting on the span it
+	// publishes.
+	spanWaiters struct {
+		lock  mutex
+		head  muintptr
+		count atomic.Uint32 // Ms on the list, read without the lock
+	}
+}
+
+// sweepWaiter is an M's entry on sweep.spanWaiters.
+type sweepWaiter struct {
+	span *mspan
+	next muintptr
+	wake note
 }
 
 // sweepClass is a spanClass and one bit to represent whether we're currently
@@ -133,6 +149,16 @@ type activeSweep struct {
 	// The rest of the bits are a counter, indicating the
 	// number of outstanding concurrent sweepers.
 	state atomic.Uint32
+
+	// doneSema admits one goroutine at a time to waitDone. gcinit
+	// sets it to 1.
+	doneSema uint32
+
+	// doneWaiting is 1 while the goroutine in waitDone sleeps on
+	// doneWake. The end call that finishes sweeping swaps it to 0 and
+	// wakes doneWake.
+	doneWaiting atomic.Uint32
+	doneWake    note
 }
 
 // begin registers a new sweeper. Returns a sweepLocker
@@ -179,9 +205,38 @@ func (a *activeSweep) end(sl sweepLocker) {
 			}
 			// Now that sweeping is completely done, flush remaining cleanups.
 			gcCleanups.flush()
+			if a.doneWaiting.Load() != 0 && a.doneWaiting.CompareAndSwap(1, 0) {
+				notewakeup(&a.doneWake)
+			}
 			return
 		}
 	}
+}
+
+// waitDone blocks the calling goroutine until sweeping is completely
+// done or work.cycles moves past cycle. The goroutine sleeps in the OS
+// on active.doneWake with its P handed off, and the end call that
+// finishes sweeping wakes it. end runs under heap and profiling locks,
+// so it cannot ready a goroutine; a note needs no runtime lock to wake.
+//
+// Every transition of isDone from false to true is an end call: a
+// sweeper marks the queue drained while it is still outstanding, so the
+// last outstanding sweeper's end call takes the state to exactly
+// sweepDrainedMask. A new cycle cannot begin sweep termination before
+// that, so waking there also covers cycle moving on.
+func (active *activeSweep) waitDone(cycle uint32) {
+	semacquire(&active.doneSema)
+	for work.cycles.Load() == cycle && !active.isDone() {
+		noteclear(&active.doneWake)
+		active.doneWaiting.Store(1)
+		if (work.cycles.Load() != cycle || active.isDone()) && active.doneWaiting.CompareAndSwap(1, 0) {
+			// Finished between the check above and the store; no end
+			// call claimed the wakeup.
+			break
+		}
+		notetsleepg(&active.doneWake, -1)
+	}
+	semrelease(&active.doneSema)
 }
 
 // markDrained marks the active sweep cycle as having drained
@@ -485,16 +540,69 @@ func (s *mspan) ensureSwept() {
 		sweep.active.end(sl)
 	}
 
-	// Unfortunately we can't sweep the span ourselves. Somebody else
-	// got to it first. We don't have efficient means to wait, but that's
-	// OK, it will be swept fairly soon.
+	// Somebody else got to the span first. Sleep until its sweeper
+	// publishes it.
+	s.waitSwept(sl.sweepGen)
+}
+
+// sweptAt reports whether span has been swept in sweep generation
+// sweepgen.
+func (span *mspan) sweptAt(sweepgen uint32) bool {
+	spangen := atomic.Load(&span.sweepgen)
+	return spangen == sweepgen || spangen == sweepgen+3
+}
+
+// waitSwept sleeps the M until another sweeper finishes sweeping span
+// and calls publishSwept on it. The caller is non-preemptible, so the M
+// keeps its P and sleeps in the OS on its own note.
+//
+// The waiter adds itself to the count before it reads span.sweepgen,
+// and publishSwept stores span.sweepgen before it reads the count, so
+// either the waiter sees the span swept or publishSwept sees the waiter.
+func (span *mspan) waitSwept(sweepgen uint32) {
+	self := getg().m
+	waiters := &sweep.spanWaiters
 	for {
-		spangen := atomic.Load(&s.sweepgen)
-		if spangen == sl.sweepGen || spangen == sl.sweepGen+3 {
-			break
+		lock(&waiters.lock)
+		waiters.count.Add(1)
+		if span.sweptAt(sweepgen) {
+			waiters.count.Add(-1)
+			unlock(&waiters.lock)
+			return
 		}
-		osyield()
+		noteclear(&self.sweepWait.wake)
+		self.sweepWait.span = span
+		self.sweepWait.next = waiters.head
+		waiters.head.set(self)
+		unlock(&waiters.lock)
+		systemstack(func() {
+			notesleep(&self.sweepWait.wake)
+		})
 	}
+}
+
+// publishSwept marks span swept in sweep generation sweepgen and wakes
+// the Ms waiting for it in waitSwept.
+func (span *mspan) publishSwept(sweepgen uint32) {
+	atomic.Store(&span.sweepgen, sweepgen)
+	waiters := &sweep.spanWaiters
+	if waiters.count.Load() == 0 {
+		return
+	}
+	lock(&waiters.lock)
+	link := &waiters.head
+	for waiter := link.ptr(); waiter != nil; waiter = link.ptr() {
+		if waiter.sweepWait.span != span {
+			link = &waiter.sweepWait.next
+			continue
+		}
+		*link = waiter.sweepWait.next
+		waiter.sweepWait.span = nil
+		waiter.sweepWait.next = 0
+		waiters.count.Add(-1)
+		notewakeup(&waiter.sweepWait.wake)
+	}
+	unlock(&waiters.lock)
 }
 
 // sweep frees or collects finalizers for blocks not marked in the mark phase.
@@ -725,7 +833,7 @@ func (sl *sweepLocked) sweep(preserve bool) bool {
 	// Serialization point.
 	// At this point the mark bits are cleared and allocation ready
 	// to go so release the span.
-	atomic.Store(&s.sweepgen, sweepgen)
+	s.publishSwept(sweepgen)
 
 	if s.isUserArenaChunk {
 		if preserve {

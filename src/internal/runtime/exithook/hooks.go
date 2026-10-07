@@ -28,7 +28,6 @@ type Hook struct {
 }
 
 var (
-	locked  atomic.Int32
 	runGoid atomic.Uint64
 	hooks   []Hook
 	running bool
@@ -39,13 +38,25 @@ var (
 	Throw   func(string)
 )
 
+// locked is a binary semaphore guarding hooks, 1 while no goroutine
+// holds it. A goroutine that finds it held sleeps until the holder
+// releases it.
+var locked uint32 = 1
+
+// semacquire and semrelease are the runtime's semaphore, pushed from
+// package runtime.
+//
+//go:linkname semacquire
+func semacquire(addr *uint32)
+
+//go:linkname semrelease
+func semrelease(addr *uint32)
+
 // Add adds a new exit hook.
 func Add(h Hook) {
-	for !locked.CompareAndSwap(0, 1) {
-		Gosched()
-	}
+	semacquire(&locked)
 	hooks = append(hooks, h)
-	locked.Store(0)
+	semrelease(&locked)
 }
 
 // Run runs the exit hooks.
@@ -54,13 +65,11 @@ func Add(h Hook) {
 // If an exit hook invokes exit in the same goroutine, the goroutine will throw.
 // If an exit hook invokes exit in another goroutine, that exit will block.
 func Run(code int) {
-	for !locked.CompareAndSwap(0, 1) {
-		if Goid() == runGoid.Load() {
-			Throw("exit hook invoked exit")
-		}
-		Gosched()
+	if Goid() == runGoid.Load() {
+		Throw("exit hook invoked exit")
 	}
-	defer locked.Store(0)
+	semacquire(&locked)
+	defer semrelease(&locked)
 	runGoid.Store(Goid())
 	defer runGoid.Store(0)
 
