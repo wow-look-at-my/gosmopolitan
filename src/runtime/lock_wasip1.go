@@ -15,9 +15,6 @@ const (
 	mutex_unlocked = 0
 	mutex_locked   = 1
 
-	active_spin     = 4
-	active_spin_cnt = 30
-
 	mutexMLocksDelta = 16
 )
 

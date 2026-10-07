@@ -18,10 +18,6 @@ const (
 	mutex_locked   = 1
 	mutex_sleeping = 2
 
-	active_spin     = 4
-	active_spin_cnt = 30
-	passive_spin    = 1
-
 	// mutexMLocksDelta is the change in gp.m.locks for each lock/unlock of a mutex.
 	mutexMLocksDelta = 16
 )
@@ -48,6 +44,8 @@ func lock(l *mutex) {
 // This is the classic futex mutex (see lock_futex.go's ancestry): possible
 // lock states are mutex_unlocked, mutex_locked and mutex_sleeping.
 // mutex_sleeping means that there is presumably at least one sleeping thread.
+// A waiter never spins: it marks the lock mutex_sleeping and waits in the
+// futex until unlock2 wakes it.
 func lock2(l *mutex) {
 	gp := getg()
 
@@ -57,45 +55,13 @@ func lock2(l *mutex) {
 	gp.m.locks += mutexMLocksDelta
 
 	// Speculative grab for lock.
-	v := atomic.Xchg(key32(&l.key), mutex_locked)
-	if v == mutex_unlocked {
+	if atomic.Xchg(key32(&l.key), mutex_locked) == mutex_unlocked {
 		return
 	}
 
-	// wait is either MUTEX_LOCKED or MUTEX_SLEEPING depending on whether there is a thread sleeping on this mutex.
-	wait := v
-
-	spin := 0
-	if numCPUStartup > 1 {
-		spin = active_spin
-	}
-	for {
-		// Try for lock, spinning.
-		for i := 0; i < spin; i++ {
-			for l.key == mutex_unlocked {
-				if atomic.Cas(key32(&l.key), mutex_unlocked, wait) {
-					return
-				}
-			}
-			procyield(active_spin_cnt)
-		}
-
-		// Try for lock, rescheduling.
-		for i := 0; i < passive_spin; i++ {
-			for l.key == mutex_unlocked {
-				if atomic.Cas(key32(&l.key), mutex_unlocked, wait) {
-					return
-				}
-			}
-			osyield()
-		}
-
-		// Sleep.
-		v = atomic.Xchg(key32(&l.key), mutex_sleeping)
-		if v == mutex_unlocked {
-			return
-		}
-		wait = mutex_sleeping
+	// Taking the lock as mutex_sleeping is conservative: this M cannot know
+	// whether another waiter is still asleep, so its unlock2 wakes one.
+	for atomic.Xchg(key32(&l.key), mutex_sleeping) != mutex_unlocked {
 		gp.m.blocked = true
 		futexsleep(key32(&l.key), mutex_sleeping, -1)
 		gp.m.blocked = false
