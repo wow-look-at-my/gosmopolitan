@@ -615,6 +615,65 @@ func adjustSignalStack2(sig uint32, sp uintptr, mp *m, ssDisable bool) {
 // GOTRACEBACK=crash when a signal is received.
 var crashing atomic.Int32
 
+// crashGen counts the increments of crashing. The crash thread sleeps
+// until another M's increment wakes it (crashWake). Those Ms run in signal
+// handlers, so the sleep is one a handler can end: crashEvent on hosts
+// whose notes are not async-signal-safe (sigSafeEventNeeded), once
+// crashEventReady says the crash thread created it, and otherwise the
+// port's crashSleep.
+var (
+	crashGen        uint32
+	crashEvent      sigSafeEvent
+	crashEventReady atomic.Uint32
+)
+
+// crashWaitInit prepares the crash thread's sleep. It runs in the crash
+// thread's signal handler, before SIGQUIT is relayed to the other Ms.
+func crashWaitInit() {
+	crashSleepInit()
+	if sigSafeEventNeeded() && crashEvent.init() {
+		crashEventReady.Store(1)
+	}
+}
+
+// crashWake records an increment of crashing and wakes the crash thread.
+func crashWake() {
+	atomic.Xadd(&crashGen, 1)
+	if crashEventReady.Load() != 0 {
+		crashEvent.wake()
+		return
+	}
+	crashWakeSleeper()
+}
+
+// crashWaitForMs blocks the crash thread until every M has taken SIGQUIT,
+// or until no M has taken it for timeout nanoseconds.
+func crashWaitForMs(timeout int64) {
+	deadline := nanotime() + timeout
+	maxCrashing := crashing.Load()
+	for {
+		gen := atomic.Load(&crashGen)
+		count := crashing.Load()
+		if count >= mcount()-int32(extraMLength.Load()) {
+			return
+		}
+		now := nanotime()
+		if count > maxCrashing {
+			// Progress: give the next M the whole timeout again (see issue #64752).
+			maxCrashing = count
+			deadline = now + timeout
+		}
+		if now >= deadline {
+			return
+		}
+		if crashEventReady.Load() != 0 {
+			crashEvent.sleep(deadline - now)
+			continue
+		}
+		crashSleep(gen, deadline-now)
+	}
+}
+
 // testSigtrap and testSigusr1 are used by the runtime tests. If
 // non-nil, it is called on SIGTRAP/SIGUSR1. If it returns true, the
 // normal behavior on this signal is suppressed.
@@ -785,14 +844,15 @@ func sighandler(sig uint32, info *siginfo, ctxt unsafe.Pointer, gp *g) {
 	}
 
 	if docrash {
-		var crashSleepMicros uint32 = 5000
-		var watchdogTimeoutMicros uint32 = 2000 * crashSleepMicros
+		var watchdogTimeoutMicros uint32 = 10000000
 
 		isCrashThread := false
 		if crashing.CompareAndSwap(0, 1) {
 			isCrashThread = true
+			crashWaitInit()
 		} else {
 			crashing.Add(1)
+			crashWake()
 		}
 		if crashing.Load() < mcount()-int32(extraMLength.Load()) {
 			// There are other m's that need to dump their stacks.
@@ -811,21 +871,9 @@ func sighandler(sig uint32, info *siginfo, ctxt unsafe.Pointer, gp *g) {
 			raiseproc(_SIGQUIT)
 		}
 		if isCrashThread {
-			// Sleep for short intervals so that we can crash quickly after all ms have received SIGQUIT.
-			// Reset the timer whenever we see more ms received SIGQUIT
-			// to make it have enough time to crash (see issue #64752).
-			timeout := watchdogTimeoutMicros
-			maxCrashing := crashing.Load()
-			for timeout > 0 && (crashing.Load() < mcount()-int32(extraMLength.Load())) {
-				usleep(crashSleepMicros)
-				timeout -= crashSleepMicros
-
-				if c := crashing.Load(); c > maxCrashing {
-					// We make progress, so reset the watchdog timeout
-					maxCrashing = c
-					timeout = watchdogTimeoutMicros
-				}
-			}
+			// Sleep until every m has received SIGQUIT, woken by each m that
+			// takes it, so that we crash as soon as the last one has.
+			crashWaitForMs(int64(watchdogTimeoutMicros) * 1000)
 		} else {
 			maxCrashing := int32(0)
 			c := crashing.Load()
@@ -974,22 +1022,12 @@ func dieFromSignal(sig uint32) {
 	atomic.Store(&handlingSig[sig], 0)
 	raise(sig)
 
-	// That should have killed us. On some systems, though, raise
-	// sends the signal to the whole process rather than to just
-	// the current thread, which means that the signal may not yet
-	// have been delivered. Give other threads a chance to run and
-	// pick up the signal.
-	osyield()
-	osyield()
-	osyield()
-
-	// If that didn't work, try _SIG_DFL.
+	// That should have killed us. raise sends the signal to this thread
+	// on every port, and sig is unblocked, so it has been delivered by
+	// the time raise returns, as POSIX raise promises: a forwarded
+	// handler ran and returned. Try _SIG_DFL.
 	setsig(sig, _SIG_DFL)
 	raise(sig)
-
-	osyield()
-	osyield()
-	osyield()
 
 	// If we are still somehow running, this probably means we're PID 1
 	// immune to signals with default-terminate. Use a shell convention
@@ -1045,12 +1083,9 @@ func raisebadsignal(sig uint32, c *sigctxt) {
 		return
 	}
 
+	// raise sends the signal to this thread and it is unblocked, so it
+	// has been delivered by the time raise returns.
 	raise(sig)
-
-	// Give the signal a chance to be delivered.
-	// In almost all real cases the program is about to crash,
-	// so sleeping here is not a waste of time.
-	usleep(1000)
 
 	// If the signal didn't cause the program to exit, restore the
 	// Go signal handler and carry on.

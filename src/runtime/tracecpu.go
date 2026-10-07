@@ -237,7 +237,7 @@ func traceCPUSample(gp *g, mp *m, pp *p, stk []uintptr) {
 		// Tracing is disabled, as it turns out. Clear the write flag if necessary
 		// and exit.
 		if locked {
-			mp.trace.writing.Store(false)
+			traceWriterDone(mp)
 		}
 		return
 	}
@@ -260,23 +260,23 @@ func traceCPUSample(gp *g, mp *m, pp *p, stk []uintptr) {
 	}
 	hdr[2] = mp.procid
 
-	// Allow only one writer at a time
-	for !trace.signalLock.CompareAndSwap(0, 1) {
-		// TODO: Is it safe to osyield here? https://go.dev/issue/52672
-		osyield()
+	// Allow only one writer at a time. A signal handler cannot wait for
+	// another writer, so a sample that finds the lock held is counted in
+	// trace.cpuLostContended and dropped.
+	if trace.signalLock.CompareAndSwap(0, 1) {
+		if log := trace.cpuLogWrite[gen%2].Load(); log != nil {
+			// Note: we don't pass a tag pointer here (how should profiling tags
+			// interact with the execution tracer?), but if we did we'd need to be
+			// careful about write barriers. See the long comment in profBuf.write.
+			log.write(nil, int64(now), hdr[:], stk)
+		}
+		trace.signalLock.Store(0)
+	} else {
+		trace.cpuLostContended.Add(1)
 	}
-
-	if log := trace.cpuLogWrite[gen%2].Load(); log != nil {
-		// Note: we don't pass a tag pointer here (how should profiling tags
-		// interact with the execution tracer?), but if we did we'd need to be
-		// careful about write barriers. See the long comment in profBuf.write.
-		log.write(nil, int64(now), hdr[:], stk)
-	}
-
-	trace.signalLock.Store(0)
 
 	// Clear the write flag if we set it earlier.
 	if locked {
-		mp.trace.writing.Store(false)
+		traceWriterDone(mp)
 	}
 }
