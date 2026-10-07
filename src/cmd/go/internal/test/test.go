@@ -7,6 +7,7 @@ package test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"internal/coverage"
@@ -2368,6 +2369,27 @@ func (c *runCache) tryCacheWithID(b *work.Builder, a *work.Action, id string) bo
 	// Parse cached result in preparation for changing run time to "(cached)".
 	// If we can't parse the cached result, don't use it.
 	data, entry, err = cache.GetBytes(cache.Default(), testAndInputKey(testID, testInputsID))
+	if err != nil {
+		// Runs of one binary that differ in their environment read different
+		// files, and the last testlog written belongs to whichever ran last.
+		// Every other testlog this binary has written is tried before a miss.
+		for _, other := range otherTestlogs(testID, inputList) {
+			otherID, otherLines, otherErr := computeTestInputsID(a, other)
+			if otherErr != nil {
+				continue
+			}
+			otherData, otherEntry, getErr := cache.GetBytes(cache.Default(), testAndInputKey(testID, otherID))
+			if getErr != nil {
+				continue
+			}
+			if cache.DebugTest {
+				fmt.Fprintf(os.Stderr, "testcache: %s: an earlier testlog matches, input ID %x\n", a.Package.ImportPath, otherID)
+			}
+			inputList, testInputsID, inputLines = other, otherID, otherLines
+			data, entry, err = otherData, otherEntry, nil
+			break
+		}
+	}
 
 	// Merge cached cover profile data to cover profile.
 	var cpData string
@@ -2440,7 +2462,7 @@ func (c *runCache) tryCacheWithID(b *work.Builder, a *work.Action, id string) bo
 			profile, readErr = os.ReadFile(cpData)
 		}
 		if readErr == nil {
-			cache.PutNoVerify(cache.Default(), c.id1, bytes.NewReader(inputList))
+			saveTestlog(c.id1, inputList)
 			cache.PutNoVerify(cache.Default(), inputLinesKey(c.id1), bytes.NewReader(inputLines))
 			cache.PutNoVerify(cache.Default(), testAndInputKey(c.id1, testInputsID), bytes.NewReader(data))
 			if testCoverProfile != "" || c.covMeta != (cache.ActionID{}) {
@@ -2558,6 +2580,61 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, []byte
 		}
 	}
 	return sum.Sum(), lines.Bytes(), nil
+}
+
+// maxTestlogs bounds how many distinct testlogs one test binary keeps.
+const maxTestlogs = 16
+
+// testlogsKey is where the digests of every distinct testlog written under
+// testID are kept, newest first, one hex digest a line.
+func testlogsKey(testID cache.ActionID) cache.ActionID {
+	return cache.Subkey(testID, "testlogs")
+}
+
+// testlogDigestKey is where the testlog with the given digest is kept.
+func testlogDigestKey(testID cache.ActionID, digest string) cache.ActionID {
+	return cache.Subkey(testID, "testlog:"+digest)
+}
+
+// saveTestlog writes testlog as the latest under testID, and adds it to the
+// testlogs a lookup under testID tries.
+func saveTestlog(testID cache.ActionID, testlog []byte) {
+	cache.PutNoVerify(cache.Default(), testID, bytes.NewReader(testlog))
+	digest := fmt.Sprintf("%x", sha256.Sum256(testlog))
+	cache.PutNoVerify(cache.Default(), testlogDigestKey(testID, digest), bytes.NewReader(testlog))
+	digests := []string{digest}
+	saved, _, _ := cache.GetBytes(cache.Default(), testlogsKey(testID))
+	for line := range strings.Lines(string(saved)) {
+		line = strings.TrimSpace(line)
+		if line == "" || line == digest || len(digests) == maxTestlogs {
+			continue
+		}
+		digests = append(digests, line)
+	}
+	cache.PutNoVerify(cache.Default(), testlogsKey(testID), strings.NewReader(strings.Join(digests, "\n")+"\n"))
+}
+
+// otherTestlogs answers every testlog saved under testID except latest,
+// newest first. One evicted from the cache is left out.
+func otherTestlogs(testID cache.ActionID, latest []byte) [][]byte {
+	saved, _, err := cache.GetBytes(cache.Default(), testlogsKey(testID))
+	if err != nil {
+		return nil
+	}
+	skip := fmt.Sprintf("%x", sha256.Sum256(latest))
+	var others [][]byte
+	for line := range strings.Lines(string(saved)) {
+		line = strings.TrimSpace(line)
+		if line == "" || line == skip {
+			continue
+		}
+		testlog, _, err := cache.GetBytes(cache.Default(), testlogDigestKey(testID, line))
+		if err != nil || !bytes.HasPrefix(testlog, testlogMagic) || testlog[len(testlog)-1] != '\n' {
+			continue
+		}
+		others = append(others, testlog)
+	}
+	return others
 }
 
 // inputLinesKey is where the lines behind a test result's inputs ID are kept,
@@ -2877,7 +2954,7 @@ func (c *runCache) saveOutput(a *work.Action) {
 		if cache.DebugTest {
 			fmt.Fprintf(os.Stderr, "testcache: %s: save test ID %x => input ID %x => %x\n", a.Package.ImportPath, c.id1, testInputsID, testAndInputKey(c.id1, testInputsID))
 		}
-		cache.PutNoVerify(cache.Default(), c.id1, bytes.NewReader(testlog))
+		saveTestlog(c.id1, testlog)
 		cache.PutNoVerify(cache.Default(), inputLinesKey(c.id1), bytes.NewReader(inputLines))
 		cache.PutNoVerify(cache.Default(), testAndInputKey(c.id1, testInputsID), bytes.NewReader(a.TestOutput.Bytes()))
 		if coverProfile != nil {
@@ -2892,7 +2969,7 @@ func (c *runCache) saveOutput(a *work.Action) {
 		if cache.DebugTest {
 			fmt.Fprintf(os.Stderr, "testcache: %s: save test ID %x => input ID %x => %x\n", a.Package.ImportPath, c.id2, testInputsID, testAndInputKey(c.id2, testInputsID))
 		}
-		cache.PutNoVerify(cache.Default(), c.id2, bytes.NewReader(testlog))
+		saveTestlog(c.id2, testlog)
 		cache.PutNoVerify(cache.Default(), inputLinesKey(c.id2), bytes.NewReader(inputLines))
 		cache.PutNoVerify(cache.Default(), testAndInputKey(c.id2, testInputsID), bytes.NewReader(a.TestOutput.Bytes()))
 		if coverProfile != nil {
