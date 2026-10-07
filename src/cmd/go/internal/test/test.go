@@ -2551,7 +2551,7 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, []byte
 			fmt.Fprintf(h, "env %s %x\n", name, hashGetenv(name))
 		case "chdir":
 			pwd = name // always absolute
-			if isRunScratch(name) || isBuildCache(name) {
+			if isRunScratch(name) || isBuildCache(name) || isProcessLocal(name) {
 				break
 			}
 			fmt.Fprintf(h, "chdir %s %x\n", name, hashStat(name))
@@ -2581,7 +2581,7 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, []byte
 				parsed["stat "+name]--
 				break
 			}
-			if isRunScratch(name) || isBuildCache(name) {
+			if isRunScratch(name) || isBuildCache(name) || isProcessLocal(name) {
 				break
 			}
 			if rel, ok := inModCache(name); ok {
@@ -2597,7 +2597,7 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, []byte
 				parsed["open "+name]--
 				break
 			}
-			if isRunScratch(name) || isBuildCache(name) {
+			if isRunScratch(name) || isBuildCache(name) || isProcessLocal(name) {
 				break
 			}
 			if rel, ok := inModCache(name); ok {
@@ -3056,6 +3056,23 @@ func isRunScratch(name string) bool {
 		real = name
 	}
 	return search.InDir(real, realTmp) != "" || search.InDir(name, realTmp) != ""
+}
+
+// isProcessLocal reports whether name is a path that names whichever process
+// reads it: its own /proc entry, its descriptor table, its standard streams.
+// The test process read its own. The go command can only read the go
+// command's, which says nothing about the test.
+func isProcessLocal(name string) bool {
+	switch name {
+	case "/proc/self", "/proc/thread-self", "/dev/fd", "/dev/stdin", "/dev/stdout", "/dev/stderr":
+		return true
+	}
+	for _, dir := range []string{"/proc/self/", "/proc/thread-self/", "/dev/fd/"} {
+		if strings.HasPrefix(name, dir) {
+			return true
+		}
+	}
+	return false
 }
 
 // isBuildCache reports whether name is in this build's cache directory. A
