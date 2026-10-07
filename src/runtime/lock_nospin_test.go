@@ -102,6 +102,11 @@ func TestWaitsNeverSpin(t *testing.T) {
 			"syscall_runtime_BeforeExec",
 			"profSignalUnlock",
 			"setcpuprofilerate",
+			"lockextra",
+			"extraMSleep",
+			"unlockextra",
+			"getExtraM",
+			"addExtraM",
 		}},
 		{"preempt.go", []string{"suspendG", "resumeG"}},
 		{"mprof.go", []string{
@@ -114,8 +119,21 @@ func TestWaitsNeverSpin(t *testing.T) {
 		{"signalnote.go", nil},
 		{"signalnote_futex.go", nil},
 		{"signalnote_darwin.go", nil},
+		{"signalnote_linux.go", nil},
 		{"signalnote_sema.go", nil},
 		{"signalnote_wasm.go", nil},
+		{"extram_sema.go", nil},
+		{"extram_sema_aix.go", nil},
+		{"extram_sema_darwin.go", nil},
+		{"extram_sema_dragonfly.go", nil},
+		{"extram_sema_freebsd.go", nil},
+		{"extram_sema_futex.go", nil},
+		{"extram_sema_netbsd.go", nil},
+		{"extram_sema_openbsd.go", nil},
+		{"extram_sema_plan9.go", nil},
+		{"extram_sema_solaris.go", nil},
+		{"extram_sema_wasm.go", nil},
+		{"extram_sema_windows.go", nil},
 	}
 	fset := token.NewFileSet()
 	for _, source := range sources {

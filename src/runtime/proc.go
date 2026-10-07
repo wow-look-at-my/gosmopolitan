@@ -3273,6 +3273,9 @@ var (
 	extraMLength atomic.Uint32
 	// Number of waiters in lockextra.
 	extraMWaiters atomic.Uint32
+	// Number of threads asleep in lockextra, or about to sleep there,
+	// that the next unlockextra has not yet woken.
+	extraMSleepers atomic.Uint32
 
 	// Number of extra M's in use by threads.
 	extraMInUse atomic.Uint32
@@ -3284,6 +3287,9 @@ var (
 // return a nil list head if that's what it finds. If nilokay is false,
 // lockextra will keep waiting until the list head is no longer nil.
 //
+// A thread that waits sleeps in the OS until unlockextra wakes it. It may
+// have no m or g: it can be a thread Go did not create, asking for an m.
+//
 //go:nosplit
 func lockextra(nilokay bool) *m {
 	const locked = 1
@@ -3292,7 +3298,7 @@ func lockextra(nilokay bool) *m {
 	for {
 		old := extraM.Load()
 		if old == locked {
-			osyield_no_g()
+			extraMSleep(old)
 			continue
 		}
 		if old == 0 && !nilokay {
@@ -3303,14 +3309,38 @@ func lockextra(nilokay bool) *m {
 				extraMWaiters.Add(1)
 				incr = true
 			}
-			usleep_no_g(1)
+			extraMSleep(old)
 			continue
 		}
 		if extraM.CompareAndSwap(old, locked) {
 			return (*m)(unsafe.Pointer(old))
 		}
-		osyield_no_g()
-		continue
+	}
+}
+
+// extraMSleep sleeps until an unlockextra that follows the load of seen
+// from extraM. The sleeper counts itself and then rechecks extraM, and
+// unlockextra stores extraM and then takes the count, so either the
+// recheck sees the store or unlockextra wakes this thread.
+//
+//go:nosplit
+func extraMSleep(seen uintptr) {
+	extraMSleepers.Add(1)
+	if extraM.Load() == seen {
+		extraMSemaSleep()
+		return
+	}
+	for {
+		count := extraMSleepers.Load()
+		if count == 0 {
+			// An unlockextra took this thread's count and wakes
+			// it; take that wakeup.
+			extraMSemaSleep()
+			return
+		}
+		if extraMSleepers.CompareAndSwap(count, count-1) {
+			return
+		}
 	}
 }
 
@@ -3318,12 +3348,18 @@ func lockextra(nilokay bool) *m {
 func unlockextra(mp *m, delta int32) {
 	extraMLength.Add(delta)
 	extraM.Store(uintptr(unsafe.Pointer(mp)))
+	if extraMSleepers.Load() == 0 {
+		return
+	}
+	if count := extraMSleepers.Swap(0); count != 0 {
+		extraMSemaWake(count)
+	}
 }
 
 // Return an M from the extra M list. Returns last == true if the list becomes
 // empty because of this call.
 //
-// Spins waiting for an extra M, so caller must ensure that the list always
+// Sleeps waiting for an extra M, so caller must ensure that the list always
 // contains or will soon contain at least one M.
 //
 //go:nosplit

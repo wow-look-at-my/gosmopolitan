@@ -141,6 +141,7 @@ func osinit() {
 	if physPageSize == 0 {
 		physPageSize = getPageSize()
 	}
+	extraMSemaInit()
 }
 
 func tstart_sysvicall(newm *m) uint32
