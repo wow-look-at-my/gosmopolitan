@@ -1,0 +1,44 @@
+# A test's cached result survives a change to the build's cache plumbing. The
+# variables naming the cache log and the cache's owner, and the build cache's
+# own directory, are not inputs to the test, though the test reads all three.
+
+env GOCACHE=$WORK/gocache
+env GOCACHELOG=$WORK/log1
+go test -run=TestReadsPlumbing .
+stdout '^ok\s+m\s+[0-9.]+s$'
+
+env GOCACHELOG=$WORK/log2
+cp marker.txt $WORK/gocache/marker.txt
+go test -run=TestReadsPlumbing .
+stdout '^ok\s+m\s+\(cached\)$'
+
+# A variable outside the plumbing is still an input.
+env SOME_INPUT=changed
+go test -run=TestReadsPlumbing .
+stdout '^ok\s+m\s+[0-9.]+s$'
+
+-- go.mod --
+module m
+
+go 1.27
+-- marker.txt --
+an entry the first run did not see
+-- m_test.go --
+package m
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestReadsPlumbing(t *testing.T) {
+	os.Getenv("GOCACHELOG")
+	os.Getenv("GO_BUILDCACHE_BROKER")
+	os.Getenv("SOME_INPUT")
+	dir := os.Getenv("GOCACHE")
+	if _, err := os.ReadDir(dir); err != nil {
+		t.Fatal(err)
+	}
+	os.Stat(filepath.Join(dir, "marker.txt"))
+}

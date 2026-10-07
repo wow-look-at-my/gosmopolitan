@@ -108,6 +108,9 @@ const CacheDebugEnv = "GOCACHEDEBUG"
 // CacheLogEnv names a file that takes the cache's notices in place of stderr.
 const CacheLogEnv = "GOCACHELOG"
 
+// PlumbingEnv lists the variables that carry one build's cache plumbing to the processes it starts.
+var PlumbingEnv = []string{CacheLogEnv, cacheclient.BrokerEnv}
+
 var (
 	cacheLogOnce sync.Once
 	cacheLogFile *os.File // nil: the notices go to stderr

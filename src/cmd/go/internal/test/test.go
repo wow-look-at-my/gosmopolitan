@@ -2514,10 +2514,13 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, []byte
 			}
 			return cache.ActionID{}, nil, fmt.Errorf("%w: %q", errBadTestInputs, line)
 		case "getenv":
+			if slices.Contains(cache.PlumbingEnv, name) {
+				break
+			}
 			fmt.Fprintf(h, "env %s %x\n", name, hashGetenv(name))
 		case "chdir":
 			pwd = name // always absolute
-			if isRunScratch(name) {
+			if isRunScratch(name) || isBuildCache(name) {
 				break
 			}
 			fmt.Fprintf(h, "chdir %s %x\n", name, hashStat(name))
@@ -2525,7 +2528,7 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, []byte
 			if !filepath.IsAbs(name) {
 				name = filepath.Join(pwd, name)
 			}
-			if isRunScratch(name) {
+			if isRunScratch(name) || isBuildCache(name) {
 				break
 			}
 			fmt.Fprintf(h, "stat %s %x\n", name, hashStat(name))
@@ -2533,7 +2536,7 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, []byte
 			if !filepath.IsAbs(name) {
 				name = filepath.Join(pwd, name)
 			}
-			if isRunScratch(name) {
+			if isRunScratch(name) || isBuildCache(name) {
 				break
 			}
 			fh, err := hashOpen(name)
@@ -2700,6 +2703,19 @@ func isRunScratch(name string) bool {
 		real = name
 	}
 	return search.InDir(real, realTmp) != "" || search.InDir(name, realTmp) != ""
+}
+
+// isBuildCache reports whether name is in this build's cache directory. A
+// test binary that uses the build cache in process reads its entries and its
+// shard directories, and each entry is the output of the action its key names.
+// The directory's contents follow which builds have run here, not what the test
+// computes from.
+func isBuildCache(name string) bool {
+	dir, _, err := cache.DefaultDir()
+	if err != nil || dir == "off" {
+		return false
+	}
+	return search.InDir(name, dir) != ""
 }
 
 func hashGetenv(name string) cache.ActionID {
