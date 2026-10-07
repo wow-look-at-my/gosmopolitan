@@ -1435,20 +1435,28 @@ func (t *tester) registerTests() {
 
 	// Runtime CPU tests.
 	if !t.compileOnly && t.hasParallelism() {
+		// A whole runtime run takes most of its deadline with a core to
+		// itself. Four together on a 3-core runner starve each other, so these
+		// and gccheckmark run two at a time: each waits for the one two ahead.
+		deadlineBound := []string{testName("runtime", "gccheckmark")}
 		for i := 1; i <= 4; i *= 2 {
-			t.registerTest(fmt.Sprintf("GOMAXPROCS=2 runtime -cpu=%d", i),
-				&goTest{
-					variant: "cpu" + strconv.Itoa(i),
-					timeout: 300 * time.Second,
-					cpu:     strconv.Itoa(i),
-					gcflags: gogcflags,
-					// We set GOMAXPROCS=2 in addition to -cpu=1,2,4 in order to test runtime bootstrap code,
-					// creation of first goroutines and first garbage collections in the parallel setting.
-					env:    []string{"GOMAXPROCS=2"},
-					pkg:    "runtime",
-					shared: true,
-					first:  true,
-				})
+			cpuTest := &goTest{
+				variant: "cpu" + strconv.Itoa(i),
+				timeout: 300 * time.Second,
+				cpu:     strconv.Itoa(i),
+				gcflags: gogcflags,
+				// We set GOMAXPROCS=2 in addition to -cpu=1,2,4 in order to test runtime bootstrap code,
+				// creation of first goroutines and first garbage collections in the parallel setting.
+				env:    []string{"GOMAXPROCS=2"},
+				pkg:    "runtime",
+				shared: true,
+				first:  true,
+			}
+			if len(deadlineBound) >= 2 {
+				cpuTest.after = deadlineBound[len(deadlineBound)-2]
+			}
+			deadlineBound = append(deadlineBound, testName(cpuTest.pkg, cpuTest.variant))
+			t.registerTest(fmt.Sprintf("GOMAXPROCS=2 runtime -cpu=%d", i), cpuTest)
 		}
 	}
 
