@@ -2,7 +2,7 @@
 // governed by a BSD-style license that can be found in the LICENSE file.
 
 // The setters below drive the ip command and depend on nothing the cosmo port
-// lacks, so they live apart from the netlink tests in interface_linux_test.go.
+// lacks. They live apart from the netlink tests in interface_linux_test.go.
 // interface_unix_test.go calls them on every unix host, cosmo included.
 
 package net

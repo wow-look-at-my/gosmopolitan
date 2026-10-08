@@ -8,11 +8,11 @@
 //
 // Call sites of the base operations (Load, Store, Xadd, Xchg, Cas and their
 // 8/64-bit variants) are usually intrinsified by the compiler into inline
-// atomic instructions, but the function BODIES must be genuinely atomic too:
-// sync/atomic's assembly trampolines (asm.s) jump here, the runtime's
+// atomic instructions. However, the function BODIES must be genuinely atomic
+// too. Sync/atomic's assembly trampolines (asm.s) jump here, the runtime's
 // atomic_pointer.go reaches SwapUintptr/CompareAndSwapUintptr/ StoreUintptr
-// through linknamed declarations that the intrinsifier does not see, and
-// taking a function's address always yields the real body. Without
+// through linknamed declarations that the intrinsifier does not see. Taking
+// a function's address always yields the real body. Without
 // GOWASM=threads the plain non-atomic bodies (atomic_wasm.go) remain correct
 // because there is only one thread.
 

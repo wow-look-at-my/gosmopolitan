@@ -69,7 +69,7 @@ git config --file .gitmodules --get-regexp '^submodule\..*\.path$' | while read 
 		echo "submodule ${path} ${was} -> ${want} ${now}"
 	fi
 	# Vendor mode refuses to build when go.mod, modules.txt and the tree
-	# disagree, so the pseudo-version follows the commit rather than
+	# disagree. The pseudo-version follows the commit rather than
 	# waiting for somebody to retype it.
 	stamp=$(git -C "$path" show -s --format=%cd --date=format:'%Y%m%d%H%M%S' HEAD)
 	short=$(echo "$now" | cut -c1-12)

@@ -1,6 +1,6 @@
 # Per-platform runtime status (GOOS=cosmo)
 
-Windows status (NT bring-up wave 3 COMPLETE plus the LookPath fix - CI-verified by the runtimeprobe gauntlet on windows-latest, against binaries built on all platforms).
+Windows status (NT bring-up a later wave COMPLETE plus the LookPath fix - CI-verified by the runtimeprobe gauntlet on windows-latest, against binaries built on all platforms).
 
 Basics: stdout/stderr (console CP_UTF8+VT), os.Args via GetCommandLineW, environment, os.Exit, VirtualAlloc memory, CreateThread Ms, WaitOnAddress futexes, KUSER clocks, NumCPU. Every user-level syscall routes through an NT emulation dispatcher (Linux numbers/errnos/structs in, Win32 out - src/runtime/os_cosmo_nt_sys.go). It covers process identity, ProcessPrng entropy, and the whole file I/O family with an fd table.
 

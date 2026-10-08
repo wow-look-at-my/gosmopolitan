@@ -10,10 +10,9 @@ import (
 	"unsafe"
 )
 
-// TestEpollEventLayout verifies that EpollEvent matches the Linux
-// kernel's struct epoll_event ABI for the current architecture. A
-// mismatch makes the kernel write past the end of the events array in
-// netpoll.
+// TestEpollEventLayout verifies that EpollEvent matches the Linux kernel's
+// struct epoll_event ABI for the current architecture. A mismatch makes the
+// kernel write past the end of the events array in netpoll.
 func TestEpollEventLayout(t *testing.T) {
 	var ev cosmo.EpollEvent
 	var wantSize, wantOff uintptr

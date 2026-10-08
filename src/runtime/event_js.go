@@ -67,12 +67,12 @@ var idleTimeout *timeoutEvent
 var idleGCNudge *timeoutEvent
 
 // eventBeforeIdle is the event-loop half of beforeIdle: if we are not already
-// handling an event, pause for an async event; if an event handler returned,
-// resume it so it can pause the execution. It either returns the specific
-// goroutine to schedule next or indicates with otherReady that some goroutine
-// became ready. It must only run on the M that is bound to the host's
-// JavaScript event loop (always true without GOWASM=threads; enforced by
-// beforeIdle in lock_jsthreads.go under threads).
+// handling an event, pause for an async event. This also covers if an event
+// handler returned, resume it so it can pause the execution. It either
+// returns the specific goroutine to schedule next or indicates with
+// otherReady that some goroutine became ready. It must only run on the M that
+// is bound to the host's JavaScript event loop (always true without
+// GOWASM=threads; enforced by beforeIdle in lock_jsthreads.go under threads).
 //
 // TODO(drchase): need to understand if write barriers are okay in this
 // context.
@@ -113,7 +113,7 @@ func eventBeforeIdle(now, pollUntil int64) (gp *g, otherReady bool) {
 	if pollUntil == 0 && eventHandler != nil {
 		// The program has no timer to wake it, so findRunnable's cap on the idle
 		// sleep (see wasmForceGCDeadline in proc.go) does not apply and nothing
-		// would wake it for the next periodic forced GC.
+		// would wake it. For the next periodic forced GC.
 		if deadline := wasmForceGCDeadline(); deadline != 0 && (idleGCNudge == nil || idleGCNudge.diff(deadline) > 1e6) {
 			idleGCNudge.clear()
 
@@ -180,10 +180,10 @@ func scheduleWeakTimeoutEvent(ms int64) int32
 //go:wasmimport gojs runtime.clearTimeoutEvent
 func clearTimeoutEvent(id int32)
 
-// handleEvent gets invoked on a call from JavaScript into Go. It calls the event handler of the syscall/js package
-// and then parks the handler goroutine to allow other goroutines to run before giving execution back to JavaScript.
-// When no other goroutine is awake any more, beforeIdle resumes the handler goroutine. Now that the same goroutine
-// is running as was running when the call came in from JavaScript, execution can be safely passed back to JavaScript.
+// handleEvent gets invoked on a call from JavaScript into Go. It calls the event handler of the syscall/js package.
+// It then parks the handler goroutine to allow other goroutines to run before giving execution back to JavaScript.
+// When no other goroutine is awake any more, beforeIdle resumes the handler goroutine. Now that the same goroutine is
+// running as was running when the call came in from JavaScript, execution can be safely passed back to JavaScript.
 func handleEvent() {
 	if wasmThreadsEnabled && getg().m != &m0 {
 		// See handleAsyncEvent: only the main M talks to the event loop.
@@ -324,9 +324,9 @@ func wasmThreadsEndMainOp() {
 }
 
 // wasmThreadsMigrateToMain moves the calling goroutine to the main M under
-// GOWASM=threads: it parks and publishes itself on the migrate queue (see
+// GOWASM=threads: it parks. It publishes itself on the migrate queue (see
 // wasmSchedPickMigrated in proc.go), which only the main M's scheduler pops -
-// the goroutine is executed there directly and never enters a run queue.
+// the goroutine is executed there directly. It never enters a run queue.
 //
 //go:linkname wasmThreadsMigrateToMain syscall/js.runtimeMigrateToMain
 func wasmThreadsMigrateToMain() bool {
@@ -344,8 +344,8 @@ func wasmThreadsMigrateToMain() bool {
 	return true
 }
 
-// wasmMigrateParkFn publishes the parked goroutine on the migrate queue and
-// pokes the main M: a host nudge if it is parked in the event loop, and the
+// wasmMigrateParkFn publishes the parked goroutine on the migrate queue. It
+// pokes the main M. A host nudge if it is parked in the event loop, and the
 // loop-preemption checks of whatever it is running.
 func wasmMigrateParkFn(gp *g, _ unsafe.Pointer) bool {
 	lock(&wasmMigrateLock)

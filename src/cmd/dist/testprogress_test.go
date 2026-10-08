@@ -4,6 +4,7 @@
 package main
 
 import (
+	"io"
 	"strings"
 	"testing"
 )
@@ -14,11 +15,8 @@ func TestProgressLineOrdersSlowestFirst(t *testing.T) {
 		{"pkg", "faster", 0.2},
 		{"pkg", "fastest", 0.1},
 	}
-	got := progressLine(4, 8, recent, 120)
-	if !strings.HasPrefix(got, "[4/8 50%] ") {
-		t.Errorf("prefix missing from %q", got)
-	}
-	want := "[4/8 50%] 0.3s slowish, 0.2s faster, 0.1s fastest"
+	got := progressLine(progressCounts{testsEnded: 30, testsStarted: 41, stepsDone: 4, steps: 8}, recent, 120)
+	want := "[30 done/41 started, 4/8 steps 50%] 0.3s slowish, 0.2s faster, 0.1s fastest"
 	if got != want {
 		t.Errorf("line = %q, want %q", got, want)
 	}
@@ -26,8 +24,8 @@ func TestProgressLineOrdersSlowestFirst(t *testing.T) {
 
 func TestProgressLineSingleSlowTest(t *testing.T) {
 	recent := []testTiming{{"pkg", "reallyslowtest", 3.4}}
-	got := progressLine(1, 10, recent, 120)
-	const want = "[1/10 10%] 3.4s reallyslowtest"
+	got := progressLine(progressCounts{testsEnded: 1, testsStarted: 1, stepsDone: 1, steps: 10}, recent, 120)
+	const want = "[1 done/1 started, 1/10 steps 10%] 3.4s reallyslowtest"
 	if got != want {
 		t.Errorf("line = %q, want %q", got, want)
 	}
@@ -52,6 +50,9 @@ func TestProgressQuietTickWritesNothing(t *testing.T) {
 func TestProgressBusyTickWritesLine(t *testing.T) {
 	t.Setenv("COLUMNS", "120")
 	var timings testTimings
+	timings.start()
+	timings.start()
+	timings.start()
 	timings.add("pkg", "faster", 0.2)
 	timings.add("pkg", "slowish", 0.3)
 	var out strings.Builder
@@ -61,7 +62,7 @@ func TestProgressBusyTickWritesLine(t *testing.T) {
 	pro.markDone("three")
 	pro.markDone("four")
 	pro.emit()
-	const want = "[4/8 50%] 0.3s slowish, 0.2s faster\n"
+	const want = "[2 done/3 started, 4/8 steps 50%] 0.3s slowish, 0.2s faster\n"
 	if out.String() != want {
 		t.Errorf("line = %q, want %q", out.String(), want)
 	}
@@ -78,15 +79,15 @@ func TestProgressLineEllipsizes(t *testing.T) {
 		{"pkg", "bbbbbbbbbbbbbbbbbbbb", 0.2},
 		{"pkg", "cccccccccccccccccccc", 0.1},
 	}
-	const width = 40
-	got := progressLine(1, 2, recent, width)
+	const width = 60
+	got := progressLine(progressCounts{testsEnded: 3, testsStarted: 3, stepsDone: 1, steps: 2}, recent, width)
 	if len(got) != width {
 		t.Errorf("line is %d wide, want %d: %q", len(got), width, got)
 	}
 	if !strings.HasSuffix(got, "...") {
 		t.Errorf("a truncated line must end in an ellipsis: %q", got)
 	}
-	if !strings.HasPrefix(got, "[1/2 50%] 0.3s aaaa") {
+	if !strings.HasPrefix(got, "[3 done/3 started, 1/2 steps 50%] 0.3s aaaa") {
 		t.Errorf("truncation dropped the start of the line: %q", got)
 	}
 }
@@ -103,20 +104,19 @@ func TestProgressZeroTotalWritesNothing(t *testing.T) {
 	}
 }
 
-func TestProgressCountsEachTestOnce(t *testing.T) {
+func TestProgressCountsEachStepOnce(t *testing.T) {
 	var timings testTimings
 	pro := newTestProgress(nil, &timings, 3)
 	pro.markDone("one")
 	pro.markDone("one")
 	pro.markDone("two")
-	done, total := pro.counts()
-	if done != 2 || total != 3 {
-		t.Errorf("counts = %d/%d, want 2/3", done, total)
+	if cnt := pro.counts(); cnt.stepsDone != 2 || cnt.steps != 3 {
+		t.Errorf("steps = %d/%d, want 2/3", cnt.stepsDone, cnt.steps)
 	}
 }
 
-// The total counts dist tests. A variant run reports packages that are no
-// dist test, and those must not count, or done overtakes total.
+// The step total counts dist tests. A variant run reports packages that are
+// no dist test, and those must not count, or done overtakes total.
 func TestPackageResultCountsOnlyItsOwnTest(t *testing.T) {
 	var timings testTimings
 	tst := &tester{testNames: map[string]bool{"bufio": true, "crypto/...:gofips140": true}}
@@ -125,12 +125,53 @@ func TestPackageResultCountsOnlyItsOwnTest(t *testing.T) {
 	tst.markPkgDone("bufio")
 	tst.markPkgDone("crypto/internal/fips140/v1.26.0/aes")
 	tst.markPkgDone("crypto/aes")
-	if done, total := tst.progress.counts(); done != 1 || total != 2 {
-		t.Fatalf("after package results, counts = %d/%d, want 1/2", done, total)
+	if cnt := tst.progress.counts(); cnt.stepsDone != 1 || cnt.steps != 2 {
+		t.Fatalf("after package results, steps = %d/%d, want 1/2", cnt.stepsDone, cnt.steps)
 	}
 	tst.markTestDone("crypto/...:gofips140")
-	if done, total := tst.progress.counts(); done != 2 || total != 2 {
-		t.Errorf("after the variant ended, counts = %d/%d, want 2/2", done, total)
+	if cnt := tst.progress.counts(); cnt.stepsDone != 2 || cnt.steps != 2 {
+		t.Errorf("after the variant ended, steps = %d/%d, want 2/2", cnt.stepsDone, cnt.steps)
+	}
+}
+
+// Every test that ends moves the counter by one, subtests included, while the
+// step holding them is still running. The total is the tests started so far,
+// so a test that began and has not ended keeps done below it.
+func TestProgressCountsEveryEndedTest(t *testing.T) {
+	t.Setenv("COLUMNS", "200")
+	tst := &tester{testNames: map[string]bool{"pkg": true}}
+	var out strings.Builder
+	tst.progress = newTestProgress(&out, &tst.timings, 4)
+	rep := newTestReport(io.Discard, &tst.timings, tst.markPkgDone)
+
+	rep.Write([]byte(`{"Action":"run","Package":"pkg","Test":"TestParent"}
+{"Action":"run","Package":"pkg","Test":"TestParent/first"}
+{"Action":"pass","Package":"pkg","Test":"TestParent/first","Elapsed":0.5}
+`))
+	tst.progress.emit()
+	rep.Write([]byte(`{"Action":"run","Package":"pkg","Test":"TestParent/second"}
+{"Action":"skip","Package":"pkg","Test":"TestParent/second","Elapsed":0.2}
+`))
+	tst.progress.emit()
+	rep.Write([]byte(`{"Action":"pass","Package":"pkg","Test":"TestParent","Elapsed":0.8}
+{"Action":"run","Package":"pkg","Test":"TestFails"}
+{"Action":"fail","Package":"pkg","Test":"TestFails","Elapsed":1.5}
+{"Action":"run","Package":"pkg","Test":"TestStillRunning"}
+`))
+	tst.progress.emit()
+	rep.Write([]byte(`{"Action":"fail","Package":"pkg","Elapsed":3}
+`))
+	rep.Flush()
+
+	const want = "[1 done/2 started, 0/4 steps 0%] 0.5s TestParent/first\n" +
+		"[2 done/3 started, 0/4 steps 0%] 0.2s TestParent/second\n" +
+		"[4 done/5 started, 0/4 steps 0%] 1.5s TestFails, 0.8s TestParent\n"
+	if out.String() != want {
+		t.Errorf("lines =\n%s\nwant\n%s", out.String(), want)
+	}
+	cnt := tst.progress.counts()
+	if cnt.testsEnded != 4 || cnt.testsStarted != 5 || cnt.stepsDone != 1 {
+		t.Errorf("after the package ended, counts = %+v, want 4 ended, 5 started, 1 step", cnt)
 	}
 }
 

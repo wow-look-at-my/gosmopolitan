@@ -1333,19 +1333,19 @@ TEXT runtime·sigaltstackLinux(SB),NOSPLIT,$0
 sigaltstack_ok:
 	RET
 
-TEXT runtime·osyield(SB),NOSPLIT,$0
+TEXT runtime·osyield(SB),NOSPLIT,$8
 	CHECK_DARWIN(osyield_darwin)
 	// Linux path
 	MOVD	$SYS_sched_yield, R8
 	SVC
 	RET
 osyield_darwin:
-	// macOS: use pthread_yield_np
-	MOVD	runtime·__syslib(SB), R9
-	MOVD	176(R9), R12
-	SUB	$16, RSP
-	BL	(R12)
-	ADD	$16, RSP
+	// usleep(1), as upstream darwin. XNU's own yield (swtch_pri) holds
+	// the caller at priority 0 for a quantum, so on a saturated host each
+	// yield costs ~10ms.
+	MOVW	$1, R0
+	MOVW	R0, 8(RSP)
+	BL	runtime·usleep(SB)
 	RET
 
 TEXT runtime·sched_getaffinity(SB),NOSPLIT,$0-28

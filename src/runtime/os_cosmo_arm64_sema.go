@@ -63,12 +63,12 @@ func cosmoSemaInit() {
 
 // Wrappers around the dlsym'd pthread functions, following upstream
 // sys_darwin.go's pattern: cgo_unsafe_args makes &m the address of a
-// contiguous argument block, which the ABI0 trampoline unpacks into C
+// contiguous argument block. Which the ABI0 trampoline unpacks into C
 // argument registers on the g0 stack that asmcgocall switched to.
 
 // cosmoPthreadLibcCall wraps asmcgocall for the pthread wrappers below,
 // recording the caller's g/PC/SP in m.libcall* so the CPU profiler can
-// traceback from a SIGPROF that lands inside the C call.
+// traceback. From a SIGPROF that lands inside the C call.
 //
 //go:nosplit
 func cosmoPthreadLibcCall(fn, arg unsafe.Pointer) int32 {
@@ -144,8 +144,8 @@ func pthread_cond_signal(c *pthreadcond) int32 {
 func cosmo_pthread_cond_signal_trampoline()
 
 // semacreate creates a semaphore for the M: on XNU hosts it lazily
-// initializes the M's pthread mutex/cond pair (like upstream darwin);
-// the Linux futex word needs no initialization.
+// initializes the M's pthread mutex/cond pair (like upstream darwin).
+// The Linux futex word needs no initialization.
 //
 //go:nosplit
 func semacreate(mp *m) {

@@ -46,8 +46,8 @@ func ntEmuKill(pid, sig int32) (r1, r2, errno uintptr) {
 }
 
 // ntEmuKillGroup implements kill(-pgid, sig). Only a group WE created is
-// addressable: pgid must be a child spawned with CREATE_NEW_PROCESS_GROUP,
-// and anything else is ESRCH, mirroring the own-children-only rule of the
+// addressable: pgid must be a child spawned with CREATE_NEW_PROCESS_GROUP.
+// Anything else is ESRCH, mirroring the own-children-only rule of the
 // positive-pid arm. Each signal is handled on the case that maps it. SIGQUIT
 // is the reliable group chord, because NT creates such a child with Ctrl-C
 // DISABLED until it opts back in, so a SIGINT to one that never did silently
