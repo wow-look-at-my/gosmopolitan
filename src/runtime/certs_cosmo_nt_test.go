@@ -11,7 +11,7 @@ import (
 )
 
 // The root store is read by walking raw offsets into a CERT_CONTEXT crypt32
-// filled, and a wrong offset reads plausible garbage rather than failing: the
+// filled. A wrong offset reads plausible garbage rather than failing. The
 // walk would hand crypto/x509 bytes that are not a certificate, on the host
 // where x509 has no other source. Only a Windows host executes it, so these
 // are the numbers documented for win64, pinned.

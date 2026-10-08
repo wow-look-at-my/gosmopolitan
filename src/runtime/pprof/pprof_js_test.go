@@ -2,7 +2,7 @@
 // governed by a BSD-style license that can be found in the LICENSE file.
 
 // CPU profiling test for js/wasm. The general CPU profiling tests live in
-// pprof_test.go, which does not build on js; this file gives the js port
+// pprof_test.go, which does not build on js. This file gives the js port
 // end-to-end coverage of the wasm loop-backedge CPU sampler: profile
 // collection, sample volume, and per-function attribution.
 

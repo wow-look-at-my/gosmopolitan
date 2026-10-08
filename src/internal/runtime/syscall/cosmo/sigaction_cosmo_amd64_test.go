@@ -10,9 +10,8 @@ import (
 	"testing"
 )
 
-// sigA2LTab is indexed from sigactionTramp's assembly, so it is a
-// second copy of the correspondence darwinXlatSignalA2L holds. This
-// pins both together.
+// sigA2LTab is indexed from sigactionTramp's assembly, so it is a second copy
+// of the correspondence darwinXlatSignalA2L holds. This pins both together.
 func TestSigA2LTab(t *testing.T) {
 	tab := cosmo.SigA2LTab
 	for a := uintptr(0); a < uintptr(len(tab)); a++ {

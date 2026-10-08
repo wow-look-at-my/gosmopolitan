@@ -44,8 +44,8 @@ func cosmoXnuSigtramp()
 // Linux sigactiont both ways and issue __sigaction.
 //
 // Signals with no Apple equivalent (SIGSTKFLT, SIGPWR, the realtime
-// range) succeed as a no-op and read back as SIG_DFL, matching arm64:
-// they cannot be raised on an XNU host, and initsig and
+// range) succeed as a no-op and read back as SIG_DFL, matching arm64.
+// They cannot be raised on an XNU host, and initsig and
 // clearSignalHandlers must stay oblivious.
 //
 //go:nosplit

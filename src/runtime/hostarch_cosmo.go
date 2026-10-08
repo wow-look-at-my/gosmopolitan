@@ -21,8 +21,8 @@ func cosmoHostArch() string {
 }
 
 // cosmoHostArchNT reads the machine from IsWow64Process2, which reports
-// it even for a process that is not under WOW64. Nothing calls it yet:
-// it is the probe an arm64 Windows bring-up needs, kept beside the
+// it even for a process that is not under WOW64. Nothing calls it yet.
+// It is the probe an arm64 Windows bring-up needs, kept beside the
 // numbers it reads rather than rewritten from scratch then.
 func cosmoHostArchNT() string {
 	if !iswindows() || ntIsWow64Process2Fn == 0 {

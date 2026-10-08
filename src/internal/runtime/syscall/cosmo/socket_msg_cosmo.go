@@ -89,8 +89,8 @@ func Darwin() bool {
 }
 
 // XlatMsgFlags translates Apple recvmsg result flags (msg_flags) to Linux
-// values. Only those bits a receive can report and Go can observe are mapped;
-// anything else Apple-specific is dropped rather than aliased onto an
+// values. Only those bits a receive can report and Go can observe are mapped.
+// Anything else Apple-specific is dropped rather than aliased onto an
 // unrelated Linux bit.
 //
 //go:nosplit
@@ -171,12 +171,12 @@ func CmsgToApple(src, srcLen, dst, dstCap uintptr) (dlen, errno uintptr) {
 // fit. A Linux-provisioned buffer always had room for the Apple shape.
 //
 // Only SOL_SOCKET/SCM_RIGHTS translates; everything else drops, and
-// nothing else can arrive because darwinSockoptXlat refuses the
-// options that produce it. Truncation mirrors the Linux kernel:
-// SCM_RIGHTS truncates at FD granularity, every undelivered fd is
-// CLOSED rather than leaked, and MSG_CTRUNC is raised. applyFd runs for
-// each delivered fd and closeFd for each dropped one; either may be
-// nil, and every fd is read before any byte is rewritten.
+// nothing else can arrive because darwinSockoptXlat refuses the options
+// that produce it. Truncation mirrors the Linux kernel: SCM_RIGHTS
+// truncates at FD granularity, every undelivered fd is CLOSED rather
+// than leaked, and MSG_CTRUNC is raised. applyFd runs for each
+// delivered fd and closeFd for each dropped one. Either may be nil, and
+// every fd is read before any byte is rewritten.
 func CmsgToLinux(buf, alen, capacity uintptr, applyFd, closeFd func(int32)) (llen uintptr, ctrunc bool) {
 	// Stages, so no write can overrun unread input.
 	var srcOffs [msgMaxCmsgRecords]uint32
@@ -261,7 +261,7 @@ func CmsgToLinux(buf, alen, capacity uintptr, applyFd, closeFd func(int32)) (lle
 	llen = dst
 
 	// Per record the write cursor is at or past the read cursor, because a Linux
-	// record is strictly larger, so copy the payload high to low and write the
+	// record is strictly larger, so copy the payload high. To low and write the
 	// header only after its payload has moved.
 	for k := kept - 1; k >= 0; k-- {
 		soff := uintptr(srcOffs[k])

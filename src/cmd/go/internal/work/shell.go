@@ -638,7 +638,7 @@ func (sh *Shell) runOut(dir string, env []string, cmdargs ...any) ([]byte, error
 
 	cmd.Env = append(cmd.Env, env...)
 	start := time.Now()
-	err = cmd.Run()
+	err = runTool(cmd)
 	// Every compile, assemble, link, pack and cgo invocation the build makes
 	// arrives here, and it is the only place that knows both the command and
 	// the action it ran for. So this is where a trace gets the answer to

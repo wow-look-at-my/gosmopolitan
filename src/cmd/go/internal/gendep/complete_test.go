@@ -143,9 +143,9 @@ func TestGeneratingPackagesSkipsNestedModules(test *testing.T) {
 }
 
 // A module zip leaves out a directory whose name opens with an underscore, so a
-// directive naming one cannot run for anybody who fetched the module. Such a
-// module ships what the directive writes. Every other directive is the module's
-// own, and a failure in one stops the build.
+// directive naming one cannot run for anybody. That anybody fetched the module.
+// Such a module ships what the directive writes. Every other directive is the
+// module's own, and a failure in one stops the build.
 func TestGeneratorNotShippedNamesOnlyTheDroppedPath(test *testing.T) {
 	stage := writeTree(test, test.TempDir(), map[string]string{
 		"go.mod":           "module example.com/m\n",
@@ -266,13 +266,13 @@ func TestAllowedRunsTheOrgAndWhoeverAsked(test *testing.T) {
 }
 
 // A generator can write a name the module already declares under another file
-// name, which is github.com/charmbracelet/x/ansi: it ships a table it builds at
+// name, which is github.com/charmbracelet/x/ansi. It ships a table it builds at
 // run time, and its generator writes a precomputed one beside it. Both declare
 // Table.
 //
 // The file is added anyway. Deciding which of both a consumer wanted is not
 // this package's to make, and the compiler names both declarations and their
-// positions when it reads them together.
+// positions when it. Reads them together.
 //
 // What this reaches is the list Complete copies from, and the copy itself. It
 // does not reach Complete, which runs a sandboxed generator. So a filter
