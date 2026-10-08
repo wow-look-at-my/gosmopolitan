@@ -329,11 +329,7 @@ func zipDifference(left, right []byte) string {
 	return "no file differs, and the checksums do"
 }
 
-// overlayDebugf reports what the cache did for a module's overlay, under the
-// same variable that makes the build cache report itself.
+// overlayDebugf reports what the cache did for a module's overlay.
 func overlayDebugf(format string, args ...any) {
-	if os.Getenv("GOCACHEDEBUG") == "" {
-		return
-	}
 	fmt.Fprintf(os.Stderr, "go: "+format+"\n", args...)
 }
