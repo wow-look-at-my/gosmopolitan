@@ -27,7 +27,7 @@ type testUnitRoots struct {
 //
 // A barrier symbol is neither traversed nor covered. The generated main's
 // table of units names every package's test functions, so a walk through it
-// reaches all of them, and its content changes whenever any package in the
+// reaches all of them. Its content changes whenever any package in the
 // binary does. Each unit's own roots are named here instead.
 func readTestUnits(path string) (barriers []string, units []testUnitRoots, err error) {
 	file, err := os.Open(path)
@@ -67,8 +67,8 @@ func readTestUnits(path string) (barriers []string, units []testUnitRoots, err e
 }
 
 // testUnitDigests writes a digest of the code each unit's tests reach. It runs
-// before the dead code pass, over the whole symbol graph, because a unit's
-// roots reach code another unit's do not and the pass keeps the union.
+// before the dead code pass, over the whole symbol graph. This is because a
+// unit's roots reach code another unit's do not and the pass keeps the union.
 func testUnitDigests(ctxt *Link) {
 	if *flagTestUnits == "" {
 		return

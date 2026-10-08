@@ -17,14 +17,14 @@ import (
 // apeFatMerge implements the -apefat linker mode: it assembles the given
 // GOOS=cosmo binaries (at most one per architecture; each either an APE
 // produced by this linker or a raw ELF) into a single APE at outfile,
-// skipping normal linking entirely. Inputs give a fat APE; one input
+// skipping normal linking entirely. Inputs give a fat APE. One input
 // re-emits a single-architecture APE, so a build restricted to one
 // architecture still gets a fat build's stripping, sidecars and header.
 //
-// With -apedbg each input's pristine ELF goes to a sidecar beside outfile;
-// with -apestrip each payload is then cut to the span its program headers
-// reference. -apedbgmode selects how much the sidecars carry (apedebug.go);
-// work.cosmoMergeArgs decides when cmd/go passes these flags.
+// With -apedbg each input's pristine ELF goes to a sidecar beside outfile.
+// With -apestrip each payload is then cut to the span its program headers
+// reference. -apedbgmode selects how much the sidecars carry (apedebug.go).
+// Work.cosmoMergeArgs decides when cmd/go passes these flags.
 func apeFatMerge(spec, outfile string) {
 	if outfile == "" {
 		Exitf("-apefat requires -o")
@@ -104,9 +104,9 @@ func apeFatMerge(spec, outfile string) {
 }
 
 // appendAPEBlob appends the file at blobPath past everything the APE loads
-// or reads, 8-aligned, and closes the file with the trailer that
+// or reads, 8-aligned, and closes the file with the trailer. That trailer
 // internal/cosmo/embedded reads to find it. Nothing maps the blob at run
-// time, and the APE keeps it through staging and an in-place exec on NT,
+// time. The APE keeps it through staging and an in-place exec on NT,
 // because both copy the file whole.
 func appendAPEBlob(outfile, blobPath string) {
 	blob, err := os.ReadFile(blobPath)
@@ -127,12 +127,12 @@ func appendAPEBlob(outfile, blobPath string) {
 }
 
 // apeCompactDebugTail builds the compact debug tail for the payloads (in
-// their final order) and patches each payload's ELF header to reference
+// their final order). It patches each payload's ELF header to reference
 // its section-header view by absolute file offset - both in the stored
-// payload and, via makeEmbeddedElfHeader's propagation, in the boot
+// payload and, via makeEmbeddedElfHeader's propagation. In the boot
 // header that self-assimilation writes over the file's first many bytes.
 // The tail lands past the last payload's end (8-aligned), outside every
-// loadable span: it is never mapped at runtime, and every APE boot path
+// loadable span: it is never mapped at runtime. Every APE boot path
 // reads only ELF and program headers, so execution is unaffected.
 func apeCompactDebugTail(payloads []*apePayload, pristine [][]byte) (tail []byte, tailOff uint64) {
 	layoutAPE(payloads) // same deterministic layout writeAPEFile recomputes
@@ -160,7 +160,7 @@ func apeCompactDebugTail(payloads []*apePayload, pristine [][]byte) (tail []byte
 
 // appendAPEFileTail appends tail to the APE at outfile so that its first
 // byte lands at file offset tailOff, zero-padding the gap from the
-// current end of file.
+// current. End of file.
 func appendAPEFileTail(outfile string, tailOff uint64, tail []byte) {
 	f, err := os.OpenFile(outfile, os.O_WRONLY|os.O_APPEND, 0)
 	if err != nil {
@@ -193,7 +193,7 @@ func apeDebugSidecarName(outfile string) string {
 // writeAPEDebugSidecar writes payload p's debug sidecar for its architecture.
 // In the default -apedbgmode=full it is p's ELF image as its linker produced
 // it, with the OS ABI cleared (p_offset values payload-relative, symbol table
-// and DWARF intact): a complete standalone ELF executable, directly loadable
+// and DWARF intact): a complete standalone ELF. Executable, directly loadable
 // by debuggers.
 func writeAPEDebugSidecar(outfile string, p *apePayload) {
 	name := apeDebugSidecarName(outfile)
@@ -213,7 +213,7 @@ func writeAPEDebugSidecar(outfile string, p *apePayload) {
 }
 
 // payloadExtent returns the end of the file span referenced by the ELF
-// image's program headers: max over all entries of p_offset+p_filesz, but
+// image's program headers. Max over all entries of p_offset+p_filesz, but
 // no less than the end of the program header table itself. Everything past
 // it is non-loadable content (.debug_* sections, .symtab, .strtab, and the
 // section header table). The image must already have passed payloadFromELF
@@ -236,7 +236,7 @@ func payloadExtent(elf []byte) uint64 {
 
 // stripPayload cuts p's ELF image down to the span its program headers
 // reference and zeroes the ELF header's section fields (e_shoff, e_shnum,
-// e_shstrndx), which no longer point at anything.
+// e_shstrndx), which no longer. Point at anything.
 func stripPayload(p *apePayload) {
 	extent := payloadExtent(p.elf)
 	if extent > uint64(len(p.elf)) {
@@ -273,11 +273,11 @@ func payloadFromAPEOrELF(data []byte) (*apePayload, error) {
 
 // hasSecondAPEPayload reports whether the APE file data contains another ELF
 // image beyond the extent of the first payload at apeHeaderSize, meaning it
-// is already a fat APE. Merging such a file would silently ingest the first
+// is already. A fat APE. Merging such a file would silently ingest the first
 // payload's slice spanning both images, so apeFatMerge rejects it. The first
 // payload must already have passed payloadFromELF validation. layoutAPE
 // places every additional payload at an apePayloadAlign boundary at or after
-// the image's end, so scanning aligned offsets beyond the first image's
+// the image's end. Scanning aligned offsets beyond the first image's
 // segments finds it.
 func hasSecondAPEPayload(data []byte) bool {
 	elf := data[apeHeaderSize:]

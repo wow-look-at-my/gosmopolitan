@@ -5,14 +5,14 @@
 // instead of from the version token recorded in a go.mod file.
 //
 // A module under Prefix has no version of its own: every require line naming
-// one carries a placeholder, and the go command replaces that placeholder in
+// one carries a placeholder. The go command replaces that placeholder in
 // memory with the pseudo-version of the head of a branch. A CI build (see
 // CIBuild) takes the head its run locked (see Version), so every job of one
 // run builds the same commit. The version a require line carries is therefore
-// inert, which is why the token can be edited by hand, by a released
-// toolchain, or by a formatter without changing the build.
-// A repository publishes a set of modules and pins them to one another;
-// resolving at a repository rather than at a module keeps that set on one
+// inert, which is why the token can be edited by hand. This holds by a
+// released toolchain, or by a formatter without changing the build. A
+// repository publishes a set of modules and pins them to one another.
+// Resolving at a repository rather than at a module keeps that set on one
 // commit, where a version tree cannot.
 package orgmod
 
@@ -46,8 +46,8 @@ func Placeholder(path string) string {
 
 // Branch returns the branch named in a go.mod line's suffix comments, or "" when
 // they name none. A line names a branch to send one module somewhere other than
-// where the rest of them go: the main module's own branch, and the dependency's
-// default branch after that.
+// where the rest of them go. This covers the main module's own branch, and the
+// dependency's default branch after that.
 //
 // The marker is read from the line the version lives on, so a fork consumed
 // through a replace carries it on the replace line.

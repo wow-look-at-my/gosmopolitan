@@ -14,7 +14,7 @@ concurrency:
 jobs:
   # Every check that reads the tree and nothing else. It waits on no build, so a violation is named within the minute.
   source-checks:
-    timeout-minutes: 10
+    timeout-minutes: ${{ github.ref == 'refs/heads/master' && 20 || 10 }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -39,7 +39,7 @@ jobs:
   # Build Go toolchain and APE test binary on each build platform -- see docs/CI.md "build job".
   build:
     # make.bash plus the APE builds; the suite is its own job.
-    timeout-minutes: 45
+    timeout-minutes: ${{ github.ref == 'refs/heads/master' && 90 || 45 }}
     permissions:
       id-token: write
       contents: read
@@ -74,7 +74,7 @@ jobs:
 
       - name: Build Go toolchain
         # A cold build, with the shared cache unreachable, takes over 8 minutes on macOS.
-        timeout-minutes: 20
+        timeout-minutes: ${{ github.ref == 'refs/heads/master' && 40 || 20 }}
         uses: wow-look-at-my/actions/multicmd@master
         with:
           unix: cd src && ./make.bash -v
@@ -87,9 +87,9 @@ jobs:
       - if: failure()
         uses: wow-look-at-my/actions@fail-fast#latest
 
-  # The ubuntu build leg, its own job so cosmo-checks, wasm and wasm-suite take its toolchain the moment it exists: needs waits on a whole matrix.
+  # The ubuntu build leg, its own job so cosmo-checks, wasm and wasm-suite take its toolchain the moment it exists: needs waits. On a whole matrix.
   build-linux:
-    timeout-minutes: 45
+    timeout-minutes: ${{ github.ref == 'refs/heads/master' && 90 || 45 }}
     permissions:
       id-token: write
       contents: read
@@ -116,7 +116,7 @@ jobs:
       - uses: ./.github/actions/apeld-tools
 
       - name: Build Go toolchain
-        timeout-minutes: 20
+        timeout-minutes: ${{ github.ref == 'refs/heads/master' && 40 || 20 }}
         shell: bash
         run: cd src && ./make.bash -v
         env:
@@ -129,7 +129,7 @@ jobs:
 
   # The whole suite per host, one leg each; nothing downstream of a build waits on it.
   suite:
-    timeout-minutes: 300
+    timeout-minutes: ${{ github.ref == 'refs/heads/master' && 600 || 300 }}
     needs: [build, build-linux]
     permissions:
       id-token: write
@@ -158,7 +158,7 @@ jobs:
         shell: pwsh
         run: |
           $gb = 1GB
-          # Which drive has room decides whether this does anything: the workspace and RUNNER_TEMP are both on D:, and only the caches under the profile sit on C:.
+          # Which drive has room decides whether this does anything. The workspace and RUNNER_TEMP are both on D:, and only the caches under the profile sit on C:.
           Get-PSDrive -PSProvider FileSystem | Where-Object { $null -ne $_.Free } | ForEach-Object {
             Write-Host ("before: {0}: {1:N1} GB free of {2:N1} GB" -f $_.Name, ($_.Free/$gb), (($_.Free + $_.Used)/$gb))
           }
@@ -180,7 +180,7 @@ jobs:
             'C:\hostedtoolcache\windows\Python',
             'C:\hostedtoolcache\windows\node'
           )
-          # rd walks a tree one entry at a time. robocopy mirrors an empty directory over each tree with many threads instead, which frees the space and leaves a shell of empty directories nothing reads again.
+          # rd walks a tree one entry at a time. robocopy mirrors an empty directory over each tree with many threads instead. This frees the space and leaves a shell of empty directories nothing reads again.
           $empty = Join-Path $env:RUNNER_TEMP 'empty-for-mirror'
           New-Item -ItemType Directory -Force -Path $empty | Out-Null
           # An unlink is an MFT update and those serialize per volume, so four trees at eight threads is past the point where more helps.
@@ -219,7 +219,7 @@ jobs:
         shell: bash
         run: ./bin/go version
 
-      # This image's gcc links libwinpthread as a DLL that lives in C:\mingw64\bin and nowhere else, so a binary carrying any cgo package reaches it through PATH alone and dies at load with 0xc0000135 once a test narrows PATH or hands a child an environment without one. The loader reads the system directory whatever the environment says, so a copy there is found by every binary, and the stdlib archives the suite links against were built before this step runs.
+      # Consider this image's gcc links. Those links libwinpthread as a DLL that lives in C:\mingw64\bin and nowhere else, so a binary carrying any cgo package reaches it through. PATH alone and dies at load with 0xc0000135 once a test narrows PATH or hands a child an environment without one. The loader reads the system directory whatever the environment says. A copy there is found by every binary, and the stdlib archives the suite links against were built before this step runs.
       - name: Put the mingw runtime where the loader always looks (NT)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -431,7 +431,7 @@ jobs:
 
   # Checks whose answer does not depend on the host. Each runs once, here, on the linux toolchain.
   cosmo-checks:
-    timeout-minutes: 60
+    timeout-minutes: ${{ github.ref == 'refs/heads/master' && 120 || 60 }}
     needs: build-linux
     permissions:
       id-token: write
@@ -481,7 +481,7 @@ jobs:
 
       # Every host-independent suite. Which tests each covers is the suite's decision, not this file's.
       - name: The dats suites
-        timeout-minutes: 45
+        timeout-minutes: ${{ github.ref == 'refs/heads/master' && 90 || 45 }}
         uses: wow-look-at-my/dats@master
         with:
           tests: dats/checks
@@ -492,7 +492,7 @@ jobs:
   # Test all APE binaries on each platform using Go tests -- see docs/CI.md "test job".
   test:
     # NT links more and links it slower, so it gets 40 minutes where the others get 25.
-    timeout-minutes: ${{ matrix.test-os == 'windows-latest' && 40 || 25 }}
+    timeout-minutes: ${{ matrix.test-os == 'windows-latest' && (github.ref == 'refs/heads/master' && 80 || 40) || (github.ref == 'refs/heads/master' && 50 || 25) }}
     needs: [build, build-linux]
     permissions:
       contents: read
@@ -540,7 +540,7 @@ jobs:
 
       # Prefetched separately so a stalled module download can't masquerade as a hung test step.
       - name: Download apetest modules
-        timeout-minutes: 3
+        timeout-minutes: ${{ github.ref == 'refs/heads/master' && 6 || 3 }}
         shell: bash
         run: |
           cd testdata/ape/apetest
@@ -571,7 +571,7 @@ jobs:
       # apetest per origin then the subsets, and the read-only boot. readonly-boot is unix-only: NTFS ignores the mode bit it relies on, and nt.dats carries that claim for NT.
       - name: The APE binaries run on this host (dats)
         if: matrix.test-os != 'windows-latest'
-        timeout-minutes: 45
+        timeout-minutes: ${{ github.ref == 'refs/heads/master' && 90 || 45 }}
         uses: wow-look-at-my/dats@master
         with:
           tests: dats/test/apetest.dats dats/test/readonly-boot.dats
@@ -582,7 +582,7 @@ jobs:
       # The container shape is built from mount namespaces, so it is linux only.
       - name: An APE runs in a read-only container (dats)
         if: runner.os == 'Linux'
-        timeout-minutes: 10
+        timeout-minutes: ${{ github.ref == 'refs/heads/master' && 20 || 10 }}
         uses: wow-look-at-my/dats@master
         with:
           tests: dats/test/readonly-boot-container.dats
@@ -597,7 +597,7 @@ jobs:
 
       - name: The APE binaries run on this host, and the NT host suite (dats, on NT)
         if: matrix.test-os == 'windows-latest'
-        timeout-minutes: 45
+        timeout-minutes: ${{ github.ref == 'refs/heads/master' && 90 || 45 }}
         shell: pwsh
         env:
           DATS_BIN: ${{ steps.dats.outputs.path }}
@@ -613,7 +613,7 @@ jobs:
   wasm:
     # Off while the wasip1 suite recompiles its modules and starves the queue; flip the condition back to re-enable. waiver-expires: 2026-10-13
     if: ${{ false }}
-    timeout-minutes: 45
+    timeout-minutes: ${{ github.ref == 'refs/heads/master' && 90 || 45 }}
     needs: build-linux
     permissions:
       id-token: write
@@ -643,7 +643,7 @@ jobs:
 
       - name: Install wazero (wasip1 runtime)
         # Runs before the fork toolchain is built so `go` is unambiguously the setup-go bootstrap -- see docs/CI.md "wasm job".
-        timeout-minutes: 5
+        timeout-minutes: ${{ github.ref == 'refs/heads/master' && 10 || 5 }}
         shell: bash
         run: GOOS=linux GOARCH=amd64 GOBIN="${{ runner.temp }}/wasibin" go install github.com/tetratelabs/wazero/cmd/wazero@v1.12.0 && sudo install -m 0755 "${{ runner.temp }}/wasibin/wazero" /usr/local/bin/wazero
 
@@ -659,7 +659,7 @@ jobs:
 
       # Every wasm suite: std for both ports, the object writer, the node and wasip1sock transports, wasmexport and GOWASM=threads.
       - name: The wasm dats suites
-        timeout-minutes: 40
+        timeout-minutes: ${{ github.ref == 'refs/heads/master' && 80 || 40 }}
         uses: wow-look-at-my/dats@master
         with:
           tests: dats/wasm
@@ -671,7 +671,7 @@ jobs:
   wasm-suite:
     # Off while the wasip1 suite recompiles its modules and starves the queue; flip the condition back to re-enable. waiver-expires: 2026-10-13
     if: ${{ false }}
-    timeout-minutes: 120
+    timeout-minutes: ${{ github.ref == 'refs/heads/master' && 240 || 120 }}
     needs: build-linux
     permissions:
       id-token: write
@@ -704,13 +704,13 @@ jobs:
           node-version: '22'
 
       - name: Install wasmtime (wasip1 runtime)
-        # The exec wrapper's default engine, at the release upstream's wasip1 builder pins: v15 onward answers a FIFO read with ESPIPE (wasitest TestNonblock), and wazero sits 10 pages over test/wasmmemsize's ceiling.
+        # The exec wrapper's default engine, at the release upstream's wasip1 builder pins: v15 onward answers a FIFO read with ESPIPE (wasitest TestNonblock), and wazero sits 10 pages. Over test/wasmmemsize's ceiling.
         if: matrix.port == 'wasip1'
-        timeout-minutes: 5
+        timeout-minutes: ${{ github.ref == 'refs/heads/master' && 10 || 5 }}
         shell: bash
         run: curl -sSfL https://wasmtime.dev/install.sh | bash -s -- --version v14.0.4
 
-      # wasmtime compiles each test binary's module before running it, and that compile is most of a cheap package: sort.test costs 2.53s cold against 1.05s warm.
+      # wasmtime compiles each test binary's module before running it. That compile is most of a cheap package: sort.test costs 2.53s cold against 1.05s warm.
       - name: Keep the compiled wasm modules between runs
         if: matrix.port == 'wasip1'
         uses: actions/cache@v4
@@ -796,7 +796,7 @@ jobs:
 
   # Publishes an installable toolchain distribution to buildhost on every green push -- see docs/CI.md "publish jobs".
   publish-create:
-    timeout-minutes: 10
+    timeout-minutes: ${{ github.ref == 'refs/heads/master' && 20 || 10 }}
     # Switching the wasm legs back on goes with putting them back here: a needed job reporting `skipped` skips this one.
     needs: [source-checks, build, build-linux, suite, cosmo-checks, test]
     runs-on: ubuntu-latest
@@ -822,7 +822,7 @@ jobs:
 
   # Uploading is generic work, so it takes the cheapest runner. Each build leg packaged its own archive; this job only moves them to buildhost.
   publish-upload:
-    timeout-minutes: 15
+    timeout-minutes: ${{ github.ref == 'refs/heads/master' && 30 || 15 }}
     needs: publish-create
     runs-on: ubuntu-latest
     strategy:
@@ -867,7 +867,7 @@ jobs:
             core.setOutput('name', names[0]);
 
       - name: Upload toolchain tarball
-        timeout-minutes: 10
+        timeout-minutes: ${{ github.ref == 'refs/heads/master' && 20 || 10 }}
         uses: wow-look-at-my/buildhost/.github/actions/buildhost-upload-artifact@master
         with:
           project: gosmopolitan
@@ -884,7 +884,7 @@ jobs:
           echo "::notice::uploaded ${{ steps.tarball.outputs.name }} to gosmopolitan v${{ needs.publish-create.outputs.version }} (${{ matrix.goos }}/${{ matrix.goarch }})"
 
   publish-finish:
-    timeout-minutes: 10
+    timeout-minutes: ${{ github.ref == 'refs/heads/master' && 20 || 10 }}
     needs: [publish-create, publish-upload]
     runs-on: ubuntu-latest
     permissions:
@@ -918,7 +918,7 @@ jobs:
     needs: [suite, cosmo-checks, test, wasm, wasm-suite, publish-upload, publish-finish]
     # A cancelled or failed run still has hand-offs to drop; without this the job is skipped and they are orphaned.
     if: always()
-    timeout-minutes: 10
+    timeout-minutes: ${{ github.ref == 'refs/heads/master' && 20 || 10 }}
     runs-on: ubuntu-latest
     permissions:
       contents: read

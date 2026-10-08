@@ -7,6 +7,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -285,6 +286,10 @@ type fakeGitHub struct {
 
 	// infoRefsStatus fails every info/refs request, direct or proxied.
 	infoRefsStatus int
+	// infoRefsCredential is the Authorization an info/refs request must carry.
+	infoRefsCredential string
+	// lastInfoRefsCredential is the Authorization of every info/refs request, in order.
+	infoRefsAuth []string
 	// apiStatus fails every direct api.github.com request with this code.
 	apiStatus int
 	// private makes github.com and api.github.com answer nothing, directly or through the proxy.
@@ -322,6 +327,9 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	} else {
 		f.requests = append(f.requests, record)
 	}
+	if isInfoRefs {
+		f.infoRefsAuth = append(f.infoRefsAuth, req.Header.Get("Authorization"))
+	}
 	f.mu.Unlock()
 
 	if req.Host == gsmHost {
@@ -341,6 +349,10 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	if isInfoRefs {
+		if f.infoRefsCredential != "" && req.Header.Get("Authorization") != f.infoRefsCredential {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
 		if f.infoRefsStatus != 0 {
 			http.Error(w, "no refs", f.infoRefsStatus)
 			return
@@ -563,8 +575,8 @@ func (f *fakeGitHub) serveArchive(w http.ResponseWriter, req *http.Request, via,
 	w.Write(served)
 }
 
-// serveFakeGitHub routes every host the fetcher can reach to fake, and a few
-// it must never reach, so a request to those shows up in fake.requests.
+// serveFakeGitHub routes every host the fetcher can reach to fake. A few it
+// must never reach, so a request to those shows up in fake.requests.
 func serveFakeGitHub(t *testing.T, fake *fakeGitHub) {
 	server := httptest.NewTLSServer(fake)
 	t.Cleanup(server.Close)
@@ -692,6 +704,139 @@ func TestGitHubUnnamedCommit(t *testing.T) {
 			t.Errorf("fetched an archive of the commit off every branch: %s", request)
 		}
 	}
+}
+
+// TestGitHubInfoRefsSendsTheCredentialFirst covers a private repository's ref
+// advertisement. With a git credential available, the first request carries
+// it, so there is no anonymous refusal and no second round trip.
+func TestGitHubInfoRefsSendsTheCredentialFirst(t *testing.T) {
+	t.Serial()
+	testenv.MustHaveExecPath(t, "git")
+	resetGitHubCredential()
+	source, _ := makeSourceRepo(t, sourceFiles)
+	head := gitIn(t, source, "rev-parse", "HEAD")
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(home, "gitconfig"))
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_ASKPASS", "")
+	t.Setenv("GIT_TERMINAL_PROMPT", "0")
+	if err := os.WriteFile(filepath.Join(home, "gitconfig"), []byte("[credential]\n\thelper = store\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".git-credentials"), []byte("https://gopher:sekret@github.com\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	credential := "Basic " + base64.StdEncoding.EncodeToString([]byte("gopher:sekret"))
+
+	fake := &fakeGitHub{dir: source, redirectTo: "codeload.github.com", infoRefsCredential: credential}
+	serveFakeGitHub(t, fake)
+	ctx := testContext(t)
+	repo := fakeGitHubRepo(t, ctx, filepath.Join(t.TempDir(), "no-such-remote.git"))
+
+	latest, err := repo.Latest(ctx)
+	if err != nil {
+		t.Fatalf("Latest with a git credential = %v; want the advertisement", err)
+	}
+	if latest.Name != head || latest.Origin.Ref != "HEAD" {
+		t.Errorf("Latest = %s at %q, want %s at HEAD", latest.Name, latest.Origin.Ref, head)
+	}
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.infoRefsAuth) == 0 || fake.infoRefsAuth[0] != credential {
+		t.Errorf("first info/refs Authorization = %q; want %q\nall: %q", firstOf(fake.infoRefsAuth), credential, fake.infoRefsAuth)
+	}
+}
+
+// TestGitHubInfoRefsAnonymousWithoutACredential covers a machine with no
+// github.com credential. The first request carries none, and the refs resolve
+// by the API, so a build without a credential behaves as it always has.
+func TestGitHubInfoRefsAnonymousWithoutACredential(t *testing.T) {
+	t.Serial()
+	testenv.MustHaveExecPath(t, "git")
+	resetGitHubCredential()
+	source, _ := makeSourceRepo(t, sourceFiles)
+	head := gitIn(t, source, "rev-parse", "HEAD")
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(home, "gitconfig"))
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_ASKPASS", "")
+	t.Setenv("GIT_TERMINAL_PROMPT", "0")
+	if err := os.WriteFile(filepath.Join(home, "gitconfig"), []byte("[credential]\n\thelper = store\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	fake := &fakeGitHub{dir: source, redirectTo: "codeload.github.com", infoRefsCredential: "Basic " + base64.StdEncoding.EncodeToString([]byte("nobody:none"))}
+	serveFakeGitHub(t, fake)
+	ctx := testContext(t)
+	repo := fakeGitHubRepo(t, ctx, filepath.Join(t.TempDir(), "no-such-remote.git"))
+
+	latest, err := repo.Latest(ctx)
+	if err != nil {
+		t.Fatalf("Latest with no credential = %v; want the refs from the API", err)
+	}
+	if latest.Name != head {
+		t.Errorf("Latest = %s, want %s", latest.Name, head)
+	}
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.infoRefsAuth) == 0 || fake.infoRefsAuth[0] != "" {
+		t.Errorf("first info/refs Authorization = %q; want none", firstOf(fake.infoRefsAuth))
+	}
+}
+
+// TestGitHubCredentialHelperRunsOnce covers the per-process credential: every
+// origin of one build resolves through one run of the helper.
+func TestGitHubCredentialHelperRunsOnce(t *testing.T) {
+	t.Serial()
+	testenv.MustHaveExecPath(t, "git")
+	resetGitHubCredential()
+	source, _ := makeSourceRepo(t, sourceFiles)
+
+	home := t.TempDir()
+	runs := filepath.Join(home, "runs")
+	t.Setenv("HOME", home)
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(home, "gitconfig"))
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_ASKPASS", "")
+	t.Setenv("GIT_TERMINAL_PROMPT", "0")
+	t.Setenv("GIT_CRED_RUNS", runs)
+	helper := "[credential]\n\thelper = \"!f() { echo run >> $GIT_CRED_RUNS; echo username=gopher; echo password=sekret; }; f\"\n"
+	if err := os.WriteFile(filepath.Join(home, "gitconfig"), []byte(helper), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	credential := "Basic " + base64.StdEncoding.EncodeToString([]byte("gopher:sekret"))
+
+	fake := &fakeGitHub{dir: source, redirectTo: "codeload.github.com", infoRefsCredential: credential}
+	serveFakeGitHub(t, fake)
+	ctx := testContext(t)
+	for range 2 {
+		repo := fakeGitHubRepo(t, ctx, filepath.Join(t.TempDir(), "no-such-remote.git"))
+		if _, err := repo.Latest(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	data, err := os.ReadFile(runs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(data), "run"); got != 1 {
+		t.Errorf("the credential helper ran %d times for two origins, want once", got)
+	}
+}
+
+// firstOf answers the first entry, or "" for an empty list.
+func firstOf(values []string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	return values[0]
 }
 
 // TestGitHubPrivateOverMirror resolves and downloads a private repository

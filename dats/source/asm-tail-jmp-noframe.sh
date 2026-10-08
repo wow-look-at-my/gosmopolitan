@@ -19,8 +19,8 @@ skipBlanks() {
 	done
 }
 
-# report names the TEXT block the scan finished, when it carries the hazard: a
-# tail JMP to a symbol, a call in the body, and no NOFRAME.
+# report names the TEXT block the scan finished, when it carries the hazard.
+# This covers a tail JMP to a symbol, a call in the body, and no NOFRAME.
 report() {
 	[ -n "$name" ] && [ -n "$jmp" ] && [ "$hascall" -eq 1 ] && [ "$noframe" -eq 0 ] || return 0
 	printf 'BLOCKED: framed TEXT tail-jumps to %s\n  %s:%d: %s\n' "$jmp" "$file" "$line" "$name" >&2

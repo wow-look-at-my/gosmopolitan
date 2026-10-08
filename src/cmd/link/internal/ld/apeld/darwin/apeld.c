@@ -1,10 +1,11 @@
 // apeld: boot an APE's arm64 payload on macOS from a precompiled loader.
 //
-// macOS has no memfd and cannot exec an ELF, so the loader maps the
-// payload's PT_LOAD segments itself, builds a SysV stack with an auxv,
-// hands the payload a Syslib table of libSystem entry points, and jumps.
-// This is the job gosmopolitan's embedded ape-m1.c does after the shell
-// compiles it with cc. Here it is compiled once, ahead of time.
+// macOS has no memfd and cannot exec an ELF. The loader maps the
+// payload's PT_LOAD segments itself and builds a SysV stack with an
+// auxv. The loader also hands the payload a Syslib table of libSystem
+// entry points, and jumps. This is the job gosmopolitan's embedded
+// ape-m1.c does after the shell compiles it with cc. Here it is compiled
+// once, ahead of time.
 //
 // Contract with the payload (rt0_cosmo_arm64.s): sp = argc block, x2 =
 // program path, x3 = 8 (XNU), x15 = Syslib with magic "slib", x16 = entry.
@@ -312,7 +313,7 @@ int main(int argc, char **argv, char **envp) {
 
 	// -u removes this loader's own file before anything else. A caller that
 	// unpacked a throwaway copy passes it, so an APE leaves no second file on
-	// the host. It is argv and not an environment variable on purpose: an
+	// the host. It is argv and not an environment variable on purpose. An
 	// environment variable reaches the payload, and a nested run could then
 	// delete a loader somebody installed.
 	//

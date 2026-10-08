@@ -6,7 +6,7 @@ tab=$(printf '\t')
 rc=0
 
 # placeholder reports whether a version token is the placeholder a version file
-# records for an org module: vN.0.0, for any decimal major, with no pre-release
+# records for an org module: vN.0.0, for any decimal major. With no pre-release
 # part and no pseudo-version date.
 placeholder() {
 	case $1 in

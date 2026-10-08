@@ -37,14 +37,14 @@ func Payload(r io.ReaderAt) io.ReaderAt {
 // ehdrSize is the size of an ELF64 header.
 const ehdrSize = 64
 
-// assimilated reports whether head is the ELF header an APE loader
-// wrote over the polyglot one.
+// assimilated reports whether head is the ELF header an APE loader wrote over
+// the polyglot one.
 //
-// That header exists to be executed: it names no sections, because a
-// payload's section table sits at an offset relative to the payload
-// rather than to the file. So the section-less header stands in front
-// of an image that has the table, and both agree on what they are. A
-// file that carries both, agreeing, is an assimilated APE.
+// That header exists to be executed: it names no sections. This is because a
+// payload's section table sits at an offset relative to the payload rather
+// than to the file. So the section-less header stands in front of an image
+// that has the table, and both agree on what they are. A file that carries
+// both, agreeing, is an assimilated APE.
 func assimilated(r io.ReaderAt, head *[ehdrSize]byte) bool {
 	if string(head[:4]) != elfMagic || u16(head[60:]) != 0 { // e_shnum
 		return false
@@ -82,7 +82,7 @@ var sidecars = []string{".dbg"}
 // Sidecar returns the file to read an APE's ELF structure from, or ""
 // when name is not an APE or nothing is beside it.
 //
-// A stripped APE carries its loadable span and nothing else, so a reader
+// A stripped APE carries its loadable span and nothing else. A reader
 // that wants sections has to read the image the build wrote next to it.
 // That is the image gdb and delve already read.
 func Sidecar(name string) string {

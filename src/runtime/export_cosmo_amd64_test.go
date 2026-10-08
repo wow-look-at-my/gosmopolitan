@@ -8,7 +8,7 @@ package runtime
 import "unsafe"
 
 // Exports for signal_cosmo_xnu_amd64_test.go: the XNU x86-layouts
-// sigctxt and the darwin sigaction/sigaltstack paths read and write,
+// sigctxt. The darwin sigaction/sigaltstack paths read and write,
 // surfaced over plain integers since the struct types are unexported.
 
 const (
