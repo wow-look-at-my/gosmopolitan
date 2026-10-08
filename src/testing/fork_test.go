@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package testing
 
@@ -13,7 +12,7 @@ import (
 )
 
 // TestForkStaysParallel: Fork gives the test a process, not a serial hold. The
-// child allows parallelism like any other run, so two subtests that ask for it
+// child allows parallelism like any other run, so subtests that ask for it
 // must reach a rendezvous only concurrent code can reach.
 func TestForkStaysParallel(t *T) {
 	if !canFork() {
@@ -93,12 +92,6 @@ func TestForkRunsTheBodyInAChildProcess(t *T) {
 // TestForkChildSelectsItsTargetByFlag: a child runs one test because
 // forkArgs anchors -test.run to it, NOT because anything reads the fork
 // marker to filter the test list.
-//
-// The distinction is the whole reason this test exists. The marker is an
-// environment variable, so every subprocess a test starts inherits it, and a
-// filter keyed on it silences that subprocess's own -test.run. Selection
-// belongs on the command line, where it reaches exactly the process the
-// caller meant.
 func TestForkChildSelectsItsTargetByFlag(t *T) {
 	args := forkArgs("TestOuter", []string{"-test.v"})
 
@@ -135,10 +128,10 @@ func TestForkFromASubtest(t *T) {
 }
 
 // TestForkSubtestsGetTheirOwnChild: the subtests of a forked test share that
-// child with each other, so a subtest asking for a process of its own must get
-// one. Each ends up the target of a child of its own, and the run terminates:
-// the marker names one test, and every test it runs under stays in place
-// rather than forking its own parent.
+// child with each other, so a subtest asking for a process of its own. Must
+// get one. Each ends up the target of a child of its own, and the run
+// terminates. The marker names one test, and every test it runs under stays in
+// place rather than forking its own parent.
 func TestForkSubtestsGetTheirOwnChild(t *T) {
 	if !canFork() {
 		t.Skip("this run cannot fork, so Fork takes the barrier")
@@ -177,10 +170,9 @@ func TestAllocsPerRunInAForkedSubtest(t *T) {
 // forkAllocSink keeps the measured allocation from being optimized away.
 var forkAllocSink []byte
 
-// TestForkReportsTheChildsFailure is the negative control on the rule that the
-// child's exit status is the verdict. A test cannot fail itself to prove it, so
-// it drives runForked directly and checks that a failing child comes back as an
-// error naming the test, with the child's output attached.
+// TestForkReportsTheChildsFailure is the. A test cannot fail itself to prove
+// it. It drives runForked directly and checks that a failing child comes
+// back as an error naming the test, with the child's output attached.
 func TestForkReportsTheChildsFailure(t *T) {
 	if !canFork() {
 		t.Skip("this run cannot fork, so Fork takes the barrier")
@@ -190,9 +182,7 @@ func TestForkReportsTheChildsFailure(t *T) {
 		return
 	}
 
-	// A name no test has. The child then selects nothing, and a run that tests
-	// nothing fails in this fork, so the child exits non-zero -- which is the
-	// outcome Fork has to notice.
+	// A name no test has.
 	fake := &T{common: common{name: "TestForkNoSuchTest"}}
 	out, err := fake.runForked()
 	if err == nil {
@@ -208,8 +198,7 @@ func TestForkReportsTheChildsFailure(t *T) {
 
 // TestSetenvForks: Setenv changes the process, and a child is how the test gets
 // one of its own. The barrier would give the same isolation and stop the suite
-// to do it, so the test asserts the variable is set AND that nothing was
-// stopped.
+// to do it. The test asserts the variable is set AND that nothing was stopped.
 func TestSetenvForks(t *T) {
 	if !canFork() {
 		t.Skip("this run cannot fork, so Setenv takes the barrier")
@@ -272,9 +261,9 @@ func TestSetenvInAChildStaysInPlace(t *T) {
 }
 
 // TestForkArgs: the child inherits the run's arguments and replaces only the
-// selection. The -target case is the one that matters -- cmd/internal/testdir
+// selection. The -target case is the one that matters. Cmd/internal/testdir
 // reads it to decide what to compile for, so a child that loses it tests the
-// host and reports that as the answer.
+// host and reports. That as the answer.
 func TestForkArgs(t *T) {
 	for _, tc := range []struct {
 		name string
@@ -307,9 +296,7 @@ func TestForkArgs(t *T) {
 			want: []string{"positional", "-test.short", "-test.run=^TestFoo$", "-test.count=1"},
 		},
 		{
-			// The whole reason the run's pattern is read rather than dropped:
-			// the child must compile what the run named, not every subtest
-			// under it. This is the shape that ran the testdir suite dry.
+			// The whole reason the run's pattern is read rather than dropped: the child must compile what the run named.
 			name: "the run's filter on the subtests below survives",
 			argv: []string{"-test.run=TestFoo/wasmexport", "-target=js/wasm"},
 			want: []string{"-target=js/wasm", "-test.run=^TestFoo$/wasmexport", "-test.count=1"},
@@ -335,8 +322,7 @@ func TestForkRunValue(t *T) {
 		{"Test", "Test", "^Test$"},
 		{"Test", "Test/wasmexport", "^Test$/wasmexport"},
 		{"Test", "Test/wasmexport/deeper", "^Test$/wasmexport/deeper"},
-		// The forked test already names every element the run did, so there is
-		// no tail left to carry.
+		// The forked test already names every element the run did, so there is no tail left to carry.
 		{"Test/wasmexport", "Test/wasmexport", "^Test$/^wasmexport$"},
 	} {
 		if got := forkRunValue(tc.name, tc.run); got != tc.want {
@@ -352,10 +338,7 @@ func TestAllocsPerRunForks(t *T) {
 	if !canFork() {
 		t.Skip("this run cannot fork, so AllocsPerRun takes the barrier")
 	}
-	// No barrier here, deliberately: sharing the process IS the condition under
-	// test. Parallel makes it so when parallelByDefault is off, and is a no-op
-	// when it is on. The sink is a local for the same reason, so the analyzer
-	// that asks for one has nothing to ask about.
+	// No barrier here, deliberately: sharing the process IS the condition under test.
 	t.Parallel()
 	if os.Getenv(forkTargetEnv) == "" {
 		AllocsPerRun(1, func() {})
@@ -381,7 +364,7 @@ func TestAllocsPerRunUnderSerialDoesNotFork(t *T) {
 	}
 }
 
-// TestAllocsPerRunRefusesBesideASibling: a fork gives the test a process, not
+// TestAllocsPerRunRefusesBesideASibling. A fork gives the test a process, not
 // the process to itself, so the subtests of a forked test still run at the
 // same time. A second fork would land in the same place, so the measurement
 // refuses here and names the method that stops them.

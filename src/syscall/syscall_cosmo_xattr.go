@@ -1,6 +1,5 @@
-// Copyright 2024 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo
 
@@ -8,18 +7,11 @@ package syscall
 
 import "unsafe"
 
-// Extended-attribute, file-preallocation and memory-control wrappers that
-// the linux port declares in files cosmo does not build. A package that
-// selects a source file by the _linux name suffix keeps that file under
-// cosmo, so it calls these names and does not compile without them. Each
-// signature and body matches the linux port.
-//
-// Every syscall number here is in both cosmo tables, so the wrappers are
-// architecture-independent. A Linux host runs the call directly. On a
-// macOS host the Syslib serves mprotect; the darwin emulation implements
-// none of the others and answers ENOSYS. The NT emulation table
-// implements none of them, so a Windows host answers ENOSYS for all of
-// them.
+// Extended-attribute, file-preallocation and memory-control wrappers that the
+// linux port declares in files cosmo does not build. A package that selects a
+// source file by the _linux name suffix keeps that file under cosmo. It calls
+// these names and does not compile without them. Each signature and body
+// matches the linux port.
 
 func Getxattr(path string, attr string, dest []byte) (sz int, err error) {
 	var _p0 *byte

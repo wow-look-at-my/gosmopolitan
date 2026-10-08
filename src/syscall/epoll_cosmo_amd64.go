@@ -1,12 +1,11 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo
 
 package syscall
 
-// The epoll syscalls darwinEpollTrap intercepts beyond the three every
+// The epoll syscalls darwinEpollTrap intercepts beyond those every
 // architecture has.
 const (
 	darwinSysEpollCreate = SYS_EPOLL_CREATE

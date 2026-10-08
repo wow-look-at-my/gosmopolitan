@@ -371,14 +371,17 @@ func (f *Fetcher) downloadZip(ctx context.Context, mod module.Version, zipfile s
 		}
 		servedBy = proxy
 		repo := f.Lookup(ctx, proxy, mod.Path)
+		zipCtx := ctx
 		if direct, ok := repo.(filesRepo); ok {
 			got, gotCommit, err := direct.Files(ctx, mod.Version)
 			if err == nil && proxy == "github" {
-				// A proxy can still serve the h1 sum go.sum records.
 				if err = f.checkRecordedH1(mod, got); err != nil {
 					rec := codehost.FetchFrom(ctx)
 					rec.SetRoute("")
 					rec.AddFailure("github.com archive", err)
+					// git archive builds the zip the h1 sum covers.
+					zipCtx = codehost.WithGitOnly(ctx)
+					err = errors.ErrUnsupported
 				}
 			}
 			if !errors.Is(err, errors.ErrUnsupported) {
@@ -395,7 +398,7 @@ func (f *Fetcher) downloadZip(ctx context.Context, mod module.Version, zipfile s
 				return err
 			}
 		}
-		err := repo.Zip(ctx, file, mod.Version)
+		err := repo.Zip(zipCtx, file, mod.Version)
 		if err != nil {
 			if name, isProxy := proxyName(proxy); isProxy {
 				codehost.FetchFrom(ctx).AddFailure(name, err)
@@ -1502,8 +1505,8 @@ var HelpPrivate = &base.Command{
 	UsageLine: "private",
 	Short:     "configuration for downloading non-public code",
 	Long: `
-The go command downloads modules from the public Go module mirror at
-proxy.golang.org. It validates downloaded modules, regardless of source,
+The go command downloads each module from its origin repository, and never
+from the module mirror at proxy.golang.org. It validates downloaded modules
 against the public Go checksum database at sum.golang.org. This toolchain
 has no GOPROXY or GOSUMDB to replace either service.
 

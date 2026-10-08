@@ -10,7 +10,7 @@ An org module is a `github.com/wow-look-at-my/...` module. It has no version of 
 
 ## go.mod keeps the placeholder
 
-- Each go command resolves the head again and builds it. The version lives in the build list, the module cache and `go version -m`, never in `go.mod`.
+- Each go command resolves the head again and builds it. The version lives in the build list, the module cache and `go version -m`, not in `go.mod`.
 - `go mod tidy`, `go get` and every build write the placeholder for an org module. A tidy go.mod stays byte for byte identical when an org dependency moves.
 - The token on an org require or replace line is not read. A go.mod file that records some other version builds the same way, and the next write puts the placeholder back.
 - An org module has no `go.sum` line. Its commit is the integrity check.
@@ -28,9 +28,19 @@ A CI build follows the same heads as any other build, and writes the same placeh
 - Inside one go command the resolved version stays cached, so a command asks the store once per lock.
 - A store that refuses, or a CI build that names no run, fails the command. The error names the store and the module. Nothing stands in for the lock.
 - A dropped connection, a 5xx or a 429 is the path to the store, not its answer. The command asks again on a fixed cadence until the store answers, and names each failure on stderr.
-- Outside CI nothing reads or writes the store.
+- A build that names no run reads and writes no store, and resolves every head for itself.
 
 The code is `src/cmd/go/internal/orgmod/runlock.go`.
+
+## A local build can name a run too
+
+A build driver that runs many go commands in one build pays to resolve each org module head once per command. Naming the run in `GOSMOPOLITAN_RUN` locks the heads for that build the way a CI run does. The run is one build, not one machine: the driver picks a name unique to it, and every go command it starts inherits it.
+
+- A build locks a run when it is a CI job or when `GOSMOPOLITAN_RUN` names one. A build that names neither is unchanged.
+- With no store named, a local run's locks live in a directory of their own under the user cache (`gosmopolitan/run-locks/<run>`). One build never reads another's locks, and no job authenticates to a server.
+- `GOSMOPOLITAN_RUN_LOCK_STORE` names the store as it does in CI.
+- A changed head is picked up by the next run: a build that names a new run resolves the heads again.
+- `cmd/go/testdata/script/org_local_run.txt` covers the reuse and the new run. `org_ci_build.txt` covers the CI run.
 
 ### The store
 

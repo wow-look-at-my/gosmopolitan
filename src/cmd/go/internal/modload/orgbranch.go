@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package modload
 
@@ -23,17 +22,13 @@ import (
 // An org module (see cmd/go/internal/orgmod) carries no version of its own. go.mod keeps the placeholder.
 
 // orgDefaultRev is the revision that names a repository's default branch.
-// git resolves HEAD at the remote to the head of the default branch, so one
-// query covers every repository without asking which branch it prefers.
 const orgDefaultRev = "HEAD"
 
-// orgBranchCache memoizes the checked-out branch of a directory, so that a
-// single invocation runs git at most once for the main module.
+// orgBranchCache memoizes the checked-out branch of a directory.
 var orgBranchCache par.Cache[string, string] // module root dir → branch ("" if none)
 
-// orgVersionKey identifies one resolution: the module path, whose major version
-// the pseudo-version must carry, and the branch it was resolved against, since
-// a loader can be re-rooted onto a different main module within an invocation.
+// orgVersionKey identifies one resolution: the module path, whose major
+// version the pseudo-version must carry.
 type orgVersionKey struct {
 	branch string
 	path   string
@@ -56,9 +51,7 @@ func orgNamedBranch(ld *Loader, path string) string {
 	return ""
 }
 
-// orgVersionCache memoizes the resolved version of an org module, the way
-// @latest lookups are cached. Every module in a repository still resolves
-// through one repository object, and so through one ls-remote.
+// orgVersionCache memoizes the resolved version of an org module, the way @latest lookups are cached.
 var orgVersionCache par.ErrCache[orgVersionKey, string] // branch, module path → version
 
 // orgBranch returns the branch that org modules follow in this invocation, or
@@ -73,7 +66,7 @@ func orgBranch(ld *Loader) string {
 
 // orgMainDir returns the directory of the main module that contains the
 // current directory, or of the first main module when none does. In workspace
-// mode the two can differ; the module the command was run in decides which
+// mode both can differ; the module the command was run in decides which
 // branch the workspace's org dependencies follow.
 func orgMainDir(ld *Loader) string {
 	cwd := base.Cwd()
@@ -100,15 +93,14 @@ func orgMainDir(ld *Loader) string {
 }
 
 // gitCheckedOutBranch returns the branch checked out in the git repository
-// containing dir, or "" if there is none: dir is not in a repository, git is
+// containing dir, or "" if there is none. Dir is not in a repository, git is
 // not installed, or HEAD is detached.
 func gitCheckedOutBranch(dir string) string {
 	cmd := exec.Command("git", "-C", dir, "rev-parse", "--abbrev-ref", "HEAD")
 	cmd.Stderr = io.Discard
 	out, err := cmd.Output()
 	if err != nil {
-		// A repository we cannot read tells us nothing about which branch to
-		// follow, and that is not a reason to fail the build.
+		// A repository we cannot read tells us nothing about which branch to follow.
 		return ""
 	}
 	// A detached HEAD reports itself as "HEAD", which names no branch.
@@ -122,9 +114,7 @@ func gitCheckedOutBranch(dir string) string {
 // orgVersion returns the pseudo-version of the head of the branch the org
 // module at path follows. In a CI build it is the head the run locked.
 func orgVersion(ld *Loader, ctx context.Context, path string) (string, error) {
-	// A name in go.mod replaces the branch this invocation would follow, and is
-	// resolved the same way after that. A branch nothing answers for therefore
-	// takes the default branch.
+	// A name in go.mod replaces the branch this invocation would follow, and is resolved the same way after that.
 	branch := orgNamedBranch(ld, path)
 	if branch == "" {
 		branch = orgBranch(ld)
@@ -141,7 +131,7 @@ func orgVersion(ld *Loader, ctx context.Context, path string) (string, error) {
 			// Nothing answers for that branch, so the default branch is next.
 			return orgBranchVersion(ld, ctx, path, orgDefaultRev)
 		}
-		return orgmod.Version(ctx, orgmod.CIBuild(), orgmod.CurrentRunLock, path, branch, resolve)
+		return orgmod.Version(ctx, orgmod.RunLocked(), orgmod.NamedRun(), orgmod.CurrentRunLock, path, branch, resolve)
 	})
 }
 
@@ -149,7 +139,7 @@ func orgVersion(ld *Loader, ctx context.Context, path string) (string, error) {
 // publishes path.
 //
 // The repository is asked before the proxy for a named branch. Query reads a
-// version-shaped revision as a version query: a branch named v1 resolves to the
+// version-shaped revision as a version query. A branch named v1 resolves to the
 // newest v1 tag, or to the default branch where there is none, and never to the
 // branch. Stat resolves a revision and has no such reading.
 func orgBranchVersion(ld *Loader, ctx context.Context, path, branch string) (string, error) {
@@ -165,9 +155,7 @@ func orgBranchVersion(ld *Loader, ctx context.Context, path, branch string) (str
 		}
 		return info.Version, nil
 	}
-	// "HEAD" is how git names the branch a repository starts on. The protocol a
-	// proxy speaks has no spelling for it, so the repository answers first here
-	// as well.
+	// "HEAD" is how git names the branch a repository starts on.
 	if info, err := repo.Latest(ctx); err == nil {
 		return info.Version, nil
 	}
@@ -179,7 +167,7 @@ func orgBranchVersion(ld *Loader, ctx context.Context, path, branch string) (str
 }
 
 // orgResolvable reports whether the branch head of an org module can be
-// resolved in this invocation. Vendor mode resolves nothing, so it builds the placeholder.
+// resolved in this invocation.
 func orgResolvable() bool {
 	return cfg.BuildMod != "vendor"
 }
@@ -193,8 +181,7 @@ func resolveOrgRequire(ld *Loader, ctx context.Context, m module.Version) (modul
 		return m, nil
 	}
 	if resolvedToDirectory(ld, m) {
-		// A filesystem replacement is the source of truth for this module: its
-		// require line was already carrying nothing the build reads.
+		// A filesystem replacement is the source of truth for this module.
 		return m, nil
 	}
 	version, err := orgVersion(ld, ctx, m.Path)
@@ -239,10 +226,6 @@ func resolveOrgRequires(ld *Loader, ctx context.Context, mods []module.Version) 
 
 // resolveOrgSummary returns summary with the version of every org module in its
 // requirements replaced by the version this invocation builds.
-//
-// rawGoModSummary is reached through the context-free mvs.Reqs interface, so
-// there is no caller context to pass down here. rawGoModData reads the go.mod
-// file itself the same way.
 func resolveOrgSummary(ld *Loader, summary *modFileSummary) (*modFileSummary, error) {
 	if summary == nil || len(summary.require) == 0 {
 		return summary, nil

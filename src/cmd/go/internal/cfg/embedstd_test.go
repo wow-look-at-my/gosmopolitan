@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package cfg
 
@@ -47,8 +46,7 @@ func TestSameToolchainTreeTakesOnlyItsOwnVersion(test *testing.T) {
 		test.Errorf("an unset GOROOT answers %q, want none", got)
 	}
 
-	// A binary's own path names no tree, and that is what GOROOT holds when
-	// nothing else does.
+	// A binary's own path names no tree, and that is what GOROOT holds when nothing else does.
 	exe := filepath.Join(test.TempDir(), "go-toolchain")
 	if err := os.WriteFile(exe, []byte("an executable"), 0o777); err != nil {
 		test.Fatal(err)
@@ -58,11 +56,11 @@ func TestSameToolchainTreeTakesOnlyItsOwnVersion(test *testing.T) {
 	}
 }
 
-// A standard package whose Go files are all tests compiles to no archive, so
-// embedstd writes its manifest entry with no archive name and adds nothing to
-// the blob. crypto/internal/fips140test is one. Asking that entry for an
-// archive reads the empty name out of the blob and kills the build, so it
-// answers as a package this binary does not carry.
+// Consider a standard package whose Go. That package files are all tests
+// compiles to no archive, so embedstd writes its manifest entry with no
+// archive name and adds nothing. To the blob. crypto/internal/fips140test is
+// one. Asking that entry for an archive reads the empty name out of the blob
+// and kills the build. It answers as a package this binary does not carry.
 func TestEmbeddedStdArchivedSkipsAPackageWithNoArchive(t *testing.T) {
 	t.Serial()
 	manifestOnce.Do(func() {})
@@ -89,7 +87,7 @@ func TestEmbeddedStdArchivedSkipsAPackageWithNoArchive(t *testing.T) {
 }
 
 // A go command that embeds its standard library carries one target set and no
-// other. The message names the GOOS and GOARCH that asked for another, so the
+// other. The message names the GOOS and GOARCH that asked for another. The
 // reader looks at those rather than at a binary they take to be broken.
 func TestTargetMessageNamesTheTargetAsked(t *testing.T) {
 	carried := []string{"cosmo/amd64", "cosmo/arm64"}

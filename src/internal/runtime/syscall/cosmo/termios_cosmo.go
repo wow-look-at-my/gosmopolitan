@@ -1,22 +1,13 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo
 
 package cosmo
 
 // struct termios, both shapes, and the translation between them.
-//
-// Nothing lines up in this family, and two collisions are dangerous
-// rather than merely wrong: Linux IXON (0x400) is Apple IXOFF, and Linux
-// IUCLC (0x200) is Apple IXON. A forwarded flag word does not fail, it
-// turns flow control inside out.
-//
-// Architecture-neutral on purpose - Apple numbers these identically on
-// both its architectures - so the tests run wherever cosmo tests run.
 
-// DarwinTermios is Apple's struct termios: 72 bytes.
+// DarwinTermios is Apple's struct termios: many bytes.
 type DarwinTermios struct {
 	Iflag  uint64
 	Oflag  uint64
@@ -27,11 +18,8 @@ type DarwinTermios struct {
 	Ospeed uint64
 }
 
-// LinuxTermios is the struct the Linux TCGETS/TCSETS ioctls read and
-// write: 36 bytes, and NOT the larger termios2. A caller may hand over a
-// bigger buffer (x/sys/unix's Termios carries two speed fields the kernel
-// never touches under TCGETS), so the emulation writes exactly these 36
-// bytes and no more - the same bytes the kernel writes.
+// LinuxTermios is the struct the Linux TCGETS/TCSETS ioctls read and write:
+// many bytes, and NOT the larger termios2.
 type LinuxTermios struct {
 	Iflag uint32
 	Oflag uint32
@@ -68,9 +56,7 @@ var termiosIflag = [...]termiosBit{
 	{0x4000, 0x4000}, // IUTF8
 }
 
-// Output flags. Linux OLCUC and the delay fields (NLDLY, CRDLY, TABDLY,
-// BSDLY, VTDLY, FFDLY) have no Apple counterpart; Apple's OXTABS and
-// ONOEOT have no Linux one.
+// Output flags.
 var termiosOflag = [...]termiosBit{
 	{0x1, 0x1},      // OPOST
 	{0x4, 0x2},      // ONLCR
@@ -81,9 +67,8 @@ var termiosOflag = [...]termiosBit{
 	{0x80, 0x20000}, // OFDEL
 }
 
-// Control flags, minus the character size and the baud rate, which are
-// fields rather than bits and are converted separately. Linux CMSPAR
-// (stick parity) has no Apple counterpart.
+// Control flags, minus the character size and the baud rate, which are fields
+// rather than bits and are converted separately.
 var termiosCflag = [...]termiosBit{
 	{0x40, 0x400},         // CSTOPB
 	{0x80, 0x800},         // CREAD
@@ -114,17 +99,14 @@ var termiosLflag = [...]termiosBit{
 	{0x10000, 0x800},     // EXTPROC
 }
 
-// Character size. CSIZE is a two-bit field, not a set of flags: Linux
-// keeps it at 0x30, Apple at 0x300.
+// Character size.
 const (
 	linuxCSIZE = 0x30
 	appleCSIZE = 0x300
 	csizeShift = 4
 )
 
-// Control characters. The index is the Linux slot, the value is Apple's;
-// -1 marks a Linux slot Apple does not have (VSWTC, the switch character
-// of a long-dead multiplexing driver).
+// Control characters.
 var termiosCcIndex = [19]int8{
 	0:  8,  // VINTR
 	1:  9,  // VQUIT
@@ -146,8 +128,7 @@ var termiosCcIndex = [19]int8{
 }
 
 // Baud rates. Linux names a rate with a small code inside c_cflag; Apple
-// stores the rate itself. A rate with no Linux code cannot be encoded,
-// and the caller is told so rather than handed a plausible wrong number.
+// stores the rate itself.
 type termiosBaud struct {
 	code uint32
 	rate uint64
@@ -176,8 +157,7 @@ var termiosBauds = [...]termiosBaud{
 }
 
 // linuxCBAUD is the mask the output rate's code occupies in c_cflag, and
-// linuxCIBAUD the input rate's. An input rate of zero means "same as the
-// output rate", which is what almost every caller leaves it at.
+// linuxCIBAUD the input rate's.
 const (
 	linuxCBAUD  = 0x100f
 	linuxCIBAUD = 0x100f0000
@@ -188,8 +168,8 @@ const (
 //
 //go:nosplit
 func DarwinBaudToLinux(rate uint64) (uint32, bool) {
-	// Slice, not the array: ranging the array copies all 304 bytes of it
-	// into this frame, and this frame has a nosplit budget to fit inside.
+	// Slice, not the array: ranging the array copies all bytes of it into
+	// this frame, and this frame has a nosplit budget to fit inside.
 	for _, b := range termiosBauds[:] {
 		if b.rate == rate {
 			return b.code, true
@@ -230,12 +210,9 @@ func DarwinTermiosToLinux(src *DarwinTermios, dst *LinuxTermios) bool {
 	dst.Cflag = appleBitsToLinux(src.Cflag, termiosCflag[:])
 	dst.Lflag = appleBitsToLinux(src.Lflag, termiosLflag[:])
 
-	// The character size is a two-bit FIELD, not a set of flags: Apple
-	// keeps it four bits to the left of where Linux does.
 	dst.Cflag |= uint32((src.Cflag&appleCSIZE)>>csizeShift) & linuxCSIZE
 
-	// Line discipline: Linux reports N_TTY, the only one a terminal ever
-	// has here. Apple has no such field.
+	// Line discipline: Linux reports N_TTY, the only one a terminal ever has here. Apple has no such field.
 	dst.Line = 0
 
 	for l, a := range termiosCcIndex[:] {
@@ -266,11 +243,11 @@ func DarwinTermiosToLinux(src *DarwinTermios, dst *LinuxTermios) bool {
 // rate for.
 //
 // dst is READ as well as written: every bit Linux cannot name (ALTWERASE,
-// NOKERNINFO, ONOEOT, OXTABS) keeps the value it already had, so a
+// NOKERNINFO, ONOEOT, OXTABS) keeps the value it already had. A
 // get-modify-set does not clear settings it never knew were there.
 //
 // The Linux-only flags (IUCLC, OLCUC, XCASE, CMSPAR, the output delays)
-// are dropped rather than failing the call: Linux leaves them to the
+// are dropped rather than failing the call. Linux leaves them to the
 // driver, and no driver in use implements any of them.
 //
 //go:nosplit
@@ -320,10 +297,7 @@ func appleBitsToLinux(v uint64, tab []termiosBit) uint32 {
 }
 
 // mergeLinuxBits rewrites every Apple bit this table knows about from the
-// Linux word, and leaves the rest of cur alone - those are the settings
-// the Linux caller could not see and must not clobber.
-//
-// Nosplit: the whole termios chain runs inside a syscall window.
+// Linux word.
 //
 //go:nosplit
 func mergeLinuxBits(cur uint64, v uint32, tab []termiosBit) uint64 {

@@ -1,14 +1,13 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo
 
 package syscall
 
 // The clone flags. GOOS=cosmo presents the Linux ABI, so a program written
-// against the linux port names these, and the linux port declares them in
-// exec_linux.go, which cosmo does not build. The values are that file's,
+// against the linux port names these, and the linux port declares them. In
+// exec_linux.go. Cosmo does not build that. The values are that file's,
 // unchanged.
 //
 // They describe namespaces only Linux has, so only a Linux host acts on
@@ -46,8 +45,7 @@ const (
 )
 
 // Tgkill sends a signal to one thread of a thread group. Kill names the whole
-// group, so this is the only way to reach a chosen thread. Served on a Linux
-// host; the darwin and NT dispatches answer ENOSYS.
+// group, so this is the only way to reach a chosen thread.
 func Tgkill(tgid int, tid int, sig Signal) (err error) {
 	_, _, e1 := RawSyscall(SYS_TGKILL, uintptr(tgid), uintptr(tid), uintptr(sig))
 	if e1 != 0 {

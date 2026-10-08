@@ -282,6 +282,15 @@ func (b *Builder) Do(ctx context.Context, root *Action) {
 				if !ok {
 					return
 				}
+				// An interrupt stops the pool from starting anything else,
+				// even when work is already queued: the order of the two
+				// ready cases is the scheduler's choice otherwise.
+				select {
+				case <-base.Interrupted:
+					base.SetExitStatus(1)
+					return
+				default:
+				}
 				// Receiving a value from the semaphore entitles us to take
 				// from its queue.
 				b.exec.Lock()
@@ -352,6 +361,21 @@ func packageOriginKey(pkg *load.Package, trimpath bool, workDir string) string {
 	return fmt.Sprintf("dir %s\n", pkg.Dir)
 }
 
+// writesSSADump reports whether compiling p writes an SSA dump into GOSSADIR.
+// GOSSAFUNC asks every compile for one, and an ssa/<phase>/dump debug flag
+// asks this package's compile.
+func writesSSADump(p *load.Package) bool {
+	if os.Getenv("GOSSAFUNC") != "" {
+		return true
+	}
+	for _, flag := range slices.Concat(forcedGcflags, p.Internal.Gcflags) {
+		if strings.Contains(flag, "ssa/") && strings.Contains(flag, "/dump") {
+			return true
+		}
+	}
+	return false
+}
+
 // buildActionID computes the action ID for a build action.
 func (b *Builder) buildActionID(a *Action) cache.ActionID {
 	// Hashing every input of a package is not free, and it is work no other
@@ -403,6 +427,14 @@ func (b *Builder) buildActionID(a *Action) cache.ActionID {
 
 		ccExe := b.ccExe()
 		fmt.Fprintf(h, "CC=%q %q %q %q\n", ccExe, cppflags, cflags, ldflags)
+		// A #cgo pkg-config line's flags are an input too: a .pc file that changes must not hit a stale cgo archive.
+		if len(p.CgoPkgConfig) > 0 {
+			if pcCflags, pcLdflags, err := b.getPkgConfigFlags(a, p); err == nil {
+				fmt.Fprintf(h, "pkg-config=%q %q\n", pcCflags, pcLdflags)
+			} else {
+				fmt.Fprintf(h, "pkg-config ERROR=%q\n", err)
+			}
+		}
 		// Include the C compiler tool ID so that if the C
 		// compiler changes we rebuild the package.
 		if ccID, _, err := b.gccToolID(ccExe[0], "c"); err == nil {
@@ -480,6 +512,10 @@ func (b *Builder) buildActionID(a *Action) cache.ActionID {
 			"GOCOMPILEDEBUG",
 		}
 		for _, env := range magic {
+			if env == "GOSSADIR" && !writesSSADump(p) {
+				// GOSSADIR only names where a dump goes. A compile that writes none must keep its key, or every dependency rebuilds.
+				continue
+			}
 			if x := os.Getenv(env); x != "" {
 				fmt.Fprintf(h, "magic %s=%s\n", env, x)
 			}
@@ -1974,8 +2010,29 @@ func splitPkgConfigOutput(out []byte) ([]string, error) {
 	return flags, nil
 }
 
-// Calls pkg-config if needed and returns the cflags/ldflags needed to build a's package.
+// pkgConfigResult is what one pkg-config run answered for a package.
+type pkgConfigResult struct {
+	cflags, ldflags []string
+	err             error
+}
+
+// getPkgConfigFlags returns the cflags/ldflags needed to build a's package.
+// The action ID and the cgo step both ask, and pkg-config runs once.
 func (b *Builder) getPkgConfigFlags(a *Action, p *load.Package) (cflags, ldflags []string, err error) {
+	if len(p.CgoPkgConfig) == 0 {
+		return nil, nil, nil
+	}
+	if v, ok := b.pkgConfigCache.Load(p); ok {
+		r := v.(*pkgConfigResult)
+		return r.cflags, r.ldflags, r.err
+	}
+	cflags, ldflags, err = b.runPkgConfig(a, p)
+	b.pkgConfigCache.Store(p, &pkgConfigResult{cflags: cflags, ldflags: ldflags, err: err})
+	return cflags, ldflags, err
+}
+
+// runPkgConfig calls pkg-config and returns the cflags/ldflags needed to build a's package.
+func (b *Builder) runPkgConfig(a *Action, p *load.Package) (cflags, ldflags []string, err error) {
 	sh := b.Shell(a)
 	if pcargs := p.CgoPkgConfig; len(pcargs) > 0 {
 		// pkg-config permits arguments to appear anywhere in

@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo
 
@@ -15,7 +14,7 @@ var CosmoSigA2L = cosmoSigA2L
 var CosmoSigmaskL2A = cosmoSigmaskL2A
 var CosmoSigmaskA2L = cosmoSigmaskA2L
 
-// Exports for sigprof_cosmo_test.go: the Apple itimerval ABI pins and
+// Exports for sigprof_cosmo_test.go. The Apple itimerval ABI pins and
 // the timeval translation (signal_cosmo_itimer.go), surfaced over
 // plain integers since the struct types are unexported.
 

@@ -1,6 +1,6 @@
 # Gosmopolitan
 
-This is an **experimental fork** of the [Go programming language](https://github.com/golang/go) that adds support for building **Actually Portable Executables (APE)** using [Cosmopolitan Libc](https://github.com/jart/cosmopolitan).
+This is an **experimental fork** of the [Go programming language](https://github.com/golang/go) that adds support for building ** Portable Executables (APE)** using [Cosmopolitan Libc](https://github.com/jart/cosmopolitan).
 
 ## What are APE binaries?
 
@@ -31,7 +31,7 @@ Starting the file writes nothing. Linux and macOS hand it to a small native load
 
 Debug with the sidecars: `gdb program.com.dbg`, or `symbol-file` against the running APE. Runtime tracebacks and pprof need no sidecar.
 
-Ship release APEs zstd-compressed. The two architecture payloads are highly redundant, so a stdlib-heavy 12.3 MB webserver APE goes over the wire at 3.6 MB.
+Ship release APEs zstd-compressed. The architecture payloads are highly redundant, so a stdlib-heavy 12.3 MB webserver APE goes over the wire at 3.6 MB.
 
 ## Installing a Prebuilt Toolchain
 
@@ -58,13 +58,13 @@ tar -xzf go.tar.gz
 go\bin\go version   # go version go1.27.0-cosmo.r<N> windows/amd64
 ```
 
-All three tarballs come from one release, each built on its own platform. macOS Intel and linux/arm64 still build from source - see Building the. Depth: docs/INSTALL.md.
+All tarballs come from one release, each built on its own platform. macOS Intel and linux/arm64 still build from source - see Building the. Depth: docs/INSTALL.md.
 
-`GOBIN` and `GOTOOLCHAIN` are removed. The fork always runs itself and always installs to its own bin directory, and neither variable can redirect that - see docs/INSTALL.md. `GOPROXY` and `GOSUMDB` are removed too: modules always come from proxy.golang.org (then direct) and are checked against sum.golang.org. Remember the fork defaults to `GOOS=cosmo` - pin `GOOS`/`GOARCH` on host-side builds. To pin an immutable release instead of the rolling branch latest, use `?v=N` in place of `branch=master`.
+`GOBIN` and `GOTOOLCHAIN` are removed. The fork always runs itself and always installs to its own bin directory, and neither variable can redirect that - see docs/INSTALL.md. `GOPROXY` and `GOSUMDB` are removed too: modules always come from their origin, not proxy.golang.org, and are checked against sum.golang.org. Remember the fork defaults to `GOOS=cosmo` - pin `GOOS`/`GOARCH` on host-side builds. To pin an immutable release instead of the rolling branch latest, use `?v=N` in place of `branch=master`.
 
 ## Building the Toolchain
 
-Build from the `src/` directory. Requires a Go 1.24+ bootstrap toolchain.
+Build from the `src/` directory. Requires a Go 1.24+ bootstrap toolchain, plus zig 0.16.0 and LLVM 18.1.8's `ld64.lld` and `llvm-strip` on `PATH`: the build compiles the APE loaders with them (see `src/cmd/link/internal/ld/apeld/README.md`).
 
 ```bash
 cd src && ./make.bash    # Unix
@@ -79,7 +79,7 @@ With `export PATH="$GOROOT/misc/cosmo:$PATH"`, a plain `GOOS=cosmo go test <pkg>
 
 This is an experimental project. Use at your own risk.
 
-Execution is exercised in CI on x86-64 Linux, ARM64 macOS, and x86-64 Windows (plus ARM64 Linux via qemu during development). Windows execution is cosmo-native (NT personality in the runtime. The old embedded windows/amd64 PE payload is gone). Windows-latest CI runs the full runtimeprobe gauntlet - file I/O, dirents, TCP/UDP/unix sockets, signals, async preemption, os/exec - against binaries built on all three platforms (see.
+Execution is exercised in CI on x86-64 Linux, ARM64 macOS, and x86-64 Windows (plus ARM64 Linux via qemu during development). Windows execution is cosmo-native (NT personality in the runtime. the embedded windows/amd64 PE payload is gone). Windows-latest CI runs the full runtimeprobe gauntlet - file I/O, dirents, TCP/UDP/unix sockets, signals, async preemption, os/exec. It runs against binaries built on all platforms (see.
 
 ## Related Projects
 

@@ -8,13 +8,14 @@ A github.com module download tries each source in this order. The first one that
 4. The same URL through `https://proxy.pazer.ai/?url=https://github.com/<owner>/<repo>/archive/<ref>.zip`.
 5. For a private repository: the archive github-state-mirror signs. See "Private repositories" below.
 6. A shallow `git fetch` of the commit, then the full history only when a command needs it.
-7. The module proxy, `https://proxy.golang.org`. This toolchain has no `GOPROXY`.
+
+The go command never asks `https://proxy.golang.org`. `DefaultGOPROXY` is `direct`, and `newProxyRepo` refuses that host from any source, a go-import `mod` tag included.
 
 A proxy request talks only to proxy.pazer.ai. The proxy must follow GitHub's redirect itself and return the archive. A redirect that it passes back is not followed. The next source is tried.
 
-The first six are the `github` entry that `proxyList` puts ahead of every proxy (`src/cmd/go/internal/modfetch/proxy.go`). Any failure there, a 404 included, moves on to the module proxy, and `direct` is not tried a second time. A module outside github.com skips the entry. A path under `GOPRIVATE` or `GONOPROXY` skips it too and goes direct, with no proxy after it. The archive code is `src/cmd/go/internal/modfetch/codehost/github.go`.
+These are the `github` entry that `proxyList` puts ahead of `direct` (`src/cmd/go/internal/modfetch/proxy.go`). A failure there is final, and `direct` is not tried a second time. A module outside github.com skips the entry and goes direct to its origin. The go-import meta tag names the repository, and a repository on github.com takes the archive route again. A path under `GOPRIVATE` or `GONOPROXY` goes direct too. The archive code is `src/cmd/go/internal/modfetch/codehost/github.go`.
 
-An archive can hash differently from the module zip: `export-ignore` and `export-subst` change it. When go.sum records an `h1:` sum the archive does not match. The module comes from the proxy instead, and the log names the archive as the failed source.
+An archive can hash differently from the module zip: `export-ignore` and `export-subst` change it. When go.sum records an `h1:` sum the archive does not match. The commit is fetched with no history and zipped by `git archive` with those attributes off (`codehost.WithGitOnly`). The log names the archive as the failed source.
 
 ## Which URLs
 
@@ -42,7 +43,7 @@ A request through proxy.pazer.ai carries the GOAUTH credential of the github.com
 
 ## Private repositories
 
-github.com answers nothing about a private repository without a credential. GOAUTH usually has none for it. github-state-mirror is the route that needs no git. It is asked first with the GOAUTH credential for api.github.com. Then it is asked once with each token in `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`, `GITHUB_TOKEN` and `GH_TOKEN`, in that order. After those, each other environment value that starts like a GitHub token (`ghp_`, `github_pat_`, `gho_`, `ghu_`, `ghs_`) is tried, in the order of the variable names. A web session needs that search: its real tokens sit in variables with their own names, and `GH_TOKEN` holds a proxy placeholder. A token goes to the mirror only. The token the mirror last accepted is tried first after that.
+github.com answers nothing about a private repository without a credential. GOAUTH usually has none for it. The direct `info/refs` advertisement carries the credential git's own helpers hold for github.com (`git credential fill`), presented as HTTP basic authentication. That credential is resolved once per process. A build then pays for one helper run, however many origins it resolves. On a machine whose git has one, a private repository's ref list therefore costs one GET. A machine with no git credential sends the request anonymously. The ref list then falls to the routes below. github-state-mirror is the route that needs no git. It is asked first with the GOAUTH credential for api.github.com. Then it is asked once with each token in `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`, `GITHUB_TOKEN` and `GH_TOKEN`, in that order. After those, each other environment value that starts like a GitHub token is tried, in the order of the variable names. The prefixes are `ghp_`, `github_pat_`, `gho_`, `ghu_` and `ghs_`. A web session needs that search: its real tokens sit in variables with their own names, and `GH_TOKEN` holds a proxy placeholder. A token goes to the mirror only. The token the mirror last accepted is tried first after that.
 
 - The ref list comes from the mirror's REST API, as above.
 - The archive comes from `/repos/<owner>/<repo>/tarball/<commit>`, then `zipball`. The mirror answers with a redirect to a codeload.github.com URL that carries its own short-lived token. That redirect is not followed. The signed URL is fetched directly, then through proxy.pazer.ai, with no credential. An error prints `xxxxx` in place of the token.

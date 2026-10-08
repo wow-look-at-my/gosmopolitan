@@ -660,10 +660,11 @@ func (b *Builder) useCache(a *Action, actionHash cache.ActionID, target string, 
 			if printOutput {
 				switch a.Mode {
 				case "link":
-					// The link output is stored using the build action's action ID.
-					// See corresponding code storing the link output in updateBuildID.
-					for _, a1 := range a.Deps {
-						showStdout(b, c, a1, "link-stdout") // link output
+					// A hit without its output entry is a miss, as for a compile.
+					// Otherwise the link output, -dumpdep for example, is gone.
+					if err := showStdout(b, c, a, "link-stdout"); err != nil {
+						a.output = []byte{}
+						return false
 					}
 				default:
 					// updateBuildID stores this entry for every build it
@@ -770,17 +771,15 @@ func (b *Builder) updateBuildID(a *Action, target string) error {
 	case "build":
 		cache.PutBytes(c, cache.Subkey(a.actionID, "stdout"), a.output)
 	case "link":
-		// Even though we don't cache the binary, cache the linker text output.
-		// We might notice that an installed binary is up-to-date but still
-		// want to pretend to have run the linker.
-		// Store it under the main package's action ID
-		// to make it easier to find when that's all we have.
+		// An up-to-date installed binary knows only the main package's action ID,
+		// so the output goes there too. A link hit reads its own entry.
 		for _, a1 := range a.Deps {
 			if p1 := a1.Package; p1 != nil && p1.Name == "main" {
 				cache.PutBytes(c, cache.Subkey(a1.actionID, "link-stdout"), a.output)
 				break
 			}
 		}
+		cache.PutBytes(c, cache.Subkey(a.actionID, "link-stdout"), a.output)
 	}
 
 	// Find occurrences of old ID and compute new content-based ID.

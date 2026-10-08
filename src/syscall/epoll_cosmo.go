@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo
 
@@ -12,13 +11,7 @@ import (
 	"unsafe"
 )
 
-// epoll on a macOS host, kept here and waited on with select, since kqueue
-// cannot watch a terminal there. An instance's descriptor is the read end
-// of a pipe it owns; a byte on the write end wakes a wait to see a new
-// epoll_ctl. The emulation allocates, so Syscall, Syscall6 and RawSyscall6
-// serve it before entersyscall. Level-triggered interest and EPOLLONESHOT
-// are emulated. EPOLLET and EPOLLEXCLUSIVE get EINVAL, a signal mask gets
-// ENOSYS, and a descriptor at or above FD_SETSIZE (1024) gets EINVAL.
+// epoll on a macOS host, kept here and waited on with select, since kqueue cannot watch a terminal there.
 
 //go:linkname runtime_nanotime runtime.nanotime
 func runtime_nanotime() int64
@@ -38,9 +31,7 @@ const (
 		EPOLLERR | EPOLLHUP | EPOLLMSG | EPOLLONESHOT | epollWAKEUP
 )
 
-// An epollID names the file a descriptor refers to, so that a descriptor
-// number closed and reused is not taken for the file registered under it.
-// Linux drops a registration when its file is closed.
+// An epollID names the file a descriptor refers to, so that a descriptor number closed and reused is not taken for the file registered.
 type epollID struct{ dev, ino uint64 }
 
 func epollIDOf(fd int) (epollID, uint32, Errno) {
@@ -84,11 +75,10 @@ func darwinEpollTrap(trap uintptr) bool {
 }
 
 // darwinEpollSyscall serves an epoll syscall on a macOS host. The pointer
-// arguments may point into the caller's stack, and the emulation can grow
-// that stack, so they are turned into pointers here, in a nosplit
-// function, before anything can move them. A timeout in milliseconds stays
-// an integer: a small integer in a pointer is an invalid pointer to the
-// stack copier.
+// arguments may point into the caller's stack. The emulation can grow that
+// stack. They are turned into pointers here, in a nosplit function, before
+// anything can move them. A timeout in milliseconds stays an integer: a
+// small integer in a pointer is an invalid pointer to the stack copier.
 //
 //go:nosplit
 func darwinEpollSyscall(trap, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2 uintptr, err Errno) {
@@ -179,9 +169,8 @@ func epollCreate(flags uintptr) (uintptr, Errno) {
 	if epolls.m == nil {
 		epolls.m = map[int]*epollInstance{}
 	}
-	// An instance whose descriptor was closed is released here, since
-	// close is not seen by this package. That includes one whose number
-	// the new pipe has just reused.
+	// An instance whose descriptor was closed is released here, since close is
+	// not seen by this package.
 	for fd, old := range epolls.m {
 		if oid, _, e := epollIDOf(fd); e != 0 || oid != old.id {
 			Close(old.wake)
@@ -391,7 +380,7 @@ func epollWait(epfd int, events *EpollEvent, maxevents int, timeout int64) (uint
 }
 
 // prune drops every registration whose descriptor no longer refers to the
-// file registered, and reports EBADF when there was none to drop: then
+// file registered, and reports EBADF when there was none to drop. Then
 // the bad descriptor is the instance's own.
 func (ep *epollInstance) prune(epfd int) Errno {
 	if id, _, e := epollIDOf(epfd); e != 0 || id != ep.id {

@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package ld
 
@@ -19,13 +18,12 @@ type segprotRequest struct {
 	initprot uint32
 }
 
-// segprotRequests reads the -segprot flags among the external linker's
-// flags, written either as -Wl,-segprot,SEG,MAX,INIT or as
-// -segprot SEG MAX INIT.
+// segprotRequests reads the -segprot flags among the external linker's flags,
+// written either as -Wl,-segprot,SEG,MAX,INIT or as -segprot SEG MAX INIT.
 //
-// The Apple linkers take the flag and, for an arm64 __TEXT segment, leave
-// the protections at r-x/r-x anyway, so the linker applies what was asked
-// for to the output itself.
+// The Apple linkers take the flag and, for an arm64 __TEXT segment, leave the
+// protections at r-x/r-x anyway. The linker applies what was asked for to the
+// output itself.
 func segprotRequests(flags []string) ([]segprotRequest, error) {
 	var requests []segprotRequest
 	add := func(fields []string) error {
@@ -111,9 +109,7 @@ func machoApplySegprot(path string, requests []segprotRequest) error {
 	if exem.Magic != macho.Magic64 {
 		return fmt.Errorf("%s is not a 64-bit Mach-O file", path)
 	}
-	// A 64-bit Mach-O header is 32 bytes. In a segment_command_64, maxprot
-	// and initprot follow the command, its size, the 16-byte name and four
-	// 8-byte fields.
+	// A 64-bit Mach-O header is many bytes.
 	const headerSize, maxprotOffset = 32, 56
 	applied := make([]bool, len(requests))
 	offset := int64(headerSize)

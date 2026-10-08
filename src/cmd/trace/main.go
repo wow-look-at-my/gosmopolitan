@@ -2,10 +2,11 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package main
+package trace
 
 import (
 	"cmd/internal/browser"
+	"cmd/internal/objabi"
 	"cmd/internal/telemetry/counter"
 	"cmp"
 	"flag"
@@ -61,17 +62,25 @@ Note that while the various profiles available when launching
 and is only actively tested on that browser.
 `
 
+// flagSet is trace's command line, one set of its own so trace can be
+// linked beside the other tools; Main installs it before parsing.
+var flagSet = flag.NewFlagSet("trace", flag.ExitOnError)
+
 var (
-	httpFlag  = flag.String("http", "localhost:0", "HTTP server listen address (e.g., ':6060')")
-	pprofFlag = flag.String("pprof", "", "print a pprof-like profile instead")
-	debugFlag = flag.String("d", "", "print debug info and exit (modes: wire, parsed, footprint)")
+	httpFlag  = flagSet.String("http", "localhost:0", "HTTP server listen address (e.g., ':6060')")
+	pprofFlag = flagSet.String("pprof", "", "print a pprof-like profile instead")
+	debugFlag = flagSet.String("d", "", "print debug info and exit (modes: wire, parsed, footprint)")
 
 	// The binary file name, left here for serveSVGProfile.
 	programBinary string
 	traceFile     string
 )
 
-func main() {
+// Main runs trace with args, the command line after the program name. It
+// never returns: every path exits the process through logAndDie or serves
+// until killed.
+func Main(args []string) int {
+	objabi.Enter("trace", args, flagSet)
 	counter.Open()
 	flag.Usage = func() {
 		fmt.Fprint(os.Stderr, usageMessage)
@@ -248,6 +257,7 @@ func main() {
 
 	err = http.Serve(ln, mux)
 	logAndDie(fmt.Errorf("failed to start http server: %w", err))
+	return 1
 }
 
 func logAndDie(err error) {
