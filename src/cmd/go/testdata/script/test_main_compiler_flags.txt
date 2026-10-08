@@ -5,10 +5,10 @@
 
 go test -c -n p1
 # should not have run compile -p main p1.go
-! stdout '([\\/]compile|gccgo).* (-p main|-fgo-pkgpath=main).*p1\.go'
-! stderr '([\\/]compile|gccgo).* (-p main|-fgo-pkgpath=main).*p1\.go'
+! stdout '([\\/]compile| tool compile|gccgo).* (-p main|-fgo-pkgpath=main).*p1\.go'
+! stderr '([\\/]compile| tool compile|gccgo).* (-p main|-fgo-pkgpath=main).*p1\.go'
 # should have run compile -p p1 p1.go
-stderr '([\\/]compile|gccgo).* (-p p1|-fgo-pkgpath=p1).*p1\.go'
+stderr '([\\/]compile| tool compile|gccgo).* (-p p1|-fgo-pkgpath=p1).*p1\.go'
 
 -- go.mod --
 module p1
