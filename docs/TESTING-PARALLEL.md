@@ -1,6 +1,8 @@
 # Top-level tests are parallel by default
 
-`src/testing` in this fork can start every top-level test as if it had called `t.Parallel()`, which is a no-op there. The switch is the `parallelByDefault` constant in `src/testing/testing.go`. It is OFF until every CI leg is green with it on. With it off, a top-level test runs as upstream runs it. `t.Setenv` and `t.Chdir` then fork only under a parallel ancestor. Everything below describes the switch ON. Methods opt a test out of that, and they buy the same isolation at different prices: `t.Serial()` keeps the test in this process.
+`src/testing` in this fork can start every top-level test as if it called `t.Parallel()`, which is a no-op there. The switch is the `parallelByDefault` constant in `src/testing/testing.go`. It is OFF until every CI leg is green with it on. With it off, a top-level test runs as upstream runs it. `t.Setenv` and `t.Chdir` then fork only under a parallel ancestor. Everything below describes the switch ON.
+
+Methods opt a test out of that, and they buy the same isolation at different prices: `t.Serial()` keeps the test in this process.
 
 A SUBTEST is not parallel unless it asks. It runs inside the `t.Run` call that starts it, which is the order upstream promises and the order test code relies on. A parent closes the file its subtests read. A loop sets a package variable before each subtest. A parent asserts on what the subtest just did. A subtest that wants parallelism calls `t.Parallel()`, as it always can.
 
@@ -8,7 +10,7 @@ A test failing only under this fork's `go test` is almost always one of these.
 
 ## t.Serial
 
-A test that mutates process-wide state - a package global, the environment, the working directory, `GOMAXPROCS` - calls `t.Serial(reason string = "")`, which waits for every other test to stop and then runs the caller alone until it returns. The reason carries a default, so `t.Serial()` compiles and runs, and warns. `testing.AllocsPerRun` panics unless the caller did. A serial test's subtests run under its hold and take none of their own.
+A test that mutates process-wide state - a package global, the environment, the working directory, `GOMAXPROCS` - calls `t.Serial(reason string = "")`. This waits for every other test to stop and then runs the caller alone until it returns. The reason carries a default, so `t.Serial()` compiles and runs, and warns. `testing.AllocsPerRun` panics unless the caller did. A serial test's subtests run under its hold and take none of their own.
 
 The hold never covers a wait. `t.Run` drops the caller's hold while it waits, then takes it back. `t.Parallel()` drops one before it waits for a slot. Two holds in one line of descent deadlock. Go queues a new reader behind a waiting writer. So the inner test blocks on a pending `t.Serial()`, and the outer test waits for the inner one.
 
@@ -16,7 +18,9 @@ The hold never covers a wait. `t.Run` drops the caller's hold while it waits, th
 
 They fall back to the barrier on `js`, `wasip1` and `ios`, which cannot start a child process at all - wasm has no process creation. The isolation is the same either way. Only the price changes. An EXPLICIT `t.Fork()` on those platforms still fails, because the test asked for its own copy of the process state and cannot be given.
 
-A COVERED run takes the barrier for the same reason. The child inherits `-test.gocoverdir` and `-test.coverprofile`. It writes its own report into the parent's directory, and the two race. The parent's rename of the meta file then finds it gone. The package fails with `error generating coverage report`. The barrier keeps the counters in the run that reports them. That is also what makes the test's coverage count at all. The parent does not execute a forked test's body, so a child's discarded profile reads as dead code.
+A COVERED run takes the barrier for the same reason. The child inherits `-test.gocoverdir` and `-test.coverprofile`. It writes its own report into the parent's directory, and the two race. The parent's rename of the meta file then finds it gone. The package fails with `error generating coverage report`. The barrier keeps the counters in the run that reports them.
+
+That is also what makes the test's coverage count at all. The parent does not execute a forked test's body, so a child's discarded profile reads as dead code.
 
 ### The reason argument
 
@@ -24,7 +28,7 @@ A COVERED run takes the barrier for the same reason. The child inherits `-test.g
 t.Serial("cfg.BuildX is a package global, and turning it on changes what every other build prints")
 ```
 
-The reason is what the next reader has instead of the shared state, which is invisible from the call. `Serial` checks it and **warns**, then runs the test alone anyway. A suite must not fail over its own prose. Refusing to serialize a test that asked to be serialized runs it against the state it is guarding. Four rules, all reported against the calling test as `warning: t.Serial: ...`:
+The reason is what the next reader has instead of the shared state, which is invisible from the call. `Serial` checks it and **warns**, then runs the test alone anyway. A suite must not fail over its own prose. Refusing to serialize a test that asked to be serialized runs it against the state it is guarding. Rules, all reported against the calling test as `warning: t.Serial: ...`:
 
 | Rule | Why |
 |---|---|
@@ -33,7 +37,7 @@ The reason is what the next reader has instead of the shared state, which is inv
 | Does not repeat the test's name or file | Both sit next to the warning already; repeating them spends the length saying nothing. |
 | At most 98% the same as another reason in the binary | This is the rule with teeth. |
 
-Each warning is logged against the calling test, and the run prints one summary to stderr after the tests finish:
+Each warning is logged against the calling test. The run prints one summary to stderr after the tests finish:
 
 ```
 testing: 2 t.Serial call(s) did not justify stopping the package:
@@ -43,7 +47,7 @@ testing: 2 t.Serial call(s) did not justify stopping the package:
 
 The summary is the visible half. A log line on a passing test appears only under `-v`. This rule is about a cost the whole package pays whether or not anything failed.
 
-The similarity rule is the reason the others are worth having. One pasted sentence is how a package quietly stops being parallel. Each call looks defensible on its own. The 84th one costs as much as the first. Two tests that serialize for the same reason usually want `t.Fork` instead, which gives each a process and stops nobody.
+The similarity rule is the reason the others are worth having. One pasted sentence is how a package quietly stops being parallel. Each call looks defensible on its own. The 84th one costs as much as the first. Tests that serialize for the same reason usually want `t.Fork` instead, which gives each a process and stops nobody.
 
 Mechanics: reasons are compared normalized - lowercased, with runs of non-alphanumerics collapsed - so case and punctuation do not make one reason look like two. The score is Levenshtein distance over the length of the longer reason. The registry is per test binary. The bound is therefore a statement about one package. A call site registers once, so a `Serial` in a loop or in a table-driven subtest never reports itself as its own duplicate.
 
@@ -61,7 +65,7 @@ Fork does NOT serialize. The child allows parallelism like any other run, so sub
 Mechanics:
 
 - The child re-runs that one test via `-test.run`, anchored per slash-separated name element. A subtest that calls Fork therefore gets a child running exactly that subtest.
-- The child carries the marker environment variable `GO_TEST_FORK_TARGET`, naming the test it was started for. The marker names ONE test, not the process: the target, and every test the target runs under, stay in place rather than forking again. A SUBTEST of the target shares the target's child with its siblings, so it does not yet have the process Fork promises. The marker is also what lets `t.Setenv` and `t.Chdir` fork implicitly: inside the child they change the process in place rather than starting a grandchild.
+- The child carries the marker environment variable `GO_TEST_FORK_TARGET`, naming the test it was started for. The marker names ONE test, not the process: the target, and every test the target runs under, stay in place rather than forking again. A SUBTEST of the target shares the target's child with its siblings. It does not yet have the process Fork promises. The marker is also what lets `t.Setenv` and `t.Chdir` fork implicitly: inside the child they change the process in place rather than starting a grandchild.
 
 - Starting a child REPLACES the marker rather than appending it. `os.Getenv` answers with the first entry. An appended one is never read. A grandchild can take its parent's target for its own.
 - A test waiting for its child releases the barrier for that time, and takes it again afterward. It does no work here while it waits. A hold it keeps blocks every `t.Serial()` in the binary.

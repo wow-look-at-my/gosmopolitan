@@ -196,10 +196,10 @@ func TestForkReportsTheChildsFailure(t *T) {
 	}
 }
 
-// TestSetenvForks: Setenv changes the process, and a child is how the test gets
-// one of its own, so the suite in the ORIGINAL process keeps running. Inside
-// that child the caller does hold the barrier, because the child's own
-// subtests are parallel and would otherwise overwrite the same variable.
+// TestSetenvForks: Setenv changes the process. A child is how the test gets one
+// of its own, so the suite in the ORIGINAL process keeps running. Inside that
+// child the caller does hold the barrier, because the child's own subtests are
+// parallel and would otherwise overwrite the same variable.
 func TestSetenvForks(t *T) {
 	if !canFork() {
 		t.Skip("this run cannot fork, so Setenv takes the barrier")
