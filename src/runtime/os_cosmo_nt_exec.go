@@ -8,8 +8,8 @@
 // The unix-shaped os/exec stack reaches this file ways.
 // syscall.forkAndExecInChild branches to ntForkExec before any fork machinery
 // and calls the WindowsFns.Spawn hook, which is ntSpawn. There is no fork and
-// no child-side code: the status pipe forkExec allocates is never inherited,
-// so the parent's read sees EOF at once (the "exec succeeded" path) and a
+// no child-side code: the status pipe forkExec allocates is never inherited.
+// The parent's read sees EOF at once (the "exec succeeded" path) and a
 // CreateProcessW failure surfaces synchronously. SYS_PIPE2 and SYS_WAIT4 are
 // ordinary emulated syscalls. SYS_WAITID stays ENOSYS on purpose: package os
 // documents that fallback, so the emulation only needs wait4.
@@ -193,15 +193,15 @@ func ntProcRemove(pid uint32) bool {
 
 // ntEmuPipe2 implements Linux pipe2 over CreatePipe. The NULL
 // SECURITY_ATTRIBUTES makes both handles non-inheritable, which is the
-// correct O_CLOEXEC-shaped default here: NT children inherit only the
+// correct O_CLOEXEC-shaped default here. NT children inherit only the
 // explicitly duplicated stdio handles (ntSpawn), never arbitrary fds,
-// so cloexec-ness is effectively always on and the O_CLOEXEC flag is
-// only recorded for fcntl round-trips. O_NONBLOCK is accepted and
-// recorded but reads/writes stay blocking (anonymous pipes have no
-// nonblocking mode without PeekNamedPipe emulation; nothing in the
-// standard library needs it - internal/poll only sets nonblocking on
-// fds it could register with the netpoller, and netpollopen refuses
-// pipe fds on NT so they run in blocking mode).
+// so cloexec-ness is effectively always on. The O_CLOEXEC flag is only
+// recorded for fcntl round-trips. O_NONBLOCK is accepted and recorded
+// but reads/writes stay blocking (anonymous pipes have no nonblocking
+// mode without PeekNamedPipe emulation; nothing in the standard
+// library needs it - internal/poll only sets nonblocking on fds it
+// could register with the netpoller, and netpollopen refuses pipe fds
+// on NT so they run in blocking mode).
 func ntEmuPipe2(p *[2]int32, flags int32) (r1, r2, errno uintptr) {
 	if p == nil {
 		return ntFail3(ntEINVAL)
@@ -243,7 +243,7 @@ func ntEmuPipe2(p *[2]int32, flags int32) (r1, r2, errno uintptr) {
 // kill(-pgid).
 //
 // The caller (syscall.ntForkExec) holds ntSpawnMu. Spawns MUST stay
-// serialized: the stdio handles are temporarily inheritable dupes,
+// serialized. The stdio handles are temporarily inheritable dupes,
 // acquireForkLock does not exclude concurrent forkers, and a
 // concurrent bInheritHandles=TRUE would capture another spawn's dupes.
 // The cmdline slice reaches CreateProcessW as the MUTABLE

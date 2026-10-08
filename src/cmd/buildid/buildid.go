@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package main
+package buildid
 
 import (
 	"flag"
@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"cmd/internal/buildid"
+	"cmd/internal/objabi"
 	"cmd/internal/telemetry/counter"
 )
 
@@ -21,9 +22,16 @@ func usage() {
 	os.Exit(2)
 }
 
-var wflag = flag.Bool("w", false, "write build ID")
+// flagSet is buildid's command line, one set of its own so buildid can be
+// linked beside the other tools; Main installs it before parsing.
+var flagSet = flag.NewFlagSet("buildid", flag.ExitOnError)
 
-func main() {
+var wflag = flagSet.Bool("w", false, "write build ID")
+
+// Main runs buildid with args, the command line after the program name, and
+// answers its exit status.
+func Main(args []string) int {
+	objabi.Enter("buildid", args, flagSet)
 	log.SetPrefix("buildid: ")
 	log.SetFlags(0)
 	counter.Open()
@@ -42,7 +50,7 @@ func main() {
 	}
 	if !*wflag {
 		fmt.Printf("%s\n", id)
-		return
+		return 0
 	}
 
 	// Keep in sync with src/cmd/go/internal/work/buildid.go:updateBuildID
@@ -68,7 +76,7 @@ func main() {
 	}
 
 	if len(matches) == 0 {
-		return
+		return 0
 	}
 
 	f, err = os.OpenFile(file, os.O_RDWR, 0)
@@ -81,4 +89,5 @@ func main() {
 	if err := f.Close(); err != nil {
 		log.Fatal(err)
 	}
+	return 0
 }

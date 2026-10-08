@@ -47,7 +47,7 @@ func (sh *testShdr) encode() []byte {
 
 // addTestSectionedTail appends a full-fidelity section table to elf (a
 // buildTestELF image using testELFPhdrs), shaped like the cosmo linker's
-// real output: allocated sections covering the loadable spans (a note
+// real output. Allocated sections covering the loadable spans (a note
 // inside the header page, text/rodata/data, a BSS), non-allocated debug
 // sections carrying sentinel content, and a symbol table whose main.main
 // references .text. The result parses with debug/elf.
@@ -123,7 +123,7 @@ func buildTestSectionedELFPair(t *testing.T) (amdElf, armElf []byte) {
 }
 
 // checkSlimELF verifies the invariants of a slim (only-keep-debug
-// equivalent) image derived from an addTestSectionedTail input: allocated
+// equivalent) image derived from an addTestSectionedTail input. Allocated
 // contents dropped, headers and addresses preserved, debug contents and
 // symbol table intact, program headers clamped to the retained span.
 func checkSlimELF(t *testing.T, slim, orig []byte, machine elf.Machine, sentinel string) {
@@ -299,9 +299,9 @@ func mergeSectionedPair(t *testing.T, mode string) (amdElf, armElf []byte, out s
 }
 
 // TestAPEFatMergeSlimSidecars merges under -apedbgmode=slim and verifies
-// the sidecar is a debug-only image while the fat APE itself is
-// byte-identical to a default (-apedbgmode=full) merge: the mode changes
-// only what the sidecar carries.
+// the sidecar is a debug-only image. This happens while the fat APE
+// itself is byte-identical to a default (-apedbgmode=full) merge. The
+// mode changes only what the sidecar carries.
 func TestAPEFatMergeSlimSidecars(t *testing.T) {
 	amdElf, _, out := mergeSectionedPair(t, "slim")
 
@@ -352,8 +352,8 @@ func TestAPEFatMergeSlimSidecars(t *testing.T) {
 
 // checkCompactView simulates self-assimilation of one architecture's
 // payload (overlaying the boot ELF header the merge embedded for it) and
-// verifies the resulting file exposes a debugger-consumable section view:
-// allocated sections referencing the real payload bytes, kept debug
+// verifies the resulting file exposes a debugger-consumable section view.
+// Allocated sections referencing, the real payload bytes, kept debug
 // sections and the symbol table in the appended tail, dropped sections
 // absent, indices consistent.
 func checkCompactView(t *testing.T, fat []byte, payloadOff, payloadLen uint64, arch sys.ArchFamily, machine elf.Machine, sentinel string) {

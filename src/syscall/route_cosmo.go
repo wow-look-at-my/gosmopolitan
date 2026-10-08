@@ -24,8 +24,8 @@ const (
 func cosmoDarwinSysctl(mib []uint32, out []byte) (int, bool)
 
 // RouteRIB fetches the routing information base from the host, the way
-// every BSD publishes it: a sysctl over the AF_ROUTE branch, sized by a
-// first call that writes nothing and then read by a second.
+// every BSD publishes it: a sysctl over the AF_ROUTE branch, sized. By
+// a first call that writes nothing and then read by a second.
 func RouteRIB(facility, param int) ([]byte, error) {
 	mib := []uint32{CTL_NET, darwinAFRoute, 0, 0, uint32(facility), uint32(param)}
 	n, ok := cosmoDarwinSysctl(mib, nil)
@@ -44,10 +44,7 @@ func RouteRIB(facility, param int) ([]byte, error) {
 	return tab[:got], nil
 }
 
-// The routing-message vocabulary, with Apple's numbers. A Linux host
-// never reads them: netlink answers there and RouteRIB refuses. They are
-// here because internal/routebsd parses what a Darwin kernel wrote, and
-// the cosmo zerrors files carry Linux's numbering, where several of
+// The routing-message vocabulary, with Apple's numbers. A Linux host never reads them: netlink answers there and RouteRIB refuses. They are here. This is because internal/routebsd parses what a Darwin kernel wrote, and the cosmo zerrors files carry Linux's numbering. This holds where several of
 // these names either mean something else or do not exist.
 const (
 	AF_LINK = 0x12

@@ -55,8 +55,8 @@ func futexsleep(addr *uint32, val uint32, ns int64) {
 
 // darwinFutexsleep is FUTEX_WAIT built out of a timed sleep, for XNU hosts.
 // XNU has no futex, and the primitives closest to one are not in this tree's
-// syscall table, so their numbers would have to be guessed - and a wrong
-// syscall number does not fail, it calls a different syscall. A real sleep IS
+// syscall table. Their numbers would have to be guessed - and a wrong syscall
+// number does not fail. It calls a different syscall. A real sleep IS
 // available, so the wait polls the word with a backoff.
 //
 //go:nosplit
@@ -684,9 +684,9 @@ func runPerThreadSyscall() {
 //
 // On a darwin or NT host the call runs on the calling thread alone. XNU
 // keeps credentials per process, so one call is the process-wide change
-// the caller asked for, and neither host can deliver sigPerThreadSyscall
-// to another thread - darwinSignalM drops the realtime range and NT has
-// no cross-thread signal - so the wait below would never end there.
+// the caller asked for. Neither host can deliver sigPerThreadSyscall to
+// another thread - darwinSignalM drops the realtime range and NT has no
+// cross-thread signal - so the wait below would. Never end there.
 //
 //go:linkname syscall_runtime_doAllThreadsSyscall syscall.runtime_doAllThreadsSyscall
 //go:uintptrescapes

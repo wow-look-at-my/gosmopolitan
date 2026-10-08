@@ -3,10 +3,10 @@
 
 //go:build cosmo && amd64
 
-// Windows NT sendmsg/recvmsg emulation: the scatter-gather data path
+// Windows NT sendmsg/recvmsg emulation. The scatter-gather data path
 // behind SYS_SENDMSG/SYS_RECVMSG, dispatched by ntSyscallEmulate, and
-// the socket-only SYS_READV/SYS_WRITEV on the same WSABUF machinery -
-// what makes net.Buffers work.
+// the socket-only SYS_READV/SYS_WRITEV on the same WSABUF. Machinery
+// - what makes net.Buffers work.
 //
 // Callers hand in LINUX amd64 structures (ntLinuxMsghdr/ntLinuxIovec).
 // A WSABUF is {u32 len, char *buf}, the REVERSE field order of an
@@ -56,9 +56,9 @@ type ntWSABuf struct {
 // ntIovecsToWSA translates n iovecs into a WSABUF array (stack-backed via stk
 // when n fits) and reports the total byte capacity described. The total is
 // clamped to 0x7FFFFFFF - winsock transfer counts are 32-bit - by shortening
-// the overflowing buffer and dropping the rest: sends then short-write and
-// the caller loops, receives short-read; both POSIX-legal. A nil base with a
-// nonzero length is EFAULT.
+// the overflowing buffer and dropping the rest. Sends then short-write and
+// the caller loops, receives short-read. This also covers both POSIX-legal. A
+// nil base with a nonzero length is EFAULT.
 func ntIovecsToWSA(iov *ntLinuxIovec, n int, stk *[ntWSABufStackCap]ntWSABuf) (bufs []ntWSABuf, total int64, eno uintptr) {
 	const maxTotal = 0x7FFFFFFF
 	if n > ntWSABufStackCap {
@@ -112,8 +112,9 @@ func ntSockSendV(h uintptr, bufs []ntWSABuf, wflags uintptr) (r1, r2, errno uint
 // ntSockRecvV fills a WSABUF array from socket h via WSARecv. total is the
 // array's byte capacity (for the WSAEMSGSIZE full-buffer report). Returns the
 // byte count and the OUTPUT msg_flags translated to Linux: only MSG_OOB
-// shares a value and passes back; MSG_TRUNC is raised on datagram truncation;
-// winsock-only bits (MSG_PARTIAL) are dropped.
+// shares a value and passes back. This also covers MSG_TRUNC is raised on
+// datagram truncation. This also covers winsock-only bits (MSG_PARTIAL) are
+// dropped.
 func ntSockRecvV(h uintptr, bufs []ntWSABuf, wflags uintptr, total int64) (n uintptr, outFlags int32, errno uintptr) {
 	var got uint32
 	wf := uint32(wflags) // WSARecv's flags argument is in/out
@@ -189,10 +190,10 @@ func ntPutU64At(b []byte, v uint64) {
 	ntPutU32At(b[4:], uint32(v>>32))
 }
 
-// ntSCMParse walks a Linux cmsg buffer and collects the SCM_RIGHTS payload
-// fds, with the kernel's exact acceptance rules (__scm_send, verified live):
-// headers must satisfy CMSG_OK (Len >= 16 and within the buffer, else
-// EINVAL); non-SOL_SOCKET levels are silently skipped; SOL_SOCKET types other
+// ntSCMParse walks a Linux cmsg buffer. NtSCMParse collects the SCM_RIGHTS
+// payload fds, with the kernel's exact acceptance rules (__scm_send, verified
+// live): headers must satisfy CMSG_OK (Len >= 16 and within the buffer, else
+// EINVAL). Non-SOL_SOCKET levels are silently skipped. SOL_SOCKET types other
 // than SCM_RIGHTS are EINVAL - except SCM_CREDENTIALS(2), which Linux
 // supports but this emulation cannot (EOPNOTSUPP, an honest gap). Multiple
 // SCM_RIGHTS cmsgs accumulate into one fd list, like the kernel's scm.fp.
@@ -249,12 +250,12 @@ func ntSCMPeerPid(fd int32, e *ntFDEntry) (pid uint32, eno uintptr) {
 }
 
 // ntSockSendVAll pushes an entire WSABUF array (total bytes) to the socket,
-// resuming after short sends: a nonblocking socket may accept only part of a
+// resuming after short sends. A nonblocking socket may accept only part of a
 // frame, and a partially transmitted frame MUST be completed - the receiver
 // consumes frames whole. EAGAIN with zero progress is returned to the caller
-// (clean Linux semantics, nothing consumed); EAGAIN after partial progress
+// (clean Linux semantics, nothing consumed). EAGAIN after partial progress
 // yields and retries, which can block a nonblocking caller until the peer
-// drains - the documented cost of framing (frames are small; in practice they
+// drains - the documented cost of framing (frames are small. In practice they
 // fit the socket buffer and this loop runs once).
 func ntSockSendVAll(h uintptr, bufs []ntWSABuf, total int64, wflags uintptr) (eno uintptr) {
 	var sent int64
@@ -383,9 +384,8 @@ func ntSendmsgControl(fd int32, e *ntFDEntry, msg *ntLinuxMsghdr, flags int32) (
 				return ntFail3(ntEOPNOTSUPP)
 			}
 		case ntFDFile, ntFDPipe:
-			// Fine. (Pipes transfer even though same-process dup(2)
-			// on them stays ENOSYS - DuplicateHandle works on any
-			// kernel handle.)
+			// Fine. (Pipes transfer even though same-process dup(2) on them stays
+			// ENOSYS - DuplicateHandle works on any kernel handle.)
 		default: // dir, stdio
 			return ntFail3(ntEOPNOTSUPP)
 		}

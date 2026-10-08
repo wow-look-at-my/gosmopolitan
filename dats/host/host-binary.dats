@@ -1,4 +1,4 @@
-# A cosmo binary built here runs here: fizzbuzz fat and thin, the boot
+# A cosmo binary built here runs here. Fizzbuzz fat and thin, the boot
 # trace, an argv echo, and a test binary in the shapes go test starts
 # it in. run.bat reports a bare "exit status 2" per package; one binary
 # run by hand says why.
