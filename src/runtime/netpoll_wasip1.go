@@ -197,11 +197,15 @@ func netpollBreak() {}
 
 func netpoll(delay int64) (gList, int32) {
 	if pollOneoffUnsupported {
-		// The host does not implement poll_oneoff: there is no way to
-		// wait for fd readiness or to sleep. Return immediately and let
-		// findRunnable spin. Timers still fire, since they are checked
-		// on every scheduler pass, but waiting for one burns CPU, and
-		// I/O on pollable fds never reports readiness.
+		// The host does not implement poll_oneoff, and no other WASI
+		// preview 1 call can block: there is no way to wait for fd
+		// readiness or for time to pass. A poll that need not wait
+		// reports nothing ready. One that must wait for a timer cannot,
+		// and returning would send findRunnable round again at once,
+		// burning the CPU until the timer is due, so it fails instead.
+		if delay > 0 {
+			netpollCannotWait()
+		}
 		return gList{}, 0
 	}
 
@@ -242,11 +246,13 @@ retry:
 			goto retry
 		case _ENOSYS, _ENOTSUP:
 			// The host stubs out poll_oneoff (see go.dev/issue/78513).
-			// Mark the poller broken and degrade instead of crashing;
-			// see the comment at the top of this function for the
-			// consequences.
+			// Mark the poller broken; see the comment at the top of
+			// this function for the consequences.
 			pollOneoffUnsupported = true
 			unlock(&mtx)
+			if delay > 0 {
+				netpollCannotWait()
+			}
 			return gList{}, 0
 		default:
 			println("errno=", errno, " len(pollsubs)=", len(pollsubs))
@@ -280,4 +286,11 @@ retry:
 
 	unlock(&mtx)
 	return toRun, delta
+}
+
+// netpollCannotWait reports that the scheduler has nothing to run until a
+// timer fires and the host gives it no way to wait for one.
+func netpollCannotWait() {
+	println("runtime: the WASI host does not implement poll_oneoff, so the program cannot wait for a timer")
+	throw("poll_oneoff unsupported")
 }

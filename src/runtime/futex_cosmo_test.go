@@ -7,56 +7,74 @@ package runtime_test
 
 import (
 	. "runtime"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
-// TestCosmoDarwinFutexDelay covers the arithmetic in one step of the
-// darwin futex wait (os_cosmo.go). XNU has no futex, so the wait is a
-// poll of the word with a backoff, and this decides each sleep.
-//
-// Properties matter, and neither can be observed from a Linux host by
-// running the poll loop. A sleep must never run past the caller's
-// deadline, or a timed lock2 overshoots its timeout. And a remaining
-// time under one microsecond must not round down to a zero-length
-// sleep. This would turn the wait into a spin on the CPU.
-func TestCosmoDarwinFutexDelay(t *testing.T) {
+// TestCosmoXnuUlockTimeout pins the conversion of a futexsleep timeout into
+// __ulock_wait's microseconds, where zero means no timeout. A finite wait
+// must never become zero, or it would sleep forever.
+func TestCosmoXnuUlockTimeout(t *testing.T) {
 	for _, c := range []struct {
-		name    string
-		sleep   uint32
-		left    int64
-		timed   bool
-		want    uint32
-		expired bool
+		name string
+		nsec int64
+		want uint32
 	}{
-		{"untimed passes the backoff through", 20, 0, false, 20, false},
-		{"untimed ignores leftNsec", 5000, -1, false, 5000, false},
-		{"deadline in the past", 20, 0, true, 0, true},
-		{"deadline already missed", 20, -1000, true, 0, true},
-		{"plenty of time left", 20, 1_000_000, true, 20, false},
-		{"exactly enough time left", 20, 20_000, true, 20, false},
-		{"clamped to what is left", 5000, 300_000, true, 300, false},
-		{"sub-microsecond remainder never sleeps zero", 5000, 999, true, 1, false},
-		{"one nanosecond left still sleeps", 20, 1, true, 1, false},
+		{"forever", -1, 0},
+		{"zero still times out", 0, 1},
+		{"sub-microsecond rounds up", 1, 1},
+		{"exact microseconds", 5000, 5},
+		{"partial microsecond rounds up", 5001, 6},
+		{"saturates", 1 << 62, 1<<32 - 1},
 	} {
-		t.Run(c.name, func(t *testing.T) {
-			got, expired := DarwinFutexDelay(c.sleep, c.left, c.timed)
-			if expired != c.expired {
-				t.Fatalf("expired = %v, want %v", expired, c.expired)
-			}
-			if expired {
-				return
-			}
-			if got != c.want {
-				t.Errorf("usec = %d, want %d", got, c.want)
-			}
-			if got == 0 {
-				t.Error("usec = 0: a zero-length sleep spins the CPU")
-			}
-			// Both properties collide below a microsecond: the floor that stops a
-			// zero-length sleep is itself an overshoot.
-			if c.timed && int64(got)*1000 > c.left && got != 1 {
-				t.Errorf("usec = %d overshoots the %dns left", got, c.left)
-			}
-		})
+		if got := XnuUlockTimeout(c.nsec); got != c.want {
+			t.Errorf("%s: XnuUlockTimeout(%d) = %d, want %d", c.name, c.nsec, got, c.want)
+		}
+	}
+}
+
+// TestCosmoFutexWakesSleeper pins that futexsleep sleeps in the host kernel
+// and that futexwakeup ends the sleep. The word never changes, so a sleeper
+// that polled the word would sleep out its whole timeout instead.
+func TestCosmoFutexWakesSleeper(t *testing.T) {
+	var word uint32
+	var asleep atomic.Bool
+	done := make(chan struct{})
+	go func() {
+		asleep.Store(true)
+		CosmoFutexsleep(&word, 0, int64(time.Minute))
+		close(done)
+	}()
+	deadline := time.After(30 * time.Second)
+	// A wake that lands before the sleeper enters the kernel wakes nobody, so
+	// the waker repeats until the sleeper is out.
+	for {
+		if asleep.Load() {
+			CosmoFutexwakeup(&word, 1)
+		}
+		select {
+		case <-done:
+			return
+		case <-deadline:
+			t.Fatal("futexwakeup did not end futexsleep")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+// TestCosmoFutexsleepTimesOut pins that a timed futexsleep returns with no
+// wake, and that it returns at once when the word already differs.
+func TestCosmoFutexsleepTimesOut(t *testing.T) {
+	var word uint32
+	start := time.Now()
+	CosmoFutexsleep(&word, 0, int64(20*time.Millisecond))
+	if elapsed := time.Since(start); elapsed > 20*time.Second {
+		t.Errorf("a 20ms futexsleep took %v", elapsed)
+	}
+	start = time.Now()
+	CosmoFutexsleep(&word, 1, int64(time.Minute))
+	if elapsed := time.Since(start); elapsed > 20*time.Second {
+		t.Errorf("futexsleep on a word that differs took %v", elapsed)
 	}
 }

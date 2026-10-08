@@ -43,3 +43,25 @@ func TestRunScratch(t *testing.T) {
 		}
 	}
 }
+
+// TestProcessLocal pins the paths that name the process reading them. The go
+// command reading one learns about itself, never about the test.
+func TestProcessLocal(t *testing.T) {
+	for path, want := range map[string]bool{
+		"/proc/self/cmdline":         true,
+		"/proc/self":                 true,
+		"/proc/thread-self/status":   true,
+		"/dev/fd":                    true,
+		"/dev/fd/11":                 true,
+		"/dev/stdin":                 true,
+		"/proc/1/cmdline":            false,
+		"/proc/selfish":              false,
+		"/dev/fdisk":                 false,
+		"/etc/hosts":                 false,
+		"/proc/sys/kernel/osrelease": false,
+	} {
+		if got := isProcessLocal(path); got != want {
+			t.Errorf("isProcessLocal(%q) = %v, want %v", path, got, want)
+		}
+	}
+}

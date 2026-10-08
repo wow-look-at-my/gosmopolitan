@@ -18,10 +18,6 @@ const (
 	mutex_locked   = 1
 	mutex_sleeping = 2
 
-	active_spin     = 4
-	active_spin_cnt = 30
-	passive_spin    = 1
-
 	// mutexMLocksDelta is the change in gp.m.locks for each lock/unlock of a mutex.
 	mutexMLocksDelta = 16
 )
@@ -48,6 +44,8 @@ func lock(l *mutex) {
 // This is the classic futex mutex (see lock_futex.go's ancestry): possible
 // lock states are mutex_unlocked, mutex_locked and mutex_sleeping.
 // mutex_sleeping means that there is presumably at least one sleeping thread.
+// A waiter never spins: it marks the lock mutex_sleeping and waits in the
+// futex until unlock2 wakes it.
 func lock2(l *mutex) {
 	gp := getg()
 
@@ -57,45 +55,13 @@ func lock2(l *mutex) {
 	gp.m.locks += mutexMLocksDelta
 
 	// Speculative grab for lock.
-	v := atomic.Xchg(key32(&l.key), mutex_locked)
-	if v == mutex_unlocked {
+	if atomic.Xchg(key32(&l.key), mutex_locked) == mutex_unlocked {
 		return
 	}
 
-	// wait is either MUTEX_LOCKED or MUTEX_SLEEPING depending on whether there is a thread sleeping on this mutex.
-	wait := v
-
-	spin := 0
-	if numCPUStartup > 1 {
-		spin = active_spin
-	}
-	for {
-		// Try for lock, spinning.
-		for i := 0; i < spin; i++ {
-			for l.key == mutex_unlocked {
-				if atomic.Cas(key32(&l.key), mutex_unlocked, wait) {
-					return
-				}
-			}
-			procyield(active_spin_cnt)
-		}
-
-		// Try for lock, rescheduling.
-		for i := 0; i < passive_spin; i++ {
-			for l.key == mutex_unlocked {
-				if atomic.Cas(key32(&l.key), mutex_unlocked, wait) {
-					return
-				}
-			}
-			osyield()
-		}
-
-		// Sleep.
-		v = atomic.Xchg(key32(&l.key), mutex_sleeping)
-		if v == mutex_unlocked {
-			return
-		}
-		wait = mutex_sleeping
+	// Taking the lock as mutex_sleeping is conservative: this M cannot know
+	// whether another waiter is still asleep, so its unlock2 wakes one.
+	for atomic.Xchg(key32(&l.key), mutex_sleeping) != mutex_unlocked {
 		gp.m.blocked = true
 		futexsleep(key32(&l.key), mutex_sleeping, -1)
 		gp.m.blocked = false
@@ -142,6 +108,10 @@ func notewakeup(n *note) {
 	}
 	// Wake an M blocked in notesleep/notetsleep.
 	futexwakeup(key32(&n.key), 1)
+	if wasmParkedWorkers.Load() != 0 {
+		// A parked worker sleeps on wasmParkWake, not on its note.
+		wasmParkWakeAll()
+	}
 	if n == &m0.park {
 		// The main M parks its park note in the JavaScript event loop (wasmMainParkNote), not in a futex wait.
 		wasmWakeMainThread()
@@ -180,66 +150,95 @@ func notesleep(n *note) {
 // wasmWorkerParkNote parks a worker M on its park note (stopm). The main M's
 // JavaScript timeout backstops idle-P timers only while the main M is parked
 // in the event loop; it can be blocked elsewhere (a timed note sleep, a
-// long-running goroutine). So parked worker Ms sleep with a timeout when
-// timers exist anywhere: on expiry, a worker whose timers are due re-enters
-// the scheduler. On its own (remove itself from the idle M list, take an idle
-// P, self-complete the stopm protocol), and findRunnable's timer checks fire
-// the timers.
+// long-running goroutine). So parked worker Ms are the agents that fire due
+// timers. Each sleeps until the earliest timer deadline across all Ps. Then
+// re-enters the scheduler on its own (removes itself from the idle M list,
+// takes an idle P, self-completes the stopm protocol), and findRunnable's
+// timer checks fire the timers.
 func wasmWorkerParkNote(n *note) {
 	gp := getg()
 	wasmParkedWorkers.Add(1)
-	for atomic.Load(key32(&n.key)) == 0 {
-		// Always sleep with a timeout: parked workers double as the port's sysmon substitute.
-		ns := int64(250e6)
-		if next := wasmEarliestTimerWake(); next != 0 {
-			if d := next - nanotime(); d < ns {
-				ns = d
-			}
-			if ns < 1e5 {
-				ns = 1e5 // floor: don't busy-spin on an overdue timer we may not win
-			}
+	// kicked is a due deadline this M found with every P busy and kicked the owners for.
+	kicked := int64(0)
+	counted := false
+	for {
+		if kicked != 0 && !counted {
+			wasmKickedWorkers.Add(1)
+			counted = true
 		}
-		gp.m.blocked = true
-		futexsleep(key32(&n.key), 0, ns)
-		gp.m.blocked = false
+		seen := atomic.Load(&wasmParkWake)
 		if atomic.Load(key32(&n.key)) != 0 {
-			wasmParkedWorkers.Add(-1)
-			return // real wakeup: nextp installed by the waker
+			break // real wakeup: nextp installed by the waker
 		}
-		// Timed out (or spurious): anything to do?
 		if wasmMigrateCount.Load() != 0 {
 			// Goroutines are waiting to migrate to the main M, and only its findRunnable can pop them.
 			wasmWakeMainThread()
 		}
-		due := false
-		if next := wasmEarliestTimerWake(); next != 0 && nanotime() >= next {
-			due = true
+		next := wasmEarliestTimerWake()
+		if counted && next != kicked {
+			wasmKickedWorkers.Add(-1)
+			counted = false
 		}
-		if !due && sched.runq.size == 0 && sched.npidle.Load() == int32(gomaxprocs) {
-			// No due timers, nothing in the global queue, and every P is idle (an idle P's local queue is empty by invariant).
-			continue
+		now := nanotime()
+		due := next != 0 && next <= now && next != kicked
+		queued := sched.runq.size != 0 && sched.npidle.Load() != 0
+		ns := int64(-1)
+		if next != 0 && next != kicked {
+			ns = next - now
 		}
-		// Become a scheduler M again if an idle P is available; findRunnable then runs timers and queued work.
-		lock(&sched.lock)
-		if !wasmMidleRemove(gp.m) {
-			// A concurrent startm claimed us; it will wake the note.
-			unlock(&sched.lock)
-			continue
+		if due || queued {
+			switch wasmWorkerUnpark(gp.m, n) {
+			case wasmUnparked:
+				continue
+			case wasmClaimed:
+				// startm's notewakeup bumps wasmParkWake.
+				ns = -1
+			case wasmAllPsBusy:
+				if !due {
+					break
+				}
+				// Re-arm the running goroutines' preemption checks so an owner yields and runs the due timer.
+				kicked = next
+				wasmThreadsKick()
+				continue
+			}
 		}
-		pp, _ := pidleget(0)
-		if pp == nil {
-			// Every P busy: re-arm the running goroutines' preemption checks so an owner yields and finds the due work.
-			mput(gp.m)
-			wasmThreadsKick()
-			unlock(&sched.lock)
-			continue
-		}
-		gp.m.nextp.set(pp)
-		unlock(&sched.lock)
-		// Self-complete the stopm protocol; the loop exits above.
-		notewakeup(n)
+		gp.m.blocked = true
+		futexsleep(&wasmParkWake, seen, ns)
+		gp.m.blocked = false
+	}
+	if counted {
+		wasmKickedWorkers.Add(-1)
 	}
 	wasmParkedWorkers.Add(-1)
+}
+
+// The outcomes of wasmWorkerUnpark.
+const (
+	wasmUnparked  = iota // took an idle P and woke its own park note
+	wasmClaimed          // a concurrent startm claimed the M and will wake its note
+	wasmAllPsBusy        // no P was idle; the M is back on the idle list
+)
+
+// wasmWorkerUnpark makes the parked worker mp a scheduler M again if an
+// idle P is available. It removes mp from the idle M list, takes the P and
+// self-completes the stopm protocol by waking n, mp's park note.
+func wasmWorkerUnpark(mp *m, n *note) int {
+	lock(&sched.lock)
+	if !wasmMidleRemove(mp) {
+		unlock(&sched.lock)
+		return wasmClaimed
+	}
+	pp, _ := pidleget(0)
+	if pp == nil {
+		mput(mp)
+		unlock(&sched.lock)
+		return wasmAllPsBusy
+	}
+	mp.nextp.set(pp)
+	unlock(&sched.lock)
+	notewakeup(n)
+	return wasmUnparked
 }
 
 // May run with m.p==nil if called from notetsleep, so write barriers
@@ -383,6 +382,7 @@ func wasmMainParkNote(n *note) {
 		// A resume came in: handleEvent ran wasmMainParkWake on this stack and returned here.
 		gp.m.blocked = false
 	}
+	wasmMainUnkick()
 	atomic.Store(&wasmMainWantsP, 0)
 }
 
@@ -429,6 +429,8 @@ func wasmMainParkWake() {
 	if pp == nil {
 		// Every P is busy. Put ourselves back and keep parking; pidleput nudges us the moment a P frees.
 		atomic.Store(&wasmMainWantsP, 1)
+		// A worker in beforeIdle holding a P for its timers gives it up.
+		wasmSchedNudgeWake()
 		mput(&m0)
 		if next := wasmEarliestTimerWake(); next != 0 && nanotime() >= next {
 			wasmThreadsKick()
@@ -451,20 +453,32 @@ var (
 	wasmParkBackstopTime int64
 )
 
+// wasmMainKicked is set while the parked main M is counted in wasmKickedWorkers: it found the earliest timer overdue.
+var wasmMainKicked bool
+
 // wasmMainParkArmBackstop (re-)arms the backstop timeout for the global
-// earliest timer deadline, capped at 250ms (the same watchdog cap as
-// wasmWorkerParkNote, so a deadline that moves earlier is picked up on
-// the next tick even if a re-arm nudge is lost). Runs on the main M's g0
-// with no P; must not allocate. Called from wasmMainParkWake's
-// could-not-take-a-P paths, right before the main M parks again.
+// earliest timer deadline. A deadline that moves earlier wakes the main M
+// (wakeNetPoller), which arms it again. Runs on the main M's g0 with no P;
+// must not allocate. Called from wasmMainParkWake's could-not-take-a-P
+// paths, right before the main M parks again.
 //
 //go:nowritebarrierrec
 func wasmMainParkArmBackstop() {
+	if !wasmMainKicked {
+		wasmMainKicked = true
+		wasmKickedWorkers.Add(1)
+	}
 	next := wasmEarliestTimerWake()
 	if next == 0 {
+		wasmMainUnkick()
 		return
 	}
 	now := nanotime()
+	if next <= now {
+		wasmThreadsKick()
+		return
+	}
+	wasmMainUnkick()
 	if wasmParkBackstopID >= 0 && wasmParkBackstopTime > now && wasmParkBackstopTime <= next {
 		return // still pending and early enough
 	}
@@ -474,15 +488,22 @@ func wasmMainParkArmBackstop() {
 	}
 	wasmParkBackstopID = -1
 	delayNS := next - now
-	if delayNS > 250e6 {
-		delayNS = 250e6
-	}
 	delay := (delayNS-1)/1e6 + 1 // round up like beforeIdle's timer delay
 	if delay < 1 {
 		delay = 1
 	}
 	wasmParkBackstopID = scheduleTimeoutEvent(delay)
 	wasmParkBackstopTime = now + delay*1e6
+}
+
+// wasmMainUnkick takes the main M out of wasmKickedWorkers.
+//
+//go:nowritebarrierrec
+func wasmMainUnkick() {
+	if wasmMainKicked {
+		wasmMainKicked = false
+		wasmKickedWorkers.Add(-1)
+	}
 }
 
 // wasmMidleRemove unlinks mp from sched.midle. sched.lock must be held.
@@ -665,25 +686,27 @@ func beforeIdle(now, pollUntil int64) (gp *g, otherReady bool) {
 		return wasmThreadsBeforeIdleMain(now, pollUntil)
 	}
 	if pollUntil != 0 {
+		// Everything that would end this sleep nudges wasmSchedNudge after it changes what findRunnable reads.
+		v := atomic.Load(&wasmSchedNudge)
 		if wasmMigrateCount.Load() != 0 || atomic.Load(&wasmMainWantsP) != 0 {
 			// The main M needs a P: goroutines are waiting on the migrate queue (only the main M's findRunnable can pop them).
 			return nil, false
 		}
+		pp := getg().m.p.ptr()
+		if sched.runq.size != 0 || sched.gcwaiting.Load() || pp.runSafePointFn != 0 {
+			return nil, true
+		}
+		if next := pp.timers.wakeTime(); next != 0 && next < pollUntil {
+			pollUntil = next
+		}
 		if now == 0 {
 			now = nanotime()
 		}
-		ns := pollUntil - now
-		if ns > 10e6 {
-			ns = 10e6 // cap: re-check the scheduler state regularly
-		}
-		if ns > 0 {
-			v := atomic.Load(&wasmSchedNudge)
-			if !sched.gcwaiting.Load() {
-				t0 := nanotime()
-				futexsleep(&wasmSchedNudge, v, ns)
-				// The slept time is CPU idle time (this M held an otherwise-empty P waiting for its timers); account it like the event-loop pauses do.
-				sched.idleTime.Add(nanotime() - t0)
-			}
+		if ns := pollUntil - now; ns > 0 {
+			t0 := nanotime()
+			futexsleep(&wasmSchedNudge, v, ns)
+			// The slept time is CPU idle time (this M held an otherwise-empty P waiting for its timers); account it like the event-loop pauses do.
+			sched.idleTime.Add(nanotime() - t0)
 		}
 		return nil, true
 	}

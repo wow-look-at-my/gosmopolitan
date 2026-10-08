@@ -148,73 +148,59 @@ retry:
 // pop removes and returns a span from buffer b, or nil if b is empty.
 // pop is safe to call concurrently with other pop and push operations.
 func (b *spanSet) pop() *mspan {
-	var head, tail uint32
-	var backoff uint32
-	// TODO: tweak backoff parameters on other architectures.
-	if goarch.IsArm64 == 1 {
-		backoff = 128
-	}
-claimLoop:
+	var blockp *atomic.Pointer[spanSetBlock]
+	var block *spanSetBlock
+	var span *mspan
+	var bottom uint32
 	for {
 		headtail := b.index.load()
-		head, tail = headtail.split()
+		head, tail := headtail.split()
 		if head >= tail {
 			// The buf is empty, as far as we can tell.
 			return nil
 		}
+		top := head / spanSetBlockEntries
+		bottom = head % spanSetBlockEntries
 		// Check if the head position we want to claim is actually
 		// backed by a block.
-		spineLen := b.spineLen.Load()
-		if spineLen <= uintptr(head)/spanSetBlockEntries {
+		if b.spineLen.Load() <= uintptr(top) {
 			// We're racing with a spine growth and the allocation of
 			// a new block (and maybe a new spine!), and trying to grab
 			// the span at the index which is currently being pushed.
-			// Instead of spinning, let's just notify the caller that
-			// there's nothing currently here. Spinning on this is
-			// almost definitely not worth it.
+			// Report the set empty rather than wait for that push.
 			return nil
 		}
-		// Try to claim the current head by CASing in an updated head.
-		// This may fail transiently due to a push which modifies the
-		// tail, so keep trying while the head isn't changing.
-		want := head
-		for want == head {
-			if b.index.cas(headtail, makeHeadTailIndex(want+1, tail)) {
-				break claimLoop
-			}
-			// Use a backoff approach to reduce demand to the shared memory location
-			// decreases memory contention and allows for other threads to make quicker
-			// progress.
-			// Read more in this Arm blog post:
-			// https://community.arm.com/arm-community-blogs/b/architectures-and-processors-blog/posts/multi-threaded-applications-arm
-			procyield(backoff)
-			// Increase backoff time.
-			backoff += backoff / 2
-			headtail = b.index.load()
-			head, tail = headtail.split()
+		// We may be reading a stale spine pointer, but because the
+		// length grows monotonically and we've already verified it, we
+		// read from a valid slot of the spine.
+		blockp = b.spine.Load().lookup(uintptr(top))
+		block = blockp.Load()
+		if block == nil {
+			// Every slot of the block was popped and the block freed,
+			// so the head has moved past it.
+			continue
 		}
-		// We failed to claim the spot we were after and the head changed,
-		// meaning a popper got ahead of us. Try again from the top because
-		// the buf may not be empty.
+		span = block.spans[bottom].Load()
+		if span == nil {
+			if b.index.load().head() != head {
+				// Another popper claimed the slot and cleared it.
+				continue
+			}
+			// The pusher that reserved this slot has not stored its
+			// span yet. Report the set empty rather than wait for it,
+			// as for a spine growth: the slot stays unclaimed, so the
+			// span is popped once it is there.
+			return nil
+		}
+		// Claim the slot. The slot is written once by its pusher and
+		// cleared only by its claimer, so if the CAS succeeds no other
+		// popper claimed it and it still holds span. A failed CAS means a
+		// push moved the tail or a popper moved the head; look again.
+		if b.index.cas(headtail, makeHeadTailIndex(head+1, tail)) {
+			break
+		}
 	}
-	top, bottom := head/spanSetBlockEntries, head%spanSetBlockEntries
 
-	// We may be reading a stale spine pointer, but because the length
-	// grows monotonically and we've already verified it, we'll definitely
-	// be reading from a valid block.
-	blockp := b.spine.Load().lookup(uintptr(top))
-
-	// Given that the spine length is correct, we know we will never
-	// see a nil block here, since the length is always updated after
-	// the block is set.
-	block := blockp.Load()
-	s := block.spans[bottom].Load()
-	for s == nil {
-		// We raced with the span actually being set, but given that we
-		// know a block for this span exists, the race window here is
-		// extremely small. Try again.
-		s = block.spans[bottom].Load()
-	}
 	// Clear the pointer. This isn't strictly necessary, but defensively
 	// avoids accidentally re-using blocks which could lead to memory
 	// corruption. This way, we'll get a nil pointer access instead.
@@ -239,7 +225,7 @@ claimLoop:
 		// Return the block to the block pool.
 		spanSetBlockPool.free(block)
 	}
-	return s
+	return span
 }
 
 // reset resets a spanSet which is empty. It will also clean up
