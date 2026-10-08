@@ -31,6 +31,8 @@ jobs:
           echo "run_id: ${{ github.run_id }}"
           echo "group: gha_${{ github.repository }}_${{ github.workflow }}_${{ github.ref != 'refs/heads/master' && github.ref || github.run_id }}"
           echo "cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}"
+          echo "::notice::concurrency group=gha_${{ github.repository }}_${{ github.workflow }}_${{ github.ref != 'refs/heads/master' && github.ref || github.run_id }}"
+          echo "::notice::cancel-in-progress=${{ github.ref != 'refs/heads/master' }}"
       - uses: wow-look-at-my/actions@no-all-builds-job#latest
       - uses: wow-look-at-my/slopfix@master
       - uses: wow-look-at-my/actions@no-tests-in-yaml#latest
