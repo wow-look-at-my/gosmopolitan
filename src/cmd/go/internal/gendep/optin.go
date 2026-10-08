@@ -40,8 +40,8 @@ func optedIn(modroot string) bool {
 	if errors.Is(err, fs.ErrNotExist) {
 		return false
 	}
-	// A read that stops short hides the rest of the file, and an opt-in under
-	// the break then reads as a module that never asked.
+	// A read that stops short hides. The rest of the file, and an opt-in
+	// under the break then reads as a module that never asked.
 	if err != nil {
 		base.Fatalf("go: reading %s: %v", gomod, err)
 	}

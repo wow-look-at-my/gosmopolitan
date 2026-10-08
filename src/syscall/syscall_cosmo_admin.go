@@ -13,8 +13,8 @@ import "unsafe"
 // build. The signatures and the bodies are those files', unchanged.
 
 // The reboot(2) magic values and commands, named as the linux port names
-// them in zerrors_linux_amd64.go and zerrors_linux_arm64.go, which cosmo
-// does not build.
+// them in zerrors_linux_amd64.go and zerrors_linux_arm64.go. Cosmo does
+// not build that.
 const (
 	LINUX_REBOOT_CMD_CAD_OFF    = 0x0
 	LINUX_REBOOT_CMD_CAD_ON     = 0x89abcdef

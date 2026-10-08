@@ -161,7 +161,10 @@ func get(security SecurityMode, url *urlpkg.URL, pin *PinOptions) (*Response, er
 			noRedirect.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 			client = &noRedirect
 		}
-		if url.Scheme == "https" && pin.Bearer != "" {
+		if url.Scheme == "https" && pin.BasicAuth != nil {
+			password, _ := pin.BasicAuth.Password()
+			req.SetBasicAuth(pin.BasicAuth.Username(), password)
+		} else if url.Scheme == "https" && pin.Bearer != "" {
 			req.Header.Set("Authorization", "Bearer "+pin.Bearer)
 		} else if url.Scheme == "https" && pin.CredentialURL != "" {
 			auth.AddCredentialsFor(client, req, pin.CredentialURL)
@@ -190,7 +193,7 @@ func get(security SecurityMode, url *urlpkg.URL, pin *PinOptions) (*Response, er
 		// (e.g. a valid <meta name="go-import"> tag),
 		// retry the request with credentials obtained by invoking GOAUTH
 		// with the request URL.
-		if url.Scheme == "https" && pin.CredentialURL == "" && pin.Bearer == "" && err == nil && res.StatusCode >= 400 && res.StatusCode < 500 {
+		if url.Scheme == "https" && pin.CredentialURL == "" && pin.Bearer == "" && pin.BasicAuth == nil && err == nil && res.StatusCode >= 400 && res.StatusCode < 500 {
 			// Close the body of the previous response since we
 			// are discarding it and creating a new one.
 			res.Body.Close()

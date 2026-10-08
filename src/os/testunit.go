@@ -6,10 +6,10 @@ package os
 import "internal/testlog"
 
 // withTestUnit hands a child the package whose tests this process runs, when
-// this is a test binary holding several packages' tests and the caller
-// replaced the child's environment. A test that starts its own binary again,
-// or hands it to something that starts it, such as a CGI handler or a program
-// of its own that passes its environment on, names only a test of its own.
+// this is a test binary holding several packages' tests. The caller replaced
+// the child's environment. A test that starts its own binary again, or hands
+// it to something that starts it, such as a CGI. Handler or a program of its
+// own that passes its environment on, names only a test of its own.
 func withTestUnit(attr *ProcAttr) *ProcAttr {
 	unit := testlog.Unit()
 	if unit == "" {

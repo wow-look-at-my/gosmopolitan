@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package main
+package objdump
 
 import (
 	"cmd/internal/hash"
@@ -20,8 +20,7 @@ import (
 // GO_OBJDUMPTEST_IS_OBJDUMP is set, and runs the test otherwise.
 func TestMain(m *testing.M) {
 	if os.Getenv("GO_OBJDUMPTEST_IS_OBJDUMP") != "" {
-		main()
-		os.Exit(0)
+		os.Exit(Main(os.Args[1:]))
 	}
 
 	os.Setenv("GO_OBJDUMPTEST_IS_OBJDUMP", "1")

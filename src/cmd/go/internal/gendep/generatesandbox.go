@@ -111,7 +111,7 @@ func seatbeltArgv(writable string, argv []string) ([]string, error) {
 }
 
 // writableCaches names the directories a go command has to write to do its own
-// work: the build cache and the module cache the generator's own dependencies
+// work. The build cache and the module cache the generator's own dependencies
 // land in.
 func writableCaches() []string {
 	// An APE stages a runnable copy of itself before it can exec, and the go command being run here is one.

@@ -244,7 +244,7 @@ Then sweep the version string (`grep -rn goX.Y '<old>cosmo'` across CLAUDE.md, R
 
 Per-step rationale trimmed from `cosmo-ci.yml`'s comments (1-line cap): docs/CI.md.
 
-**A test is never skipped.** Not with `-run`. Not with `t.Skip`. Not with a build tag. Not by dropping a port. A package that reports success in a second because its tests never ran is worse than a red one. It reports green for work nobody did. js/wasm does this to the whole `cmd/*` family, because the port has no process spawning. That is a gap to close. It is not a result to keep. `testing.Short()` is false, and `-test.short` has no effect. The exception is a `maymorestack` run. Its hook yields or moves the stack at every call, which is a stress run. Only the tests' short paths fit it. Upstream runs it the same way.
+**A test is never skipped.** Not with `-run`. Not with `t.Skip`. Not with a build tag. Not by dropping a port. A package that reports success in a second because its tests never ran is worse than a red one.
 
 **A vendored third-party package's test files do not run, and every suite says so.** The vendor submodules carry tests that `go mod vendor` will strip. They cannot build here. The go command lists them under `IgnoredGoFiles` (`cmd/go/internal/load`). Org modules keep their tests. `dist test` ends with a `##### Test coverage` block: the share of packages whose tests run, and each untested module. CI puts it first in the suite leg's step summary.
 

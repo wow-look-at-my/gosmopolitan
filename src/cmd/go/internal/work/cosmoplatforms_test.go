@@ -91,7 +91,7 @@ func TestCosmoSiblingAndAssemble(t *testing.T) {
 	}
 }
 
-// TestCosmoMergeArgsPlatforms covers what the assembly step is told: the
+// TestCosmoMergeArgsPlatforms covers what the assembly step is told. The
 // selection rides along as -apeplatforms, and a build with no sibling
 // passes one input rather than a dangling comma.
 func TestCosmoMergeArgsPlatforms(t *testing.T) {

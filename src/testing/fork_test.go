@@ -128,10 +128,10 @@ func TestForkFromASubtest(t *T) {
 }
 
 // TestForkSubtestsGetTheirOwnChild: the subtests of a forked test share that
-// child with each other, so a subtest asking for a process of its own must get
-// one. Each ends up the target of a child of its own, and the run terminates:
-// the marker names one test, and every test it runs under stays in place
-// rather than forking its own parent.
+// child with each other, so a subtest asking for a process of its own. Must
+// get one. Each ends up the target of a child of its own, and the run
+// terminates. The marker names one test, and every test it runs under stays in
+// place rather than forking its own parent.
 func TestForkSubtestsGetTheirOwnChild(t *T) {
 	if !canFork() {
 		t.Skip("this run cannot fork, so Fork takes the barrier")
@@ -171,7 +171,7 @@ func TestAllocsPerRunInAForkedSubtest(t *T) {
 var forkAllocSink []byte
 
 // TestForkReportsTheChildsFailure is the. A test cannot fail itself to prove
-// it, so it drives runForked directly and checks that a failing child comes
+// it. It drives runForked directly and checks that a failing child comes
 // back as an error naming the test, with the child's output attached.
 func TestForkReportsTheChildsFailure(t *T) {
 	if !canFork() {
@@ -262,9 +262,9 @@ func TestSetenvInAChildStaysInPlace(t *T) {
 }
 
 // TestForkArgs: the child inherits the run's arguments and replaces only the
-// selection. The -target case is the one that matters -- cmd/internal/testdir
+// selection. The -target case is the one that matters. Cmd/internal/testdir
 // reads it to decide what to compile for, so a child that loses it tests the
-// host and reports that as the answer.
+// host and reports. That as the answer.
 func TestForkArgs(t *T) {
 	for _, tc := range []struct {
 		name string
@@ -365,7 +365,7 @@ func TestAllocsPerRunUnderSerialDoesNotFork(t *T) {
 	}
 }
 
-// TestAllocsPerRunRefusesBesideASibling: a fork gives the test a process, not
+// TestAllocsPerRunRefusesBesideASibling. A fork gives the test a process, not
 // the process to itself, so the subtests of a forked test still run at the
 // same time. A second fork would land in the same place, so the measurement
 // refuses here and names the method that stops them.

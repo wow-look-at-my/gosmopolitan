@@ -28,7 +28,7 @@ func toolGraph(mainID, ssaID string) *Action {
 }
 
 // A tool's ID names its own packages. The main package that links it is
-// not among them, so rebuilding that package leaves the ID alone, and a
+// not among them, so rebuilding that package leaves the ID alone. A
 // change inside the tool moves it.
 func TestLinkedToolIDsFollowTheToolsPackages(t *testing.T) {
 	first := linkedToolIDs(toolGraph("m1", "s1"))
