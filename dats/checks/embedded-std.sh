@@ -104,6 +104,22 @@ cmp "$work/embedded/cgoprobe.com" "$work/source/cgoprobe.com"
 grep -q "ok callback" "$work/cgoprobe.out"
 (cd "$work/cgoprobe" && env -u GOROOT GOCACHE="$work/cache" /bin/sh "$work/go.com" vet .)
 
+# wasm_build builds hello for GOOS $1 on wasm through the carried std, compiling no standard package, byte for byte the source tree's build.
+wasm_build() {
+	GOOS="$1" GOARCH=wasm embedded build -x -trimpath -ldflags=-buildid= -o "$work/embedded/hello.$1.wasm" . 2>"$work/build-$1.log"
+	if grep -E "compile .* -p (fmt|runtime|os) " "$work/build-$1.log"; then
+		echo "a standard package was compiled from source for $1/wasm" >&2
+		exit 1
+	fi
+	grep -q "self:std/$1_wasm/" "$work/build-$1.log"
+	(cd "$work/hello" && GOOS="$1" GOARCH=wasm go build -trimpath -ldflags=-buildid= -o "$work/source/hello.$1.wasm" .)
+	cmp "$work/embedded/hello.$1.wasm" "$work/source/hello.$1.wasm"
+}
+
+echo "== js/wasm and wasip1/wasm programs build through it from the carried std"
+wasm_build js
+wasm_build wasip1
+
 echo "== a listing hands an outside reader a standard package's export data as a file"
 export_file=$(embedded list -export -f '{{.Export}}' fmt)
 test -s "$export_file"

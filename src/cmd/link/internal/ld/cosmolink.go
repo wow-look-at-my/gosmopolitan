@@ -77,6 +77,11 @@ func (ctxt *Link) cosmoHostlink() {
 		"-Wl,-T," + script,
 		// runtime/cgo wraps pthread_create, so every C thread gets Go's TLS slot.
 		"-Wl,--wrap=pthread_create",
+		// runtime/cgo wraps libcosmo's failing dlopen stubs onto cosmo_dlopen.
+		"-Wl,--wrap=dlopen",
+		"-Wl,--wrap=dlsym",
+		"-Wl,--wrap=dlclose",
+		"-Wl,--wrap=dlerror",
 		"-o", *flagOutfile,
 	}
 	// Never -s here: cosmoNTBoot reads WinMain and the ape_idata bounds out of

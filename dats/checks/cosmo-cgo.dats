@@ -18,7 +18,20 @@ tests:
 			- ok callback
 			- ok thread
 			- ok concurrent
+			- ok dlerror
 			- arch amd64
+		!stdout:
+			- FAIL
+
+	# A cgo package's plain dlopen, dlsym and dlclose reach cosmo_dlopen, which loads a host library.
+	- desc: plain dlopen in cgo code loads a host library and finds a symbol in it
+	  cmd: export PATH="$PWD/bin:/opt/cosmocc/bin:$PATH"; out="$(mktemp -d)"; cd testdata/cgoprobe && GOCOSMOFAT=0 GOARCH=amd64 go build -o "$out/dlopen.com" . && "$out/dlopen.com" dlopen libm.so.6 cos
+	  timeout: 10m
+	  exit: 0
+	  outputs:
+		stdout:
+			- ok dlerror
+			- ok dlopen
 		!stdout:
 			- FAIL
 
@@ -52,6 +65,7 @@ tests:
 			- ok callback
 			- ok thread
 			- ok concurrent
+			- ok dlerror
 			- arch arm64
 		!stdout:
 			- FAIL
