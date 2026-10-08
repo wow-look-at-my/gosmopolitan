@@ -839,13 +839,6 @@ type p struct {
 	// only the owner P can CAS it to a valid G.
 	runnext guintptr
 
-	// runnextSeen is the runnext G a thief first found here, and
-	// runnextSeenAt the nanotime when it did. A thief leaves a runnext G
-	// to this P until it has sat for runnextStealDelay. Thieves write
-	// both without a lock; a torn pair only moves that point.
-	runnextSeen   atomic.Uintptr
-	runnextSeenAt atomic.Int64
-
 	// Available G's (status == Gdead)
 	gFree gList
 
