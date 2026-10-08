@@ -145,9 +145,22 @@ func procControlPriority(pid int) string {
 	if err != nil {
 		return fmt.Sprintf("getpriority after set: %v", err)
 	}
-	if after == before {
-		// Either convention a host may report the value in has to show a
-		// move here: the two differ by the whole span of the check.
+	if after != before {
+		return ""
+	}
+	// The child already ran at the top of the range.
+	err = syscall.Setpriority(prioProcess, pid, priorityNice-1)
+	if errors.Is(err, syscall.EACCES) || errors.Is(err, syscall.EPERM) {
+		return ""
+	}
+	if err != nil {
+		return fmt.Sprintf("setpriority below nice %d: %v", priorityNice, err)
+	}
+	lowered, err := syscall.Getpriority(prioProcess, pid)
+	if err != nil {
+		return fmt.Sprintf("getpriority after a lower set: %v", err)
+	}
+	if lowered == after {
 		return fmt.Sprintf("the priority stayed at %d", after)
 	}
 	return ""
