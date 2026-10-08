@@ -18,30 +18,24 @@ type myError struct {
 
 func (myError) Error() string { return "" }
 
-func doRequest(useSelect bool) (*response, error) {
-	type async struct {
-		resp *response
-		err  error
-	}
-	ch := make(chan *async, 0)
-	done := make(chan struct{}, 0)
+type async struct {
+	resp *response
+	err  error
+}
 
-	if useSelect {
-		go func() {
+// sendRequests sends count fresh requests on ch, through a select when
+// useSelect is set. Done is never ready, so every select sends.
+func sendRequests(ch chan<- *async, done <-chan struct{}, useSelect bool, count int) {
+	for range count {
+		if useSelect {
 			select {
 			case ch <- &async{resp: nil, err: myError{}}:
 			case <-done:
 			}
-		}()
-	} else {
-		go func() {
-			ch <- &async{resp: nil, err: myError{}}
-		}()
+			continue
+		}
+		ch <- &async{resp: nil, err: myError{}}
 	}
-
-	r := <-ch
-	runtime.Gosched()
-	return r.resp, r.err
 }
 
 func TestChanSendSelectBarrier(t *testing.T) {
@@ -62,15 +56,21 @@ func testChanSendBarrier(useSelect bool) {
 		outer = 10
 		inner = 1000
 	}
-	for i := 0; i < outer; i++ {
+	// Each worker hands inner requests across one unbuffered channel. A
+	// handoff either wakes the parked receiver or takes from the parked
+	// sender, so both direct copies run with a fresh value every time.
+	for range outer {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			ch := make(chan *async)
+			done := make(chan struct{})
+			go sendRequests(ch, done, useSelect, inner)
 			var garbage []byte
-			for j := 0; j < inner; j++ {
-				_, err := doRequest(useSelect)
-				_, ok := err.(myError)
-				if !ok {
+			for range inner {
+				req := <-ch
+				runtime.Gosched()
+				if _, ok := req.err.(myError); !ok {
 					panic(1)
 				}
 				garbage = makeByte()
