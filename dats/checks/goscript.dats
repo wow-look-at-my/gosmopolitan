@@ -1,16 +1,16 @@
 # `go run` on a shebang-headed .go file, and that file executed directly.
 #
-# This is the fork's Go-script support, unrelated to how an APE is headed: a
+# This is the fork's Go-script support, unrelated to how an APE is headed. A
 # .go file whose first line is `#!/usr/bin/env -S go run` must both compile
-# through `go run` and be spawnable by the kernel's script loader, which is
+# through `go run` and be spawnable by the kernel's script loader. This is
 # what makes it a script at all.
 #
 # These were inline `run:` blocks in cosmo-ci.yml -- a heredoc writing a
-# fixture into /tmp, then two invocations whose only assertion was the step's
+# fixture into /tmp. Then invocations whose only assertion was the step's
 # exit code. As a suite the fixture is declared, the expected output is
 # asserted rather than eyeballed, and it runs identically on a laptop.
 #
-# GOOS/GOARCH are pinned to the host on every command: this toolchain defaults
+# GOOS/GOARCH are pinned to the host on every command. This toolchain defaults
 # to GOOS=cosmo and would otherwise emit a (fat) APE the host cannot exec.
 
 setup:

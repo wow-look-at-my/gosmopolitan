@@ -1,13 +1,12 @@
 # The APE acceptance suite, run against a binary built on each host.
 #
 # ONE APE runs everywhere -- that is the whole claim -- so what varies here is
-# not the artifact but the machine that BUILT it: a fat APE produced on Linux,
+# not the artifact but the machine that BUILT it. A fat APE produced on Linux,
 # on macOS and on Windows must behave identically on the machine running this.
 # Hence one test per build origin, all driving the same suite.
 #
-# This replaces three near-identical inline `run:` blocks in cosmo-ci.yml, each
-# juggling an `rc` variable, a log file and a long env prefix by hand. What was
-# load-bearing there is kept, and is now stated once per test instead of copied:
+# What was load-bearing there is kept, and is now stated once per test instead
+# of copied:
 #
 #   - with-deadline.sh wraps `go test`, because a wedged step on the macOS
 #     runners has been observed to survive both the runner's own timeout and a
@@ -25,8 +24,8 @@
 # binary. Every invocation here is `go test`, and the suite it drives reaches
 # the APE through /bin/sh. The execve contract itself -- refused as shipped,
 # accepted once the prologue has assimilated the file, or routed through a
-# compiled loader on arm64 macOS -- is apetest's own execve_test.go, which
-# these three cases pick up per build origin like the rest of the suite.
+# compiled loader on arm64 macOS. It is apetest's own execve_test.go, which
+# these cases pick up per build origin like the rest of the suite.
 
 setup:
 	- test -x testdata/ape/apetest/with-deadline.sh

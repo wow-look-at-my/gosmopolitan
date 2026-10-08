@@ -1,15 +1,16 @@
 # The fork's own package tests, one case per invocation.
 #
-# These were three inline `run:` blocks in cosmo-ci.yml, each a stack of
-# `go test` lines sharing a PATH export. A stack like that reports as one
-# step: the first failure hides every line after it, and nothing names what
-# each invocation is for. Here each is a case with a description, so a failure
-# says which area broke and the rest still run.
+# These were inline `run:` blocks in cosmo-ci.yml, each a stack of `go test`
+# lines sharing a PATH export. A stack like that reports as one step: the
+# first failure hides every line after it, and nothing names what each
+# invocation is for. Here each is a case with a description, so a failure says
+# which area broke and the rest still run.
 #
 # GOOS is pinned on every command. This toolchain defaults to GOOS=cosmo and
-# would otherwise emit (fat) APE test binaries the host cannot exec -- except
-# where the test is deliberately GOOS=cosmo code, which runs through the
-# misc/cosmo exec wrappers as a thin APE that executes natively on Linux.
+# would otherwise emit (fat) APE test binaries the host cannot exec --
+# except. This happens where the test is deliberately GOOS=cosmo code. This
+# runs through the misc/cosmo exec wrappers as a thin APE that executes
+# natively on Linux.
 
 setup:
 	- test -x ./bin/go
