@@ -227,7 +227,7 @@ jobs:
         shell: bash
         run: git update-index -q --ignore-submodules --refresh
 
-      # This image's gcc links libwinpthread as a DLL that lives in C:\mingw64\bin and nowhere else, so a binary carrying any cgo package reaches it through PATH alone and dies at load with 0xc0000135 once a test narrows PATH or hands a child an environment without one. The loader reads the system directory whatever the environment says, so a copy there is found by every binary, and the stdlib archives the suite links against were built before this step runs.
+      # Consider this image's gcc links. Those links libwinpthread as a DLL that lives in C:\mingw64\bin and nowhere else. A binary carrying any cgo package reaches it through PATH alone and dies at load with 0xc0000135 once a test narrows PATH. It hands a child an environment without one. The loader reads the system directory whatever the environment says. A copy there is found by every binary, and the stdlib archives the suite links against were built before this step runs.
       - name: Put the mingw runtime where the loader always looks (NT)
         if: runner.os == 'Windows'
         shell: pwsh

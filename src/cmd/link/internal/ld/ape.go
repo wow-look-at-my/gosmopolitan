@@ -706,8 +706,8 @@ func apeVaddrFileOff(loads []apePhdr, vaddr, size uint64, what string) uint64 {
 }
 
 // apePrepareNTBoot resolves the NT boot symbols from the live link, patches
-// those RVA fields of the runtime.ntidata import blob in the payload bytes,
-// and attaches the header RVAs to the payload for writePECosmoAMD64. Runs on
+// those RVA fields of the runtime.ntidata import blob in the payload bytes.
+// And attaches the header RVAs to the payload for writePECosmoAMD64. Runs on
 // the thin amd64 path only (convertToAPE), where ctxt.loader is still alive.
 func apePrepareNTBoot(ctxt *Link, p *apePayload) {
 	ldr := ctxt.loader

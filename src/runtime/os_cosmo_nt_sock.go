@@ -612,7 +612,7 @@ func ntLoopbackTCPPair() (a, c uintptr, step string, werr uintptr) {
 }
 
 // ntEmuSocketpair emulates socketpair(2) with a connected loopback TCP pair
-// dressed as AF_UNIX. SOCK_DGRAM is EOPNOTSUPP: a datagram pair would ride
+// dressed as AF_UNIX. SOCK_DGRAM is EOPNOTSUPP. A datagram pair would ride
 // loopback UDP, which legally DROPS datagrams on real NT, and afunix.sys has
 // no DGRAM to fall back on. Another domain is EOPNOTSUPP too, Linux's own
 // errno for AF_INET here, and any other protocol is EPROTONOSUPPORT.
