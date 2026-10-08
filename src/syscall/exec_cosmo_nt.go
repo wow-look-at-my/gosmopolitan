@@ -4,12 +4,12 @@
 //go:build cosmo
 
 // NT leg of process creation. A Windows host cannot run the linux-shaped
-// forkAndExecInChild, because there is no fork, so exec_cosmo.go branches
-// here BEFORE any fork machinery and the child launches posix_spawn-style
-// through the runtime's CreateProcessW hook.
+// forkAndExecInChild. This is because there is no fork, so exec_cosmo.go
+// branches here BEFORE any fork machinery. The child launches
+// posix_spawn-style through the runtime's CreateProcessW hook.
 //
 // This file owns the Windows string algebra,.go, which never builds for
-// GOOS=cosmo: MSVCRT argument quoting, the case-insensitively sorted
+// GOOS=cosmo. MSVCRT argument quoting, the case-insensitively sorted
 // double-NUL-terminated UTF-16 environment block, and the command line. The
 // runtime hook owns everything needing Win32 state. The status pipe
 // degenerates cleanly: its handles are born non-inheritable, so the read sees
@@ -162,7 +162,7 @@ func ntEnvSorted(envv []string) []string {
 }
 
 // ntCreateEnvBlock converts an array of environment strings into the UTF-16
-// block CreateProcessW(CREATE_UNICODE_ENVIRONMENT) requires: a
+// block CreateProcessW(CREATE_UNICODE_ENVIRONMENT) requires. This covers a
 // case-insensitively sorted sequence of NUL-terminated strings, terminated by
 // an extra NUL ("two UCS-2 NULs, or four NUL bytes"). Port of upstream
 // createEnvBlock; strings containing a NUL yield EINVAL.

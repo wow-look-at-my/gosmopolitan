@@ -15,7 +15,7 @@ import (
 )
 
 // These run against the kernel's epoll on a Linux host and against this
-// package's emulation on a macOS one, so both answer to the same
+// package's emulation on a macOS one, so both answer. To the same
 // expectations.
 
 func epollPipe(t *testing.T) (r, w int) {

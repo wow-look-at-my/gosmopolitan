@@ -16,7 +16,7 @@ import (
 
 // TestStartPristineAPE starts a freshly built APE straight from the file, with
 // no wrapper and no binfmt registration: the kernel answers ENOEXEC on a posix
-// host, and the file must still run.
+// host. The file must still run.
 func TestStartPristineAPE(t *testing.T) {
 	testenv.MustHaveGoBuild(t)
 	dir := t.TempDir()

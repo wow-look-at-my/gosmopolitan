@@ -4,8 +4,9 @@
 //go:build compiler_bootstrap
 
 // The bootstrap toolchain: the compiler, linker, assembler and cgo in one
-// binary, built by the bootstrap Go and run by cmd/dist under each tool's
-// name. There is no go command of this tree yet, so it carries none.
+// binary, built by the bootstrap Go and run by cmd/dist. That cmd/dist is
+// under each tool's name. There is no go command of this tree yet, so it
+// carries none.
 package main
 
 import (

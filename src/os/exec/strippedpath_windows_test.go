@@ -29,7 +29,7 @@ import (
 // to this binary.
 //
 // The log names every DLL the image imports and the flags the loader reads,
-// because the loader reports only a number when it cannot resolve one.
+// because the loader reports only a number when it. Cannot resolve one.
 func TestStrippedPathStartsAChild(t *testing.T) {
 	maySkipHelperCommand("printpath")
 	testenv.MustHaveExec(t)
@@ -100,7 +100,7 @@ func writeCopy(t *testing.T, src, dst string) {
 
 // describeImage logs what the NT loader reads before it starts an image: the
 // DLLs the import table names, the subsystem, and DependentLoadFlags, which
-// decides which directories a dependent DLL may come from.
+// decides. Which directories a dependent DLL may come from.
 func describeImage(t *testing.T, what, path string) {
 	t.Helper()
 	info, err := os.Stat(path)

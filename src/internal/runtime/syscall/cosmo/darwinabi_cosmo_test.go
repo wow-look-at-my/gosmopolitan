@@ -160,7 +160,7 @@ func TestDarwinStructSizes(t *testing.T) {
 	}
 }
 
-// TestDarwinRusageToLinux pins the thing the conversion has to get right: the
+// TestDarwinRusageToLinux pins the thing the conversion has to get right. The
 // microseconds survive the width change, and every counter after the timevals
 // lands in the same field it started in. A memcpy would pass a size check and
 // fail this.
@@ -202,7 +202,7 @@ func TestDarwinRusageToLinux(t *testing.T) {
 
 // TestDarwinXlatIoctl pins the request numbers against the tree's own
 // tables. An ioctl request encodes direction and argument size, so
-// both systems number even the calls they share differently - and a
+// both systems number even the calls they share differently. A
 // request forwarded unchanged does not fail, it asks the kernel for
 // whatever operation happens to carry that number there.
 func TestDarwinXlatIoctl(t *testing.T) {
@@ -229,7 +229,7 @@ func TestDarwinXlatIoctl(t *testing.T) {
 
 	// The pty trio is already Apple's and comes back unchanged. Linux
 	// grants through libc and asks TIOCGPTN for a NUMBER, where Apple
-	// answers TIOCPTYGNAME with a NAME, so there is no Linux request to
+	// answers TIOCPTYGNAME with a NAME. There is no Linux request to
 	// translate from and a caller on a Darwin host passes Apple's own.
 	for _, tc := range []struct {
 		name string
@@ -415,8 +415,8 @@ func TestDarwinTermiosPreservesAppleBits(t *testing.T) {
 }
 
 // TestDarwinBaud pins the encoding both ways, and the refusal. Linux
-// names a rate with a code inside c_cflag; Apple stores the rate itself,
-// so a rate Linux has no code for cannot be reported at all.
+// names a rate with a code inside c_cflag. Apple stores the rate itself.
+// A rate Linux has no code for cannot be reported at all.
 func TestDarwinBaud(t *testing.T) {
 	for _, tc := range []struct {
 		code uint32
@@ -448,9 +448,9 @@ func TestDarwinFlock(t *testing.T) {
 		t.Errorf("offsetof(DarwinFlock.Pid) = %d, want 16", got)
 	}
 
-	// Apple agrees on none of those, so an untranslated type asks for
-	// the wrong lock - and a read lock where the caller wanted a write
-	// lock is a weaker lock rather than an error.
+	// Apple agrees on none of those. An untranslated type asks for the
+	// wrong lock - and a read lock where the caller wanted a write
+	// lock is a weaker lock. Rather than an error.
 	for _, tc := range []struct{ linux, darwin int16 }{{0, 1}, {1, 3}, {2, 2}} {
 		got, ok := cosmo.DarwinLockType(tc.linux)
 		if !ok || got != tc.darwin {
@@ -493,7 +493,7 @@ func TestLinuxFlockMatchesFlock_t(t *testing.T) {
 
 // TestRawFcntlLock takes a record lock through the bare SYS_FCNTL call with
 // a Linux-shaped record, the way a libc translated from C (modernc.org/libc,
-// under SQLite) does, rather than through syscall.FcntlFlock.
+// under SQLite) does. Rather than through syscall.FcntlFlock.
 func TestRawFcntlLock(t *testing.T) {
 	f, err := os.CreateTemp(t.TempDir(), "flock")
 	if err != nil {

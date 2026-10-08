@@ -8,7 +8,7 @@
 //
 // There is no SIGPROF on NT. The model, upstream's, is a dedicated
 // profiler M parked on a waitable timer: each tick it walks allm,
-// suspends each eligible M's thread, reads its context and calls
+// suspends each eligible M's thread, reads. Its context and calls
 // sigprof DIRECTLY - the same host-independent recording routine the
 // unix SIGPROF handler calls, reached without any signal. So the
 // setitimer asm and the ENOSYS SYS_SETITIMER dispatch stay unreachable.

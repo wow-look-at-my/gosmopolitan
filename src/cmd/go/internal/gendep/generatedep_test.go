@@ -128,7 +128,7 @@ func writeFiles(test *testing.T, dir string, files map[string]string) {
 // A host with no sandbox says nothing about the module being built, so both
 // kinds of failure have to stay apart. Reading them as one let a machine
 // without bwrap record a permanent verdict against every module it touched,
-// and installing bwrap afterwards could not clear it.
+// and installing bwrap afterwards could. Not clear it.
 func TestSandboxUnavailableSeparatesHostFromModule(test *testing.T) {
 	noSandbox := &sandboxUnavailableError{errors.New("bwrap not installed")}
 
@@ -194,7 +194,7 @@ func TestSandboxUnavailableKeepsItsMessage(test *testing.T) {
 // A generator's verdict is written once and replayed by every later build, so
 // what rides the error is all a reader ever sees. "exit status 1" on its own
 // sent a session hunting a runtime panic whose cause was printed hours before,
-// in a build nobody still had the log of.
+// in a build nobody still had. The log of.
 func TestTailWriterKeepsTheEndAndBoundsWhatItKeeps(test *testing.T) {
 	for _, row := range []struct {
 		name   string

@@ -4,7 +4,7 @@
 #
 # Go sources are NAMED, never globbed: the fork's own files only. CLAUDE.md
 # says not to rename upstream's receivers in a file this fork is not otherwise
-# rewriting, so a glob would fail on code that is not ours to change.
+# rewriting. A glob would fail on code that is not ours to change.
 tests:
 	- desc: the fork's own cmd/go additions name their variables
 	  cmd: dats/source/short-identifiers.sh src/cmd/go/internal/load/testgroup.go src/cmd/go/internal/load/testgroupalone.go src/cmd/go/internal/load/generatedep.go src/cmd/go/internal/load/generatesandbox.go

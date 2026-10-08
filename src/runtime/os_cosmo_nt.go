@@ -9,11 +9,12 @@
 // Windows/arm64 has no APE boot stub, so nothing here is reachable on
 // arm64: iswindows() can never be true there.
 //
-// A win64 function is reached through runtime·ntcall6, a host-ABI
-// trampoline invoked via asmcgocall, so the g0 stack switch and the
-// stack accounting come for free. The function-pointer table resolves
-// at osArchInit from both loader-filled IAT slots, GetProcAddress and
-// LoadLibraryA, which mirrors the darwin port's dlsym idiom.
+// A win64 function is reached through runtime·ntcall6. The win64
+// function also is reached a host-ABI trampoline invoked via
+// asmcgocall, so the g0 stack switch and the stack accounting come
+// for free. The function-pointer table resolves at osArchInit from
+// both loader-filled IAT slots, GetProcAddress and LoadLibraryA,
+// which mirrors the darwin port's dlsym idiom.
 
 package runtime
 
@@ -28,7 +29,7 @@ var ntiat [3]uintptr
 
 // Resolved win64 function pointers. Plain variables (not a struct) so
 // the assembly NT branches in sys_cosmo_amd64.s can reference them
-// directly by symbol name with no offset-rot risk, mirroring the
+// directly by symbol name with no offset-rot risk. Mirroring the
 // cosmoPthread*Fn precedent on arm64.
 var (
 	ntVirtualAllocFn           uintptr
@@ -360,8 +361,8 @@ func ntcallSEcheck() {
 
 // ntcallSE ("syscall-state, with error") is ntcallE bracketed by entersyscall
 // and exitsyscall, for a Win32 call that can block indefinitely, so sysmon
-// can retake the P while the thread parks in the kernel. Use it ONLY from
-// user-goroutine context.
+// can retake the P. This holds while the thread parks in the kernel. Use it
+// ONLY from user-goroutine context.
 //
 //go:nosplit
 func ntcallSE(fn, a1, a2, a3, a4, a5, a6, a7 uintptr) (r, lastErr uintptr) {
@@ -707,7 +708,7 @@ func ntVirtualFree(v unsafe.Pointer, n uintptr, freeType uintptr) uintptr {
 }
 
 // Command line and environment. The NT boot stub fabricates a one-entry argv
-// and an empty envp (rt0_cosmo_nt_amd64.s); the real values come from
+// and an empty envp (rt0_cosmo_nt_amd64.s). The real values come from
 // GetCommandLineW/GetEnvironmentStringsW in the goargs/goenvs NT branches
 // below. Both run inside schedinit AFTER mallocinit (proc.go: mallocinit ...
 // goargs; goenvs), so ordinary allocation is fine here.
@@ -821,8 +822,10 @@ func cosmoNTGoargs() bool {
 	return true
 }
 
-// ntGoenvs is goenvs's NT branch (os_cosmo.go): decode the double-NUL-terminated UTF-16 block from GetEnvironmentStringsW ("A=B\x00C=D\x00\x00") into envs, the same shape goenvs_unix produces; upstream os_windows.go goenvs is the model. The block is deliberately not released: FreeEnvironmentStringsW is not in the wave-1 resolve
-// set and the one-shot boot leak is harmless.
+// ntGoenvs is goenvs's NT branch (os_cosmo.go): decode the
+// double-NUL-terminated UTF-16 block from GetEnvironmentStringsW
+// ("A=B\x00C=D\x00\x00") into envs, the same shape goenvs_unix produces. This
+// also covers upstream os_windows.go goenvs is the model.
 func ntGoenvs() {
 	block := unsafe.Pointer(ntcall(ntGetEnvironmentStringsWFn, 0, 0, 0, 0, 0, 0))
 	if block == nil {

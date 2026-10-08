@@ -75,8 +75,8 @@ func darwinGetrusage(who, buf uintptr) (r1, r2, errno uintptr) {
 }
 
 // darwinGettimeofday emulates gettimeofday. The timezone argument is
-// obsolete on both systems and every caller passes nil, so a non-nil one
-// is refused rather than filled with a value Apple no longer maintains.
+// obsolete on both systems. Every caller passes nil, so a non-nil one is
+// refused rather than filled with a value Apple no longer maintains.
 //
 //go:nosplit
 func darwinGettimeofday(tv, tz uintptr) (r1, r2, errno uintptr) {

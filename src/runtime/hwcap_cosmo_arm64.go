@@ -33,9 +33,9 @@ var (
 // The auxv fixAuxv hands out.
 var darwinAuxvBuf [64]uintptr
 
-// fixAuxv makes a macOS host's AT_HWCAP safe to believe, so internal/cpu enables the arm64 AES/SHA/CRC32 assembly there. The APE loader usually passes a pair already, and it sets hwcap_CPUID - a claim that the kernel emulates the ID_AA64ISAR* registers, which Linux does and XNU does not. internal/cpu answers that claim with an MRS for the MIDR. So the loader's pair is taken over with that one bit cleared, and only a host passing no pair gets the sysctl value.
+// fixAuxv makes a macOS host's AT_HWCAP safe to believe, so internal/cpu enables the arm64 AES/SHA/CRC32 assembly there. The APE loader usually passes a pair already. It sets hwcap_CPUID - a claim that the kernel emulates the ID_AA64ISAR* registers, which Linux does and XNU does not. internal/cpu answers that claim with an MRS for the MIDR. So the loader's pair is taken over with that one bit cleared, and only a host passing no pair gets the sysctl value.
 //
-// This does not save golang.org/x/sys/cpu from its own SIGILL: it reads /proc/self/auxv, never this vector, so syscall's procauxv_cosmo.go is the half that keeps it off the MRS, over whatever this settled on.
+// This does not save golang.org/x/sys/cpu from its own SIGILL: it reads /proc/self/auxv, never this vector. Syscall's procauxv_cosmo.go is the half that keeps it off the MRS, over whatever this settled on.
 func fixAuxv() {
 	if !isdarwin() {
 		return

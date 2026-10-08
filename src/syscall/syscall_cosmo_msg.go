@@ -60,16 +60,17 @@ func darwinFixRecvSockaddr(rsa *RawSockaddrAny, namelen uint32) {
 }
 
 // darwinRecvmsgRaw is recvmsgRaw's macOS-host branch: the Linux body with the
-// boundary translations bolted on. The caller's oob buffer is handed to Apple
-// recvmsg directly (Apple's cmsg shape needs LESS space than Linux's for the
-// same payload, so a Linux-provisioned buffer always has room), then repacked
-// in place into Linux-shaped records by cosmo.CmsgToLinux, which invokes the
-// callbacks: the close-on-exec setter for each delivered rights fd when
-// MSG_CMSG_CLOEXEC was requested (Apple has no such flag - it is stripped
-// before the call and emulated here with fcntl, the same post-receive window
-// upstream GOOS=darwin's net layer has), and Close for each fd the larger
-// Linux shape cannot fit (MSG_CTRUNC raised, fds never leaked - the kernel's
-// own truncation hygiene).
+// boundary translations bolted on. Consider the caller's oob buffer. That
+// buffer is handed to Apple recvmsg directly (Apple's cmsg shape needs LESS
+// space than Linux's for the same payload, so a Linux-provisioned buffer
+// always has room), then repacked in place into Linux-shaped records by
+// cosmo.CmsgToLinux, which invokes the callbacks. Consider the close-on-exec
+// setter for each delivered rights. That setter fd when MSG_CMSG_CLOEXEC was
+// requested (Apple has no such flag. It is stripped before the call and
+// emulated here with fcntl, the same post-receive window upstream
+// GOOS=darwin's net layer has), and Close for each fd the larger Linux shape
+// cannot fit (MSG_CTRUNC raised, fds never leaked - the kernel's own
+// truncation hygiene).
 func darwinRecvmsgRaw(fd int, p, oob []byte, flags int, rsa *RawSockaddrAny) (n, oobn int, recvflags int, err error) {
 	var msg Msghdr
 	msg.Name = (*byte)(unsafe.Pointer(rsa))
@@ -120,13 +121,13 @@ func darwinRecvmsgRaw(fd int, p, oob []byte, flags int, rsa *RawSockaddrAny) (n,
 	return
 }
 
-// darwinSendmsgN is sendmsgN's macOS-host branch: the Linux body with
-// the sockaddr translated into an Apple-shaped local and the control
-// buffer repacked (never in place - the caller's oob is input and must
-// survive, e.g. for a retry loop) into an Apple-shaped allocation by
-// cosmo.CmsgToApple. SCM_RIGHTS fd payloads copy through unchanged;
-// non-SOL_SOCKET records are skipped exactly like Linux's af_unix send
-// path, so callers cannot tell both hosts apart.
+// darwinSendmsgN is sendmsgN's macOS-host branch. Consider the Linux body
+// with the sockaddr. That body translated into an Apple-shaped local and the
+// control buffer repacked (never in place - the caller's oob is input and
+// must survive, e.g. for a retry loop) into an Apple-shaped allocation by
+// cosmo.CmsgToApple. SCM_RIGHTS fd payloads copy through unchanged.
+// Non-SOL_SOCKET records are skipped exactly like Linux's af_unix send path,
+// so callers cannot tell both hosts apart.
 func darwinSendmsgN(fd int, p, oob []byte, ptr unsafe.Pointer, salen _Socklen, flags int) (n int, err error) {
 	var msg Msghdr
 	var nameBuf [SizeofSockaddrAny]byte

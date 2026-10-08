@@ -97,7 +97,7 @@ func darwinSockaddrOut(buf *[112]byte, addr, addrlen uintptr) (aptr, alen, errno
 }
 
 // darwinSockaddrIn rewrites, in place, a sockaddr Apple libc filled in
-// (accept, getsockname, getpeername, recvfrom) into the Linux shape: Apple's
+// (accept, getsockname, getpeername, recvfrom) into the Linux shape. Apple's
 // {sa_len, sa_family} bytes become the 16-bit Linux family. The rest of the
 // bytes are already in the Linux layout.
 //
@@ -278,13 +278,14 @@ func darwinRecvfrom(s, p, n, flags, from, fromlenp uintptr) (r1, r2, errno uintp
 }
 
 // darwinSendmsg emulates the Linux sendmsg syscall as a FIXED-SIZE shape
-// adapter: msghdr field widths convert, the iovec array passes through
-// because the layouts coincide, and the msg_name and msg_control POINTERS
+// adapter: msghdr field widths convert, the iovec array passes through. This
+// is because the layouts coincide, and the msg_name and msg_control POINTERS
 // pass through untouched. Their BYTES must ALREADY be Apple-shaped. Package
 // syscall's darwin branch does the sockaddr translation and cmsg repack as
-// ordinary Go before entering the window, because nothing unbounded fits the
-// nosplit budget here. SIGPIPE needs no handling: every socket this emulation
-// creates carries SO_NOSIGPIPE, so a broken-pipe send fails with EPIPE.
+// ordinary Go before entering the window. This is because nothing unbounded
+// fits the nosplit budget here. SIGPIPE needs no handling: every socket this
+// emulation creates carries SO_NOSIGPIPE, so a broken-pipe send fails with
+// EPIPE.
 //
 //go:nosplit
 func darwinSendmsg(s, msgp, flags uintptr) (r1, r2, errno uintptr) {
@@ -318,14 +319,14 @@ func darwinSendmsg(s, msgp, flags uintptr) (r1, r2, errno uintptr) {
 	return darwinCall(darwinFns.Sendmsg, s, uintptr(unsafe.Pointer(&amsg)), flags, 0, 0, 0)
 }
 
-// darwinRecvmsg emulates the Linux recvmsg syscall, the same
-// fixed-size shape adapter as darwinSendmsg: msghdr widths in, widths
-// and result-flag VALUES out. The msg_name and msg_control buffers
-// come back with Apple-shaped BYTES, and package syscall's darwin
-// branch rewrites the sockaddr family and repacks the control records
-// after the window. MSG_CMSG_CLOEXEC is refused EINVAL here like every
-// untranslatable flag: the std path strips it and emulates it above,
-// so a raw caller's request is refused visibly, never ignored.
+// darwinRecvmsg emulates the Linux recvmsg syscall, the same fixed-size shape
+// adapter as darwinSendmsg: msghdr widths in, widths and result-flag VALUES
+// out. Consider the msg_name and msg_control buffers. That msg_name come back
+// with Apple-shaped BYTES, and package syscall's darwin branch rewrites the
+// sockaddr family and repacks the control records. This happens after the
+// window. MSG_CMSG_CLOEXEC is refused EINVAL here like every untranslatable
+// flag: the std path strips it. The std path emulates it above, so a raw
+// caller's request is refused visibly, never ignored.
 //
 //go:nosplit
 func darwinRecvmsg(s, msgp, flags uintptr) (r1, r2, errno uintptr) {
@@ -368,7 +369,7 @@ func darwinRecvmsg(s, msgp, flags uintptr) (r1, r2, errno uintptr) {
 
 // darwinSockoptXlat translates a Linux (level, optname) pair to Apple's.
 // Only pairs whose option VALUE also has the same meaning on both
-// systems are listed; everything else reports ENOPROTOOPT so the gap is
+// systems are listed. Everything else reports ENOPROTOOPT so the gap is
 // visible instead of programming a different option than requested.
 //
 //go:nosplit
@@ -418,7 +419,7 @@ func darwinSockoptXlat(level, name uintptr) (alevel, aname uintptr, ok bool) {
 	case 0: // IPPROTO_IP. Apple's SOL_LOCAL shares this number.
 		// emulation never forwards a SOL_LOCAL option - peer identity
 		// arrives under the Linux SO_PEERCRED spelling at SOL_SOCKET
-		// (see darwinPeercred) - so level means IPPROTO_IP here.
+		// (see darwinPeercred) - so level means. IPPROTO_IP here.
 		switch name {
 		case 1: // IP_TOS
 			return 0, 3, true
@@ -447,7 +448,7 @@ func darwinSockoptXlat(level, name uintptr) (alevel, aname uintptr, ok bool) {
 			return 41, 10, true
 		case 19: // IPV6_MULTICAST_LOOP
 			return 41, 11, true
-		case 20: // IPV6_JOIN_GROUP (struct ipv6_mreq matches)
+		case 20:
 			return 41, 12, true
 		case 21: // IPV6_LEAVE_GROUP
 			return 41, 13, true
@@ -480,7 +481,6 @@ const (
 )
 
 // appleXucredHead is the leading several bytes of Apple's struct
-// xucred: cr_version, cr_uid, cr_ngroups.
 type appleXucredHead struct {
 	Version uint32
 	Uid     uint32

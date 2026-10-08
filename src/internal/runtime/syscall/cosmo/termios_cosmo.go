@@ -243,11 +243,11 @@ func DarwinTermiosToLinux(src *DarwinTermios, dst *LinuxTermios) bool {
 // rate for.
 //
 // dst is READ as well as written: every bit Linux cannot name (ALTWERASE,
-// NOKERNINFO, ONOEOT, OXTABS) keeps the value it already had, so a
+// NOKERNINFO, ONOEOT, OXTABS) keeps the value it already had. A
 // get-modify-set does not clear settings it never knew were there.
 //
 // The Linux-only flags (IUCLC, OLCUC, XCASE, CMSPAR, the output delays)
-// are dropped rather than failing the call: Linux leaves them to the
+// are dropped rather than failing the call. Linux leaves them to the
 // driver, and no driver in use implements any of them.
 //
 //go:nosplit
