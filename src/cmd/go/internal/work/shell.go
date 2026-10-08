@@ -638,7 +638,7 @@ func (sh *Shell) runOut(dir string, env []string, cmdargs ...any) ([]byte, error
 
 	cmd.Env = append(cmd.Env, env...)
 	start := time.Now()
-	err = cmd.Run()
+	err = runTool(cmd)
 	// Every compile, assemble, link, pack and cgo invocation the build makes
 	// arrives here, and it is the only place that knows both the command and
 	// the action it ran for. So this is where a trace gets the answer to
@@ -676,9 +676,18 @@ func (sh *Shell) runOut(dir string, env []string, cmdargs ...any) ([]byte, error
 	// shows buf.Bytes() and does not print err at all, so the
 	// prefix here does not make most output any more verbose.
 	if err != nil {
-		err = errors.New(cmdline[0] + ": " + err.Error())
+		err = errors.New(programName(cmdline) + ": " + err.Error())
 	}
 	return buf.Bytes(), err
+}
+
+// programName names the program a command line runs. A tool linked into the
+// go command runs as "<go> tool <name>", and the name is the part that tells.
+func programName(cmdline []string) string {
+	if len(cmdline) > 2 && cmdline[1] == "tool" {
+		return cmdline[0] + " tool " + cmdline[2]
+	}
+	return cmdline[0]
 }
 
 // joinUnambiguously prints the slice, quoting where necessary to make the

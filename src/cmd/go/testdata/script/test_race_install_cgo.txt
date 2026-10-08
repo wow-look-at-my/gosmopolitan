@@ -38,7 +38,8 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	filename := strings.TrimSpace(string(b))
+	// A linked cgo prints as "<go> tool cgo": the go binary is the file that holds it.
+	filename := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(string(b)), " tool cgo"))
 	info, err := os.Stat(filename)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
