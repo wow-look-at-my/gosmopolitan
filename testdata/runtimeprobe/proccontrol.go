@@ -31,10 +31,8 @@ const cpusetWords = 16
 // for the host it runs on.
 const prioProcess = 0
 
-// priorityNice is the value the priority check moves a child to. Raising a
-// nice value needs no privilege anywhere, so the check never depends on being
-// root.
-const priorityNice = 5
+// priorityNice is the value the priority check moves a child to.
+const priorityNice = 19
 
 // procControlSettle is how long a stopped child is given to finish any write
 // already in flight before its output is watched for silence.
