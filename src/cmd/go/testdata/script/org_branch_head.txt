@@ -9,8 +9,10 @@
 # with a url.<base>.insteadOf rewrite rather than a proxy. Nothing here reaches
 # the network.
 
-[short] skip 'constructs local git repositories'
 [!git] skip
+
+# Every org repository is a local file:// clone behind an insteadOf rule.
+env TESTGOVCSREMOTE=
 
 env GIT_CONFIG_GLOBAL=$WORK${/}home${/}gopher${/}.gitconfig
 env HOME=$WORK${/}home${/}gopher
