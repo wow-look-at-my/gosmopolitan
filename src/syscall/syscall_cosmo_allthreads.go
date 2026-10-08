@@ -21,8 +21,7 @@ func AllThreadsSyscall(trap, a1, a2, a3 uintptr) (r1, r2 uintptr, err Errno) {
 	return r1, r2, Errno(errno)
 }
 
-// AllThreadsSyscall6 is like [AllThreadsSyscall], but extended to
-// arguments.
+// AllThreadsSyscall6 is like [AllThreadsSyscall], but extended to arguments.
 //
 //go:uintptrescapes
 func AllThreadsSyscall6(trap, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2 uintptr, err Errno) {

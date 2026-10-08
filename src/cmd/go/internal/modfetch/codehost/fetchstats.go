@@ -162,7 +162,7 @@ func (r *gitRepo) claimFetch(ctx context.Context, hash, fallback string) {
 
 // objectBytes is the size of the git object store. Its growth over a git
 // fetch stands in for the bytes the fetch received: git keeps a received pack
-// as it came, or unpacks a small one into compressed loose objects.
+// as it came, or unpacks. A small one into compressed loose objects.
 func (r *gitRepo) objectBytes() int64 {
 	var total int64
 	filepath.WalkDir(filepath.Join(r.dir, "objects"), func(_ string, entry fs.DirEntry, err error) error {

@@ -80,9 +80,9 @@ func completingSelf(mod module.Version) bool {
 // Superseded reports whether a replacement stands in for mod. modload sets it.
 var Superseded func(mod module.Version) bool
 
-// completeDir completes the module extracted at dir: it adds the files the
+// completeDir completes the module extracted at dir. It adds the files the
 // module's own generators write, from the cache when the cache holds them and
-// by running the generators when it does not.
+// by running the generators. This happens when it does not.
 func (f *Fetcher) completeDir(ctx context.Context, mod module.Version, dir string) error {
 	// A replaced module is fetched for what its go.mod says. The build compiles
 	// the replacement instead, so nothing here reads what these generators write.

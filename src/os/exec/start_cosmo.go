@@ -17,7 +17,7 @@ const apeMagic = "MZqFpD"
 
 // startProcess starts name. On a posix host the kernel refuses a pristine APE
 // with ENOEXEC, because nothing has registered its header, and the file then
-// starts the way its own header says it does: as a script under /bin/sh,
+// starts the way. Its own header says it does: as a script under /bin/sh,
 // which reads the header and execs the staged native image.
 func startProcess(name string, argv []string, attr *os.ProcAttr) (*os.Process, error) {
 	proc, err := os.StartProcess(name, argv, attr)

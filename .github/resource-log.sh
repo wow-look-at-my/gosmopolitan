@@ -5,8 +5,8 @@ nap=
 trap 'if [ -n "$nap" ]; then kill "$nap"; fi; exit 0' TERM
 
 # readcpu sets busy, idle and total from the aggregate line of /proc/stat. The
-# guest columns are left out: the kernel already counts guest time in user, so
-# adding them again would make the shares sum to more than the interval.
+# guest columns are left out: the kernel already counts guest time in user.
+# Adding them again would make the shares sum to more than the interval.
 readcpu() {
 	read -r label cuser cnice csys cidle ciow cirq csirq csteal rest < /proc/stat
 	: "${cuser:=0}" "${cnice:=0}" "${csys:=0}" "${cidle:=0}"
