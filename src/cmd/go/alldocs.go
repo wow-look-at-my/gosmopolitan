@@ -2412,8 +2412,7 @@
 // cache alone. The go command asks the shared tier only after a local miss,
 // and it stores what the tier returns in the local cache before the build
 // uses it. A tier that cannot be reached leaves the build on the local cache
-// and says so on stderr. Set GOCACHEDEBUG to any non-empty value to also see
-// the tier's routine per-request reporting.
+// and says so on stderr, as does the tier's routine reporting.
 //
 // # Environment variables
 //
