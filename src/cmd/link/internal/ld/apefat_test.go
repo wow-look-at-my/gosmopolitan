@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package ld
 
@@ -13,13 +12,7 @@ import (
 	"testing"
 )
 
-// addTestDebugTail appends a non-loadable debug tail to elf, the way the
-// linker's real output carries .symtab/.strtab and DWARF past the loadable
-// span: a two-entry symbol table (null + a global "main.main"), a string
-// table that also holds sentinel (so tests can detect the tail's presence
-// in merged output), a section name table, and a section header table that
-// the ELF header is patched to reference. The result parses with debug/elf
-// and reports the symbol.
+// The result parses with debug/elf and reports the symbol.
 func addTestDebugTail(t *testing.T, elfImg []byte, sentinel string) []byte {
 	t.Helper()
 
@@ -98,10 +91,9 @@ func setAPEFatFlags(t *testing.T, strip, dbg bool) {
 	t.Cleanup(func() { *flagApeStrip, *flagApeDbg = oldStrip, oldDbg })
 }
 
-// mergeTestPair builds the synthetic ELF pair, stages the amd64 input as a
-// thin APE and the arm64 input as a raw ELF (covering both accepted input
-// forms), and runs apeFatMerge with the given -apestrip/-apedbg values. It
-// returns the pristine input images and the merged output path.
+// stages the amd64 input as a thin APE and the arm64 input as a raw ELF
+// (covering both accepted input
+// It returns the pristine input images and the merged output path.
 func mergeTestPair(t *testing.T, strip, dbg bool) (amdElf, armElf []byte, out string) {
 	t.Helper()
 	amdElf, armElf = buildTestELFPair(t)
@@ -165,11 +157,11 @@ func TestAPEDebugSidecarName(t *testing.T) {
 	}
 }
 
-// TestAPEFatMergeStripAndSidecars merges a thin APE (amd64) with a raw ELF
-// (arm64) under -apestrip -apedbg and verifies: the amd64 sidecar copies
-// that linker's ELF with the OS ABI cleared, the arm64 image gets no sidecar, and the
-// fat APE embeds only each payload's loadable span with the section header
-// fields zeroed - no symtab or debug bytes survive in the output.
+// TestAPEFatMergeStripAndSidecars merges a thin APE (amd64) with a raw ELF (arm64)
+// under -apestrip -apedbg and verifies. The amd64 sidecar copies that linker's ELF
+// with the OS ABI cleared, the arm64 image gets no sidecar. The fat APE embeds only
+// each payload's loadable span with the section header fields zeroed - no symtab or
+// debug bytes survive in the output.
 func TestAPEFatMergeStripAndSidecars(t *testing.T) {
 	amdElf, armElf, out := mergeTestPair(t, true, true)
 	extent := payloadExtent(amdElf)
@@ -180,7 +172,7 @@ func TestAPEFatMergeStripAndSidecars(t *testing.T) {
 		t.Fatalf("debug tail not past the loadable span: extent %#x, image %#x", extent, len(amdElf))
 	}
 
-	// Sidecars: pristine byte copies of the original linker outputs.
+	// Sidecars: pristine byte copies of the linker outputs.
 	amdSidecar, err := os.ReadFile(out + ".dbg")
 	if err != nil {
 		t.Fatalf("amd64 sidecar: %v", err)
@@ -239,10 +231,7 @@ func TestAPEFatMergeStripAndSidecars(t *testing.T) {
 	}
 }
 
-// TestAPEFatMergeDefaultUnchanged verifies that without -apestrip/-apedbg
-// the merge embeds the full payloads byte-for-byte (only p_offsets shifted)
-// and writes no sidecar files - today's behavior, which GOCOSMOSTRIP=0 and
-// user -ldflags -s/-w builds rely on.
+// And user -ldflags -s/-w builds rely on.
 func TestAPEFatMergeDefaultUnchanged(t *testing.T) {
 	amdElf, armElf, out := mergeTestPair(t, false, false)
 

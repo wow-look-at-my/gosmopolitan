@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package ld
 
@@ -20,21 +19,20 @@ import (
 
 // printfBlobTestInput returns a blob exercising every byte value plus
 // adjacency cases where an octal escape is immediately followed by an
-// octal digit, which must not be absorbed into the escape.
+// octal digit. This must not be absorbed into the escape.
 func printfBlobTestInput() []byte {
 	blob := make([]byte, 0, 256+16)
 	for i := 0; i < 256; i++ {
 		blob = append(blob, byte(i))
 	}
-	// Escaped byte followed by octal digits: '%' -> \045, then literal "7".
 	blob = append(blob, '%', '7', '\'', '0', '\\', '1', 0x00, '2', 0xff, '3')
 	return blob
 }
 
 // decodePrintfBlob decodes the body of a printf '...' format string the way
-// both POSIX printf and the APE loader's header scanner do: a backslash
-// introduces an octal escape of one to three digits, and every other byte is
-// taken literally.
+// both POSIX printf and the APE loader's header scanner do. A backslash
+// introduces an octal escape of one to digits, and every other byte is taken
+// literally.
 func decodePrintfBlob(t *testing.T, s string) []byte {
 	t.Helper()
 	var out []byte
@@ -76,8 +74,7 @@ func TestWritePrintfBlobEscaping(t *testing.T) {
 			// printf would interpret a bare % as a conversion directive.
 			t.Errorf("offset %d: bare %% in encoded blob", i)
 		case '\'':
-			// A raw quote terminates both the shell string and the APE
-			// loader's scan of the printf statement.
+			// A raw quote terminates both the shell string and the APE loader's scan of the printf statement.
 			t.Errorf("offset %d: bare single quote in encoded blob", i)
 		case '\\':
 			// Backslashes may appear only as octal escape lead-ins.
@@ -104,8 +101,7 @@ func TestApeLoaderDirsPreferRAM(t *testing.T) {
 	}
 	testenv.MustHaveExecPath(t, "sh")
 
-	// o is the APE's own path in the boot script, so the last candidate is its
-	// directory. The script sets it before it reaches this list.
+	// o is the APE's own path in the boot script, so the last candidate is its directory.
 	list := `o=/opt/app/prog.com; for d in ` + apeLoaderDirs + `; do printf '%s\n' "$d"; done`
 	got := runAndCapture(t, "sh", "-c", list)
 	if want := "/dev/shm\n/tmp\n/opt/app\n"; got != want {
@@ -183,10 +179,8 @@ const (
 	elfPFR    = 4
 )
 
-// buildTestELF assembles a minimal ELF64 amd64 executable image consisting
-// of an ELF header, the given program headers, and zero-filled bodies large
-// enough to cover every header's file range. Layout matches what the cosmo
-// linker emits: e_phoff 64, e_phentsize 56.
+// buildTestELF assembles a minimal ELF64 amd64 executable image consisting of
+// an ELF header, the given program headers.
 func buildTestELF(t *testing.T, entry uint64, phdrs []testProgHeader) []byte {
 	t.Helper()
 	return buildTestELFForMachine(t, elfMachineAMD64, entry, phdrs)
@@ -234,7 +228,7 @@ func buildTestELFForMachine(t *testing.T, machine uint16, entry uint64, phdrs []
 
 // testELFPhdrs is a program header table shaped like the cosmo linker's
 // amd64 output: an executable text load (which also covers the ELF header),
-// a read-only load, and a writable load whose p_memsz exceeds p_filesz
+// a read-only load, and a writable. Load whose p_memsz exceeds p_filesz
 // (BSS). A PT_NOTE is included to check that non-LOAD entries are skipped.
 func testELFPhdrs() []testProgHeader {
 	return []testProgHeader{
@@ -248,7 +242,7 @@ func testELFPhdrs() []testProgHeader {
 const testELFEntry = 0x100001200
 
 // buildTestNTELF returns a synthetic amd64 payload with the NT import
-// blob (runtime.ntidata) and IAT (runtime.ntiat) placed in its RW load
+// blob (runtime.ntidata). IAT (runtime.ntiat) placed in its RW load
 // exactly as apePrepareNTBoot would leave them after patching, plus the
 // matching apePEInfo. The blob sits at payload offset (== RVA) 0x4100,
 // the IAT at 0x4180, both file-backed within the RW load's p_filesz.
@@ -258,9 +252,9 @@ func buildTestNTELF(t *testing.T) ([]byte, *apePEInfo) {
 
 	const idataRVA, iatRVA = 0x4100, 0x4180
 	blob := elf[idataRVA : idataRVA+ntidataSize]
-	binary.LittleEndian.PutUint32(blob[0x00:], idataRVA+ntidataILT)     // IDT[0].OriginalFirstThunk
-	binary.LittleEndian.PutUint32(blob[0x0C:], idataRVA+ntidataDLLName) // IDT[0].Name
-	binary.LittleEndian.PutUint32(blob[0x10:], iatRVA)                  // IDT[0].FirstThunk
+	binary.LittleEndian.PutUint32(blob[0x00:], idataRVA+ntidataILT)
+	binary.LittleEndian.PutUint32(blob[0x0C:], idataRVA+ntidataDLLName)
+	binary.LittleEndian.PutUint32(blob[0x10:], iatRVA)
 	binary.LittleEndian.PutUint64(blob[ntidataILT:], idataRVA+ntidataHintGetProc)
 	binary.LittleEndian.PutUint64(blob[ntidataILT+8:], idataRVA+ntidataHintLoadLib)
 	copy(blob[ntidataHintGetProc+2:], "GetProcAddress\x00")
@@ -277,8 +271,8 @@ func buildTestNTELF(t *testing.T) ([]byte, *apePEInfo) {
 	}
 }
 
-// checkCosmoPEInvariants parses an APE with debug/pe and asserts the
-// real amd64 header shape for the buildTestNTELF payload: sections
+// checkCosmoPEInvariants parses an APE with debug/pe. It asserts the
+// real amd64 header shape for the buildTestNTELF payload. Sections
 // mirroring the PT_LOADs (with the ELF-header page skipped and BSS as
 // VirtualSize > SizeOfRawData), the entry inside .text, the fixed
 // optional-header parameters, and the kernel32 import set.
@@ -337,10 +331,8 @@ func checkCosmoPEInvariants(t *testing.T, bin []byte) {
 			idd.VirtualAddress, idd.Size, peCosmoImportsSize)
 	}
 
-	// Sections against testELFPhdrs: text load {off 0, filesz 0x2345}
-	// minus its header page, R load {0x3000, 0x1000}, RW load {0x4000,
-	// filesz 0x800, memsz 0x2800}. Raw pointers are absolute (payload at
-	// apeHeaderSize); .data's raw size is filesz rounded to FileAlignment.
+	// Raw pointers are absolute (payload at apeHeaderSize); .data's raw
+	// size is filesz rounded to FileAlignment.
 	want := []struct {
 		name                 string
 		rva, vsz, raw, rawsz uint32
@@ -405,10 +397,10 @@ func TestPECosmoHeaderStructure(t *testing.T) {
 	checkCosmoPEInvariants(t, bin)
 }
 
-// TestAPEFatPETransplant runs the full fat chain: a thin APE with the
+// TestAPEFatPETransplant runs the full fat chain. A thin APE with the
 // real PE header is re-ingested by payloadFromAPEOrELF (capturing its
-// head), merged with an arm64 payload, and the fat output must carry
-// the thin header region byte for byte - valid as-is, since the amd64
+// head), merged with an arm64 payload, and the fat output must carry.
+// The thin header region byte for byte - valid as-is, since the amd64
 // image lands at the same file offset with identical bytes.
 func TestAPEFatPETransplant(t *testing.T) {
 	elf, info := buildTestNTELF(t)

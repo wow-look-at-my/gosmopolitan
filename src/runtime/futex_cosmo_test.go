@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo
 
@@ -15,11 +14,11 @@ import (
 // darwin futex wait (os_cosmo.go). XNU has no futex, so the wait is a
 // poll of the word with a backoff, and this decides each sleep.
 //
-// Two properties matter, and neither can be observed from a Linux host
-// by running the poll loop. A sleep must never run past the caller's
+// Properties matter, and neither can be observed from a Linux host by
+// running the poll loop. A sleep must never run past the caller's
 // deadline, or a timed lock2 overshoots its timeout. And a remaining
 // time under one microsecond must not round down to a zero-length
-// sleep, which would turn the wait into a spin on the CPU.
+// sleep. This would turn the wait into a spin on the CPU.
 func TestCosmoDarwinFutexDelay(t *testing.T) {
 	for _, c := range []struct {
 		name    string
@@ -53,11 +52,8 @@ func TestCosmoDarwinFutexDelay(t *testing.T) {
 			if got == 0 {
 				t.Error("usec = 0: a zero-length sleep spins the CPU")
 			}
-			// The two properties collide below a microsecond: the floor
-			// that stops a zero-length sleep is itself an overshoot.
-			// One microsecond is the whole error, and it buys a wait
-			// that sleeps instead of spinning, so the bound allows the
-			// floor and nothing beyond it.
+			// Both properties collide below a microsecond: the floor that stops a
+			// zero-length sleep is itself an overshoot.
 			if c.timed && int64(got)*1000 > c.left && got != 1 {
 				t.Errorf("usec = %d overshoots the %dns left", got, c.left)
 			}

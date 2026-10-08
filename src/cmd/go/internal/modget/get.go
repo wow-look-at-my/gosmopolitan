@@ -153,13 +153,9 @@ authenticated environments and are not as well scrutinized as attack surfaces.
 The version control command restrictions only apply when using direct version
 control access to download code. When downloading modules from a proxy,
 the go command uses the proxy protocol instead, which is always permitted.
-By default, the go command uses the Go module mirror (proxy.golang.org)
-for public packages and only falls back to version control for private
-packages or when the mirror refuses to serve a public package (typically for
-legal reasons). Therefore, clients can still access public code served from
-Bazaar, Fossil, or Subversion repositories by default, because those downloads
-use the Go module mirror, which takes on the security risk of running the
-version control commands using a custom sandbox.
+This toolchain never uses the Go module mirror (proxy.golang.org). Every
+module comes from its origin, so the default GOVCS refuses public code served
+from Bazaar, Fossil, or Subversion repositories. Set GOVCS to allow them.
 
 The GOVCS variable can be used to change the allowed version control systems
 for specific packages (identified by a module or import path).

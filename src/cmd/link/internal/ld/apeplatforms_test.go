@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package ld
 
@@ -35,8 +34,7 @@ func assembleTest(t *testing.T, spec string, wantAMD, wantARM bool) []byte {
 
 	var inputs []string
 	if wantAMD {
-		// The NT-shaped payload, so the thin APE carries the real PE
-		// header windows/amd64 needs the assembly step to transplant.
+		// The NT-shaped payload, so the thin APE carries the real PE header windows/amd64 needs the assembly step.
 		amdElf, peInfo := buildTestNTELF(t)
 		p, err := payloadFromELF(amdElf)
 		if err != nil {
@@ -72,8 +70,7 @@ func assembleTest(t *testing.T, spec string, wantAMD, wantARM bool) []byte {
 }
 
 // bootHeaderMachines decodes every printf boot header in the 8192-byte
-// scan window and returns its ELF machine type, the way the cosmo `ape`
-// loader's own scan does.
+// the cosmo `ape` loader's own scan does.
 func bootHeaderMachines(t *testing.T, bin []byte) []uint16 {
 	t.Helper()
 	head := bin
@@ -135,9 +132,8 @@ func contains(s []uint16, v uint16) bool {
 }
 
 // catchExitf runs fn with the linker's -h behavior, where Exitf panics
-// instead of ending the process, and returns what it printed. Error paths
-// are the point of a selection flag, so they need to be testable in
-// process.
+// instead of ending the process, and returns what it printed. Error paths are
+// the point of a selection flag, so they need to be testable in process.
 func catchExitf(t *testing.T, fn func()) string {
 	t.Helper()
 	r, w, err := os.Pipe()
@@ -171,7 +167,7 @@ func catchExitf(t *testing.T, fn func()) string {
 // TestAPEPlatformsHeaderPieces checks that each selection emits exactly the
 // boot mechanisms its platforms need and nothing else. The absences are the
 // contract: a piece kept for a deselected platform is a claim the binary no
-// longer honors, and a piece dropped for a selected one is a host that dies
+// longer honors. A piece dropped for a selected one is a host that dies
 // with no diagnosable symptom.
 func TestAPEPlatformsHeaderPieces(t *testing.T) {
 	tests := []struct {
@@ -183,8 +179,7 @@ func TestAPEPlatformsHeaderPieces(t *testing.T) {
 		wantUnsupportedHostGuardMsg bool
 	}{
 		{
-			// Every platform there is. An x86-64 mac is still turned
-			// away, because Intel macs are out of support.
+			// Every platform there is.
 			spec: "linux/amd64,linux/arm64,darwin/arm64,windows/amd64",
 			amd:  true, arm: true,
 			wantLoader:  true,
@@ -216,8 +211,7 @@ func TestAPEPlatformsHeaderPieces(t *testing.T) {
 			wantUnsupportedHostGuardMsg: true,
 		},
 		{
-			// macOS Apple Silicon only: the arm64 boot header stays,
-			// unreachable as shell but decodable by the APE loader.
+			// macOS Apple Silicon only: the arm64 boot header stays, unreachable as shell but decodable by the APE loader.
 			spec:                        "darwin/arm64",
 			arm:                         true,
 			wantLoader:                  true,
@@ -274,7 +268,7 @@ func TestAPEPlatformsHeaderPieces(t *testing.T) {
 // TestAPEPEImageWithinFile checks that every PE section's raw data is
 // inside the file, for a fat APE and for an amd64-only one. The NT loader
 // refuses the whole image over a section that runs past EOF, and a stripped
-// amd64 payload with nothing after it ends exactly at its loadable span -
+// amd64 payload with nothing after it ends exactly. At its loadable span -
 // short of the .data raw size the PE header rounds up to FileAlignment.
 func TestAPEPEImageWithinFile(t *testing.T) {
 	for _, tt := range []struct {
@@ -307,7 +301,7 @@ func TestAPEPEImageWithinFile(t *testing.T) {
 
 // TestAPEPlatformsDefaultUnchanged checks that an unset -apeplatforms
 // assembles byte-identically to naming every platform: the selection is an
-// opt-in restriction, never a change to what a plain build produces.
+// opt-in restriction, never a change to what. A plain build produces.
 func TestAPEPlatformsDefaultUnchanged(t *testing.T) {
 	unset := assembleTest(t, "", true, true)
 	explicit := assembleTest(t, cosmoape.Default().String(), true, true)
@@ -317,16 +311,14 @@ func TestAPEPlatformsDefaultUnchanged(t *testing.T) {
 }
 
 // TestAPEPlatformsDerivedFromPayloads checks the no-flag behavior for a
-// single input: the header claims only the platforms that input can serve,
+// single input. The header claims only the platforms that input can serve,
 // which is what a GOCOSMOFAT=0 build produced before the flag existed.
 func TestAPEPlatformsDerivedFromPayloads(t *testing.T) {
 	amdOnly := assembleTest(t, "", true, false)
 	if boots := bootHeaderMachines(t, amdOnly); contains(boots, elfMachineARM64) {
 		t.Error("amd64-only input produced an arm64 boot header")
 	}
-	// The only darwin platform is darwin/arm64, which this input cannot
-	// serve, so an amd64-only build claims linux/amd64 and windows/amd64
-	// and carries no darwin loader at all.
+	// The only darwin platform is darwin/arm64, which this input cannot serve.
 	if amdOnly[apeLdDarwinARM64Offset] == 0x1f && amdOnly[apeLdDarwinARM64Offset+1] == 0x8b {
 		t.Error("amd64-only input embedded the darwin loader")
 	}

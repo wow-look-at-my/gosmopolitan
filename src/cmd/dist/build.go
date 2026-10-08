@@ -1384,6 +1384,18 @@ func reportStep(kind, name string, elapsed time.Duration) {
 	fmt.Printf("dist %s %.3fs %s\n", kind, elapsed.Seconds(), name)
 }
 
+// reportTestStep is reportStep for a test command, with the CPU time it and
+// every process it waited for used. Under load the wall time is mostly a wait
+// for a core. The CPU time is what the step itself cost.
+func reportTestStep(name string, elapsed time.Duration, state *os.ProcessState) {
+	if state == nil {
+		fmt.Printf("dist test %.3fs cpu unknown (the command did not start) %s\n", elapsed.Seconds(), name)
+		return
+	}
+	cpu := state.UserTime() + state.SystemTime()
+	fmt.Printf("dist test %.3fs cpu %.3fs %s\n", elapsed.Seconds(), cpu.Seconds(), name)
+}
+
 // startPhase names the phase of the build now running and reports what the
 // phase before it cost. One phase runs until the next begins.
 func startPhase(name string) {
@@ -1432,20 +1444,24 @@ func toolenv() []string {
 }
 
 var (
-	// The toolchain is one binary: the go command links the compiler, linker,
-	// assembler, cgo, cover, vet, fix and preprofile, and bin/go is where it
-	// installs. linkedTools names the pkg/tool entries that point at it.
+	// The toolchain is one binary: the go command links every tool, and
+	// bin/go is where it installs. linkedTools names the pkg/tool entries
+	// that point at it. No tool is built after make.bash.
 	toolchain = []string{"cmd/go/main"}
 
 	// Keep in sync with binExes in cmd/distpack/pack.go.
 	binExesIncludedInDistpack = []string{"cmd/go/main", "cmd/gofmt"}
 
-	// Keep in sync with the filter in cmd/distpack/pack.go.
-	linkedTools = []string{"asm", "cgo", "compile", "covdata", "cover", "embedstd", "fix", "link", "preprofile", "vet"}
+	// Keep in sync with the filter in cmd/distpack/pack.go and the table in
+	// cmd/go/internal/selftool/tools.go.
+	linkedTools = []string{"addr2line", "asm", "buildid", "cgo", "compile", "covdata", "cover", "embedstd", "fix", "link", "nm", "objdump", "pack", "pprof", "preprofile", "test2json", "trace", "vet"}
 
-	// Only the binaries distpack ships are installed. The tools are packages
-	// of bin/go now, so there is nothing more to install for them.
-	toolsToInstall = binExesIncludedInDistpack
+	// The binaries distpack ships are installed, and dist and distpack
+	// beside the linked tools: run.bash, the stamp and the archive step run
+	// them from the source tree, and distpack leaves both out of the
+	// archive. The other tools are packages of bin/go, so there is nothing
+	// more to install for them.
+	toolsToInstall = append(binExesIncludedInDistpack, "cmd/dist", "cmd/distpack")
 )
 
 // linkTools points every pkg/tool/<host>/<name> that bin/go links at bin/go,
@@ -1563,6 +1579,10 @@ func cmdbootstrap() {
 	}
 
 	setup()
+
+	// cmd/link embeds the loaders, and toolchain1 builds cmd/link.
+	startPhase("apeld")
+	buildApeLoaders()
 
 	startPhase("toolchain1")
 	checkCC()

@@ -1,15 +1,10 @@
 #!/usr/bin/env bash
-# embedded-std.sh -- the embedded standard library end to end: go tool
-# embedstd writes the blob, a cosmo go command links it in, and with no
-# GOROOT that command lists std from its manifest, takes a GOROOT naming
-# itself through a link or a copy, builds a program byte for byte as the
-# source tree does, links it the same way twice, vets and tests it, and
-# refuses to test std. Run from the repository root with the toolchain
-# built.
+# embedded-std.sh -- the embedded standard library end to end: go tool embedstd writes the blob.
 set -euo pipefail
 
 root=$PWD
-export PATH="$root/bin:$root/misc/cosmo:$PATH"
+# cosmocc first: embedstd builds std with cgo on, and the source tree's own listing and builds must see the same compiler.
+export PATH="$root/bin:$root/misc/cosmo:/opt/cosmocc/bin:$PATH"
 work=$(mktemp -d)
 mkdir -p "$work/hello" "$work/embedded" "$work/source" "$work/again"
 cat >"$work/hello/go.mod" <<'EOF'
@@ -99,6 +94,15 @@ echo "== vet, test and tidy run through it"
 embedded vet .
 embedded test .
 embedded mod tidy
+
+echo "== a cgo program builds through it, byte for byte the source tree's build, and runs"
+cp -r testdata/cgoprobe "$work/cgoprobe"
+(cd "$work/cgoprobe" && env -u GOROOT GOCACHE="$work/cache" /bin/sh "$work/go.com" build -trimpath -ldflags=-buildid= -o "$work/embedded/cgoprobe.com" .)
+(cd "$work/cgoprobe" && GOOS=cosmo go build -trimpath -ldflags=-buildid= -o "$work/source/cgoprobe.com" .)
+cmp "$work/embedded/cgoprobe.com" "$work/source/cgoprobe.com"
+/bin/sh "$work/embedded/cgoprobe.com" >"$work/cgoprobe.out"
+grep -q "ok callback" "$work/cgoprobe.out"
+(cd "$work/cgoprobe" && env -u GOROOT GOCACHE="$work/cache" /bin/sh "$work/go.com" vet .)
 
 echo "== a listing hands an outside reader a standard package's export data as a file"
 export_file=$(embedded list -export -f '{{.Export}}' fmt)

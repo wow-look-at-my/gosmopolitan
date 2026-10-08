@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package trace
 
@@ -14,23 +13,6 @@ import (
 
 // What this file adds to the tracer, and why each piece is needed to answer
 // "what was this build doing".
-//
-// A begin/end pair carries a name and nothing else, so a slice reading
-// "Executing action (build)" names neither the package nor the module it
-// built. Every span therefore takes args, and the build fills them in.
-//
-// A cache probe is measured in microseconds and there are tens of thousands
-// of them. A begin/end pair costs two events and has to nest, which a probe
-// issued from inside another span does not. Event records one complete
-// slice instead, with its own start and duration.
-//
-// A lane is a number the viewer sorts by, so a trace of a parallel build is
-// a wall of anonymous rows. NameLane gives each one the name of the worker
-// that owns it.
-//
-// A Lane is the handle for code that has no context to pass. The cache is
-// the case that forces it: its interface takes no context, and threading one
-// through 91 call sites to record a probe is not a trade worth making.
 
 const (
 	phaseComplete = "X"
@@ -49,8 +31,6 @@ func Enabled(ctx context.Context) bool {
 }
 
 // A Lane is one row in the viewer: the thread a context's events land on.
-// The zero Lane is inert, so a caller holds one whether or not tracing is on
-// and never tests for it again.
 type Lane struct {
 	t   *tracer
 	tid uint64
@@ -159,7 +139,7 @@ func StartSpanArgs(ctx context.Context, name string, args map[string]any) (conte
 	return ctx, span
 }
 
-// StartNamedGoroutine puts the context on a fresh lane and labels it, so the
+// StartNamedGoroutine puts the context on a fresh lane and labels it. The
 // row reads as the worker that owns it rather than as a number.
 func StartNamedGoroutine(ctx context.Context, name string, sortIndex int) context.Context {
 	ctx = StartGoroutine(ctx)
@@ -174,7 +154,7 @@ func NameProcess(ctx context.Context, name string) {
 
 // NameProcessID labels one process group in the trace. A trace holds more
 // than one when a build runs a second go command -- the cosmo
-// sibling-architecture build -- and its events are folded in here.
+// sibling-architecture build. Its events are folded in here.
 func NameProcessID(ctx context.Context, pid uint64, name string) {
 	tc, ok := getTraceContext(ctx)
 	if !ok {
@@ -188,16 +168,7 @@ func NameProcessID(ctx context.Context, pid uint64, name string) {
 	})
 }
 
-// Import folds a trace another process wrote into this one, under pid.
-//
-// Two go commands cannot write one trace file: each truncates it at start
-// and their writes interleave into a document neither can parse. So a child
-// build writes its own, and the parent merges it here once the child has
-// exited. Chrome's format separates processes by pid, so the child's rows
-// arrive as their own group rather than on top of the parent's.
-//
-// A trace that cannot be read is not worth failing a build over, so a
-// malformed or missing file is reported and the rest of the trace stands.
+// Import folds a trace another process wrote into this, under pid.
 func Import(ctx context.Context, r io.Reader, pid uint64, name string) error {
 	tc, ok := getTraceContext(ctx)
 	if !ok {

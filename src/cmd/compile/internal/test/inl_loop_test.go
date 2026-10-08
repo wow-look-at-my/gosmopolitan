@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package test
 
@@ -12,7 +11,7 @@ import (
 	"testing"
 )
 
-// loopInlineSrc exercises the three parts of loop-aware inlining (see
+// loopInlineSrc exercises the parts of loop-aware inlining (see
 // cmd/compile/internal/inline/loop.go). Every function in it is far too
 // expensive for the flat 80-node inlining budget; what differs is where
 // the cost sits.
@@ -188,9 +187,6 @@ func TestLoopInlining(t *testing.T) {
 	}
 }
 
-// TestLoopInliningDiscount covers the callee-side cost discount, which is
-// implemented and tested but off by default: measured on its own it cost
-// +1.1% median across nine whole-task workloads (see loop.go).
 func TestLoopInliningDiscount(t *testing.T) {
 	testenv.MustHaveGoRun(t)
 	t.Parallel()
@@ -206,9 +202,9 @@ func TestLoopInliningDiscount(t *testing.T) {
 	}
 }
 
-// TestLoopInliningDisabled checks that -d=loopinline=0 restores the
-// previous inlining decisions exactly, so the mechanism can be turned off
-// to bisect a regression.
+// TestLoopInliningDisabled checks that -d=loopinline=0 restores the inlining
+// decisions exactly, so the mechanism can be turned off to bisect a
+// regression.
 func TestLoopInliningDisabled(t *testing.T) {
 	testenv.MustHaveGoRun(t)
 	t.Parallel()

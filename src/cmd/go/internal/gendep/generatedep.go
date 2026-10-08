@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package gendep
 
@@ -24,13 +23,13 @@ import (
 
 // A module zip carries no generated file, and a submodule's contents are not
 // in it either. So a dependency that generates part of its own API ships a
-// package the compiler reads as empty, and every consumer fails on a symbol
-// that the package's source never declares.
+// package the compiler reads as empty. Every consumer fails on a symbol that
+// the package's source never declares.
 //
 // Complete, in complete.go, runs a module's directives over the whole module
 // when the module is fetched. Dir is the loader's path for a package that
 // reaches it without its module completed: that one package is generated in a
-// sandbox, and the compiler reads the tree the generator left.
+// sandbox. The compiler reads the tree the generator left.
 
 // Dir answers the directory to read a package from: the copy carrying its
 // generated files, or dir unchanged.
@@ -45,23 +44,17 @@ func Dir(dir, modroot string) string {
 		return dir
 	}
 	// A generated tree lives under GOMODCACHE, so the build loads its packages
-	// through here as well. They carry the directives the generator ran, and
-	// generating them again nests one tree inside the last until the path is
-	// too long for the host.
+	// through here as well.
 	if str.HasFilePathPrefix(dir, generateRoot()) {
 		return dir
 	}
 	// The fetch completes a module where it stands, and Dir is for a package
-	// that reaches the loader without that having happened. A completed module
-	// already carries what its directives wrote, so generating a copy of it
-	// would run those directives a second time.
+	// that reaches the loader without that having happened.
 	if completed(modroot) {
 		return dir
 	}
 	// A directive is a command the dependency's author wrote, and running it
-	// here reads it to nobody first. The org's own modules are this fleet's,
-	// and every other module asks with the OptIn line in its own go.mod. The
-	// fetch path applies the same gate, so both answer one module the same way.
+	// here reads it to nobody first.
 	if !Allowed(modroot, modPath(modroot)) {
 		return dir
 	}
@@ -74,18 +67,12 @@ func Dir(dir, modroot string) string {
 	}
 	out, err := generateModule(modroot, rel)
 	if err != nil {
-		// A host that cannot confine a generator cannot generate anything, for
-		// any module. Building past that hands every consumer a package whose
-		// generated half is missing, and one of those panics when something
-		// finally asks it for what it never generated.
+		// A host that cannot confine a generator cannot generate anything, for any
+		// module.
 		if sandboxUnavailable(err) {
 			base.Fatalf("go: generating %s: %v", dir, err)
 		}
-		// A directive can be unrunnable rather than broken. A module zip drops
-		// every path the go command ignores, `_codegen` among them, so a
-		// generator kept beside the package it writes is absent from what a
-		// consumer fetches. testify ships one, and ships its generated files
-		// too, so the build needs nothing from it.
+		// A directive can be unrunnable rather than broken.
 		fmt.Fprintf(os.Stderr, "go: generating %s: %v\n", dir, err)
 		fmt.Fprintf(os.Stderr, "go: %s builds from the tree the module zip carried\n", dir)
 		return dir
@@ -95,10 +82,6 @@ func Dir(dir, modroot string) string {
 
 // generateDeps reports whether a dependency may generate. The environment
 // turns it off for a build that must read exactly what it fetched.
-//
-// A bootstrap cmd/go links the BOOTSTRAP toolchain's internal/cfg, which knows
-// nothing of this variable and panics on the name. So ask whether the name is
-// known before reading it that way.
 func generateDeps() bool {
 	return os.Getenv("GOGENERATEDEPS") != "off"
 }
@@ -140,29 +123,17 @@ func fileHasDirective(file string) bool {
 }
 
 // generateModule answers the directory of package pkgrel in its module's
-// generated tree, generating that package into the tree when it is not there
-// yet.
-//
-// The tree lives in the module cache, beside the module it comes from, so it is
-// cached and shared exactly like every other fetched thing. It is a sibling of
-// the extracted module rather than the extracted module itself: go.sum pins the
-// bytes the proxy served, `go mod verify` hashes that tree against it, and a
-// generated file inside it would report every module as modified.
-//
-// A module has one tree, and each package the build loads from it is generated
-// into it on its own. A build that imports three packages of a module needs all
-// three generated, whichever of them it happened to load first.
-// generateRoot answers the directory every generated tree sits under.
+// generated tree.
 func generateRoot() string {
 	return filepath.Join(cfg.GOMODCACHE, "cache", "generate")
 }
 
-// completed reports whether the fetch already completed the module at modroot.
-// modfetch records a checksum for the completed directory beside the module's
-// own downloads, and that file is the one answer both paths read.
+// completed reports whether the fetch already completed the module at
+// modroot. modfetch records a checksum for the completed directory beside the
+// module's own downloads, and that file is the answer both paths read.
 //
-// The name under the module cache is the escaped path the fetch wrote, so this
-// reads it as it stands rather than escaping one of its own.
+// The name under the module cache is the escaped path the fetch wrote.
+// This reads it as it stands rather than escaping one of its own.
 func completed(modroot string) bool {
 	rel, err := filepath.Rel(cfg.GOMODCACHE, modroot)
 	if err != nil {
@@ -178,7 +149,7 @@ func completed(modroot string) bool {
 }
 
 // modPath answers the module path of the extracted module at modroot. It
-// answers "" for a directory the module cache does not name that way, and
+// answers "" for a directory the module cache does not name that way.
 // Allowed then reads the go.mod alone, which grants nothing on its own.
 func modPath(modroot string) string {
 	rel, err := filepath.Rel(cfg.GOMODCACHE, modroot)
@@ -206,34 +177,26 @@ func generateModule(modroot, pkgrel string) (string, error) {
 		return "", err
 	}
 
-	// One build generates, and every other waits for it rather than writing
-	// the same tree underneath it.
+	// One build generates, and every other waits for it rather than writing the same tree underneath it.
 	unlock, err := lockedfile.MutexAt(root + ".lock").Lock()
 	if err != nil {
 		return "", err
 	}
 	defer unlock()
 
-	// A package directory never contains '@', so no marker can collide with
-	// the directory of a package nested below the one it describes.
+	// A package directory never contains '@'.
 	marks := filepath.Join(root+".packages", pkgrel)
 	done := filepath.Join(marks, "@generated")
 	if _, err := os.Stat(done); err == nil {
 		return filepath.Join(root, pkgrel), nil
 	}
-	// A module version is fixed bytes, so a directive that cannot run against it
-	// cannot run against it tomorrow either. Recording that answer keeps every
-	// later build from copying the tree and failing the same way. It is recorded
-	// against the package whose directive failed, so a sibling that generates
-	// cleanly is still generated.
+	// A module version is fixed bytes, so a directive that cannot run against it cannot run against it tomorrow either.
 	failed := filepath.Join(marks, "@failed")
 	if why, err := os.ReadFile(failed); err == nil {
 		return "", fmt.Errorf("%s", strings.TrimSpace(string(why)))
 	}
 
-	// The generator runs in a fresh copy of the fetched module, never in the
-	// tree other builds are compiling from. What it wrote reaches that tree
-	// only once it has succeeded.
+	// The generator runs in a fresh copy of the fetched module, never in the tree other builds are compiling from.
 	stage := root + ".stage"
 	if err := removeAll(stage); err != nil {
 		return "", err
@@ -248,12 +211,9 @@ func generateModule(modroot, pkgrel string) (string, error) {
 		return "", err
 	}
 	if err := runGenerate(stage, pkgrel); err != nil {
-		// A half-generated package is worse than none: it compiles against
-		// files the generator had not finished writing.
+		// A half-generated package is worse than none: it compiles against files the generator had not finished writing.
 		removeAll(stage)
-		// Only a verdict about the module's own bytes may be recorded. A host
-		// that lacks the sandbox says nothing about this module, and writing
-		// that down makes installing the sandbox change nothing.
+		// Only a verdict about the module's own bytes may be recorded.
 		if !sandboxUnavailable(err) {
 			if os.MkdirAll(marks, 0o777) == nil {
 				os.WriteFile(failed, []byte(err.Error()), 0o666)
@@ -261,7 +221,7 @@ func generateModule(modroot, pkgrel string) (string, error) {
 		}
 		return "", err
 	}
-	// The tree carries what the module and its generators wrote, so the go.mod
+	// The tree carries what the module. Its generators wrote, so the go.mod
 	// written to make the stage a main module does not reach it.
 	if synthesized {
 		if err := os.Remove(filepath.Join(stage, "go.mod")); err != nil {
@@ -285,7 +245,7 @@ func generateModule(modroot, pkgrel string) (string, error) {
 // publishGenerated moves what a generator did in stage into root, the tree
 // builds read. The first package of a module becomes root whole. A later one
 // brings only the files its generator wrote, changed or removed relative to
-// the fetched module in modroot, so the packages already generated into root
+// the fetched module in modroot. The packages already generated into root
 // keep what they have.
 func publishGenerated(modroot, stage, root string) error {
 	_, err := os.Stat(root)
@@ -305,8 +265,7 @@ func publishGenerated(modroot, stage, root string) error {
 		return err
 	}
 	makeTreeWritable(root)
-	// root goes back to read-only whatever happens below: a tree left writable
-	// is one any later build can scribble on.
+	// root goes back to read-only whatever happens below: a tree left writable is one any later build can scribble on.
 	defer sealTree(root)
 	for _, rel := range wrote {
 		if err := placeFile(filepath.Join(stage, rel), filepath.Join(root, rel)); err != nil {
@@ -412,8 +371,8 @@ func sameContent(path, base string) (bool, error) {
 	}
 }
 
-// placeFile copies src over dst by renaming a finished copy into place, so a
-// build reading dst sees either the old file or the new one and never a part.
+// placeFile copies src over dst by renaming a finished copy into place. A
+// build reading dst sees either the file or the new one and never a part.
 func placeFile(src, dst string) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o777); err != nil {
 		return err

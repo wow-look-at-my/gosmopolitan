@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build !windows
 
@@ -12,8 +11,8 @@ import (
 )
 
 // A host that keeps its resolvers out of reach of open() answers here
-// instead, and the answer reaches the dialer, so it has to arrive in
-// the same shape resolv.conf's own nameserver lines produce.
+// instead, and the answer reaches the dialer. It has to arrive in the
+// same shape resolv.conf's own nameserver lines produce.
 func TestNameserversFromHost(t *testing.T) {
 	for _, tt := range []struct {
 		name string
@@ -54,10 +53,9 @@ func TestNameserversFromHost(t *testing.T) {
 	}
 }
 
-// An empty answer must leave dnsReadConfig on defaultNS by identity,
-// because isDefaultNS compares the backing array: a copy carrying the
-// same strings would report false and change what the resolver does
-// with it.
+// An empty answer must leave dnsReadConfig on defaultNS by identity, because
+// isDefaultNS compares the backing array. A copy carrying the same strings
+// would report false and change what the resolver does with it.
 func TestUnreadableConfServersKeepsDefaultIdentity(t *testing.T) {
 	if len(hostNameservers()) != 0 {
 		t.Skip("this host publishes nameservers out of band")

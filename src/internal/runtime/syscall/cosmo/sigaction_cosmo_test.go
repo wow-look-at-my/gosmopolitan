@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo
 
@@ -44,10 +43,8 @@ func TestSigactionFlagXlat(t *testing.T) {
 			t.Errorf("%s: SigFlagsA2L(%#x) = %#x, want %#x", tc.name, tc.apple, got, tc.linux)
 		}
 	}
-	// A Linux bit with no Apple counterpart is dropped rather than
-	// passed through, where it would name whatever Apple uses that
-	// position for. SA_RESTORER (0x4000000) is the one a raw caller
-	// most plausibly sets.
+	// A Linux bit with no Apple counterpart is dropped rather than passed
+	// through, where it would name whatever Apple uses that position for.
 	for _, fl := range []uint64{0x4000000, 0x1, 0x2, 0x40000000} {
 		if got := cosmo.SigFlagsL2A(fl); got != 0 {
 			t.Errorf("SigFlagsL2A(%#x) = %#x, want 0", fl, got)
@@ -90,15 +87,13 @@ func TestSigactionMaskXlat(t *testing.T) {
 			t.Errorf("SigmaskL2A(bit %d) = %#x, want 0", n, got)
 		}
 	}
-	// Apple SIGEMT (7) and SIGINFO (29) have no Linux number.
 	for _, n := range []uint{7, 29} {
 		if got := cosmo.SigmaskA2L(uint32(bit(n))); got != 0 {
 			t.Errorf("SigmaskA2L(bit %d) = %#x, want 0", n, got)
 		}
 	}
 
-	// A full mask survives the round trip minus exactly the two signals
-	// Apple does not have.
+	// A full mask survives the round trip minus exactly both signals Apple does not have.
 	var full uint64
 	for l := uint(1); l <= 31; l++ {
 		full |= bit(l)
@@ -109,8 +104,8 @@ func TestSigactionMaskXlat(t *testing.T) {
 	}
 }
 
-// The Linux struct is a wire format: rt_sigaction's caller lays it out
-// and the emulation reads it, so a field that moves is a silent
+// The Linux struct is a wire format: rt_sigaction's caller lays it
+// out. The emulation reads it, so a field that moves is a silent
 // corruption rather than a build failure. Layout from
 // runtime.sigactiont (defs_cosmo_amd64.go, identical on arm64).
 func TestLinuxSigactionLayout(t *testing.T) {
