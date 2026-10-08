@@ -29,7 +29,7 @@
 // Each stanza gives the disassembly for a contiguous range of addresses
 // all mapped to the same original source file and line number.
 // This mode is intended for use by pprof.
-package main
+package objdump
 
 import (
 	"flag"
@@ -41,13 +41,18 @@ import (
 	"strings"
 
 	"cmd/internal/disasm"
+	"cmd/internal/objabi"
 	"cmd/internal/objfile"
 	"cmd/internal/telemetry/counter"
 )
 
-var printCode = flag.Bool("S", false, "print Go code alongside assembly")
-var symregexp = flag.String("s", "", "only dump symbols matching this regexp")
-var gnuAsm = flag.Bool("gnu", false, "print GNU assembly next to Go assembly (where supported)")
+// flagSet is objdump's command line, one set of its own so objdump can be
+// linked beside the other tools; Main installs it before parsing.
+var flagSet = flag.NewFlagSet("objdump", flag.ExitOnError)
+
+var printCode = flagSet.Bool("S", false, "print Go code alongside assembly")
+var symregexp = flagSet.String("s", "", "only dump symbols matching this regexp")
+var gnuAsm = flagSet.Bool("gnu", false, "print GNU assembly next to Go assembly (where supported)")
 var symRE *regexp.Regexp
 
 func usage() {
@@ -56,7 +61,10 @@ func usage() {
 	os.Exit(2)
 }
 
-func main() {
+// Main runs objdump with args, the command line after the program name, and
+// answers its exit status.
+func Main(args []string) int {
+	objabi.Enter("objdump", args, flagSet)
 	log.SetFlags(0)
 	log.SetPrefix("objdump: ")
 	counter.Open()
@@ -107,4 +115,5 @@ func main() {
 		}
 		dis.Print(os.Stdout, symRE, start, end, *printCode, *gnuAsm)
 	}
+	return 0
 }

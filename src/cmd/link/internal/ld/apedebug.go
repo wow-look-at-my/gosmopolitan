@@ -309,7 +309,7 @@ func appendCompactDebugView(tail []byte, tailFileOff uint64, pristine []byte, pa
 // sections are an error (Go symbols reference only allocated sections,
 // which the compact view always keeps).
 func remapSymtabShndx(symtab []byte, newIdx map[int]int, secs []*elfSectionView) ([]byte, error) {
-	const symSize = 24 // Elf64_Sym
+	const symSize = 24
 	if len(symtab)%symSize != 0 {
 		return nil, fmt.Errorf(".symtab size %d is not a multiple of %d", len(symtab), symSize)
 	}

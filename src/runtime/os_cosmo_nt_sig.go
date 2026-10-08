@@ -9,7 +9,6 @@
 //
 // NT has no kernel-side sigaction, so the runtime records the disposition
 // itself in ntSigActs and ntKillSelf runs the kernel's decision tree over it.
-// Signals aimed at a spawned child go through os_cosmo_nt_kill.go instead.
 
 package runtime
 

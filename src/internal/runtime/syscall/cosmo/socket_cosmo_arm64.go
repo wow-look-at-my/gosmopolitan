@@ -448,7 +448,7 @@ func darwinSockoptXlat(level, name uintptr) (alevel, aname uintptr, ok bool) {
 			return 41, 10, true
 		case 19: // IPV6_MULTICAST_LOOP
 			return 41, 11, true
-		case 20: // IPV6_JOIN_GROUP (struct ipv6_mreq matches)
+		case 20:
 			return 41, 12, true
 		case 21: // IPV6_LEAVE_GROUP
 			return 41, 13, true
@@ -481,7 +481,6 @@ const (
 )
 
 // appleXucredHead is the leading several bytes of Apple's struct
-// xucred: cr_version, cr_uid, cr_ngroups.
 type appleXucredHead struct {
 	Version uint32
 	Uid     uint32
