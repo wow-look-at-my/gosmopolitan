@@ -16,8 +16,8 @@ type mOS struct {
 	profileTimer      int32
 	profileTimerValid atomic.Bool
 
-	// needPerThreadSyscall indicates that a per-thread syscall is required for doAllThreadsSyscall.
-	needPerThreadSyscall atomic.Uint8
+	// needPerThreadSyscall indicates that a per-thread syscall is required for doAllThreadsSyscall. It is a futex word.
+	needPerThreadSyscall uint32
 
 	// M parking on XNU hosts, mirroring upstream os_darwin.go's mOS field for field: count is the semaphore value, guarded by mutex.
 	initialized bool

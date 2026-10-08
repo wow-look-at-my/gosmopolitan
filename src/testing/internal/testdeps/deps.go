@@ -21,6 +21,7 @@ import (
 	"reflect"
 	"regexp"
 	"runtime/pprof"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -122,6 +123,16 @@ func (l *testLog) Stat(name string) {
 
 func (l *testLog) Chdir(name string) {
 	l.add("chdir", name)
+}
+
+func (l *testLog) Parse(op, file string) {
+	l.add("parse", op+" "+file)
+}
+
+// Lookup quotes the query, so the file after it is whatever follows the
+// closing quote.
+func (l *testLog) Lookup(kind, file, query string) {
+	l.add("lookup", kind+" "+strconv.Quote(query)+" "+file)
 }
 
 // add adds the (op, name) pair to the test log.

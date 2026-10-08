@@ -7,12 +7,16 @@ package test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"internal/coverage"
+	"internal/netconf"
 	"internal/platform"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1532,7 +1536,7 @@ func builderTest(ld *modload.Loader, b *work.Builder, ctx context.Context, pkgOp
 			Deps:       []*work.Action{buildAction},
 			Package:    p,
 			IgnoreFail: true, // run (prepare output) even if build failed
-			TryCache:   rta.c.tryCache,
+			TryCache:   rta.tryCache,
 		}
 		if writeCoverMetaAct != nil {
 			// If writeCoverMetaAct != nil, this indicates that our
@@ -1663,6 +1667,10 @@ type runCache struct {
 	// code that runs a test is generated rather than compiled from a package,
 	// so no compile action carries it and the key must name it directly.
 	unitDigest string
+
+	// misses says why each lookup found no result. They are reported once the
+	// test is known to run, since a later lookup can still find one.
+	misses []func()
 }
 
 func coverProfTempFile(a *work.Action) string {
@@ -1833,6 +1841,9 @@ func (r *runTestActor) Act(b *work.Builder, ctx context.Context, a *work.Action)
 		}
 		a.TestOutput = r.c.buf
 		return nil
+	}
+	for _, explain := range r.c.misses {
+		explain()
 	}
 
 	if err := sh.Mkdir(a.Objdir); err != nil {
@@ -2100,6 +2111,17 @@ func (r *runTestActor) Act(b *work.Builder, ctx context.Context, a *work.Action)
 	return nil
 }
 
+// tryCache asks the cache for a package whose tests compiled. One whose tests
+// did not is left out of the generated main, and its run reports the failure.
+func (r *runTestActor) tryCache(builder *work.Builder, runAct *work.Action, linkAction *work.Action) bool {
+	for _, variant := range r.variants {
+		if variant.Failed != nil {
+			return false
+		}
+	}
+	return r.c.tryCache(builder, runAct, linkAction)
+}
+
 // tryCache is called just before the link attempt,
 // to see if the test result is cached and therefore the link is unneeded.
 // It reports whether the result can be satisfied from cache.
@@ -2343,10 +2365,13 @@ func (c *runCache) tryCacheWithID(b *work.Builder, a *work.Action, id string) bo
 				fmt.Fprintf(os.Stderr, "testcache: %s: input list malformed\n", a.Package.ImportPath)
 			}
 		}
+		if cache.MissNotices() {
+			c.misses = append(c.misses, func() { explainBinaryMiss(a, cacheArgs, id) })
+		}
 		return false
 	}
 	inputList := data
-	testInputsID, err := computeTestInputsID(a, data)
+	testInputsID, inputLines, err := computeTestInputsID(a, data)
 	if err != nil {
 		return false
 	}
@@ -2357,6 +2382,27 @@ func (c *runCache) tryCacheWithID(b *work.Builder, a *work.Action, id string) bo
 	// Parse cached result in preparation for changing run time to "(cached)".
 	// If we can't parse the cached result, don't use it.
 	data, entry, err = cache.GetBytes(cache.Default(), testAndInputKey(testID, testInputsID))
+	if err != nil {
+		// Runs of one binary that differ in their environment read different
+		// files, and the last testlog written belongs to whichever ran last.
+		// Every other testlog this binary has written is tried before a miss.
+		for _, other := range otherTestlogs(testID, inputList) {
+			otherID, otherLines, otherErr := computeTestInputsID(a, other)
+			if otherErr != nil {
+				continue
+			}
+			otherData, otherEntry, getErr := cache.GetBytes(cache.Default(), testAndInputKey(testID, otherID))
+			if getErr != nil {
+				continue
+			}
+			if cache.DebugTest {
+				fmt.Fprintf(os.Stderr, "testcache: %s: an earlier testlog matches, input ID %x\n", a.Package.ImportPath, otherID)
+			}
+			inputList, testInputsID, inputLines = other, otherID, otherLines
+			data, entry, err = otherData, otherEntry, nil
+			break
+		}
+	}
 
 	// Merge cached cover profile data to cover profile.
 	var cpData string
@@ -2393,6 +2439,9 @@ func (c *runCache) tryCacheWithID(b *work.Builder, a *work.Action, id string) bo
 				fmt.Fprintf(os.Stderr, "testcache: %s: test output malformed\n", a.Package.ImportPath)
 			}
 		}
+		if cache.MissNotices() {
+			c.misses = append(c.misses, func() { explainInputsMiss(a, testID, inputLines) })
+		}
 		return false
 	}
 	if entry.Time.Before(testCacheExpire) {
@@ -2426,7 +2475,8 @@ func (c *runCache) tryCacheWithID(b *work.Builder, a *work.Action, id string) bo
 			profile, readErr = os.ReadFile(cpData)
 		}
 		if readErr == nil {
-			cache.PutNoVerify(cache.Default(), c.id1, bytes.NewReader(inputList))
+			saveTestlog(c.id1, inputList)
+			cache.PutNoVerify(cache.Default(), inputLinesKey(c.id1), bytes.NewReader(inputLines))
 			cache.PutNoVerify(cache.Default(), testAndInputKey(c.id1, testInputsID), bytes.NewReader(data))
 			if testCoverProfile != "" || c.covMeta != (cache.ActionID{}) {
 				cache.PutNoVerify(cache.Default(), coverProfileAndInputKey(c.id1, testInputsID, c.covMeta), bytes.NewReader(profile))
@@ -2448,19 +2498,20 @@ func (c *runCache) tryCacheWithID(b *work.Builder, a *work.Action, id string) bo
 var errBadTestInputs = errors.New("error parsing test inputs")
 var testlogMagic = []byte("# test log\n") // known to testing/internal/testdeps/deps.go
 
+// runtimeEnv is the environment the runtime reads at start without telling the
+// testlog. Each one changes how every test runs.
+var runtimeEnv = []string{"GODEBUG", "GOGC", "GOMAXPROCS", "GOMEMLIMIT", "GOTRACEBACK"}
+
 // computeTestInputsID computes the "test inputs ID"
 // (see comment in tryCacheWithID above) for the
-// test log.
-func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, error) {
+// test log. It also answers every line it hashed, which is what names the input
+// that moved when a result goes missing (explainInputsMiss).
+func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, []byte, error) {
 	testlog = bytes.TrimPrefix(testlog, testlogMagic)
 	sum := cache.NewHash("testInputs")
-	// Under gocachetest every hashed line is also printed, so two runs whose
-	// input IDs differ can be diffed down to the environment variable or file
-	// that moved.
-	var h io.Writer = sum
 	var lines bytes.Buffer
+	h := io.MultiWriter(sum, &lines)
 	if cache.DebugTest {
-		h = io.MultiWriter(sum, &lines)
 		defer func() {
 			seen := make(map[string]struct{})
 			for line := range strings.Lines(lines.String()) {
@@ -2472,11 +2523,17 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, error)
 			}
 		}()
 	}
-	// The runtime always looks at GODEBUG, without telling us in the testlog.
-	fmt.Fprintf(h, "env GODEBUG %x\n", hashGetenv("GODEBUG"))
+	for _, name := range runtimeEnv {
+		fmt.Fprintf(h, "env %s %x\n", name, hashGetenv(name))
+	}
 	if cache.DebugTest {
 		fmt.Fprintf(os.Stderr, "testcache: %s: GODEBUG=%q\n", a.Package.ImportPath, os.Getenv("GODEBUG"))
 	}
+	parsed, err := parsedReads(a.Package.Dir, testlog)
+	if err != nil {
+		return cache.ActionID{}, nil, err
+	}
+	sources := make(map[string][]rootCert)
 	pwd := a.Package.Dir
 	for _, line := range bytes.Split(testlog, []byte("\n")) {
 		if len(line) == 0 {
@@ -2488,27 +2545,56 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, error)
 			if cache.DebugTest {
 				fmt.Fprintf(os.Stderr, "testcache: %s: input list malformed (%q)\n", a.Package.ImportPath, line)
 			}
-			return cache.ActionID{}, errBadTestInputs
+			return cache.ActionID{}, nil, fmt.Errorf("%w: %q", errBadTestInputs, line)
 		}
 		switch op {
 		default:
 			if cache.DebugTest {
 				fmt.Fprintf(os.Stderr, "testcache: %s: input list malformed (%q)\n", a.Package.ImportPath, line)
 			}
-			return cache.ActionID{}, errBadTestInputs
+			return cache.ActionID{}, nil, fmt.Errorf("%w: %q", errBadTestInputs, line)
 		case "getenv":
+			if slices.Contains(cache.PlumbingEnv, name) {
+				break
+			}
 			fmt.Fprintf(h, "env %s %x\n", name, hashGetenv(name))
 		case "chdir":
 			pwd = name // always absolute
-			if isRunScratch(name) {
+			if isRunScratch(name) || isBuildCache(name) || isProcessLocal(name) {
 				break
 			}
 			fmt.Fprintf(h, "chdir %s %x\n", name, hashStat(name))
+		case "parse":
+			// Counted by parsedReads.
+		case "lookup":
+			kind, file, query, err := parseLookup(name)
+			if err != nil {
+				return cache.ActionID{}, nil, fmt.Errorf("%w: %q", errBadTestInputs, line)
+			}
+			if !filepath.IsAbs(file) {
+				file = filepath.Join(pwd, file)
+			}
+			if isRunScratch(file) || isBuildCache(file) {
+				break
+			}
+			answer, err := lookupAnswer(kind, file, query, sources)
+			if err != nil {
+				return cache.ActionID{}, nil, fmt.Errorf("%w: %q: %v", errBadTestInputs, line, err)
+			}
+			fmt.Fprintf(h, "lookup %s %s %s %x\n", kind, strconv.Quote(query), file, answer)
 		case "stat":
 			if !filepath.IsAbs(name) {
 				name = filepath.Join(pwd, name)
 			}
-			if isRunScratch(name) {
+			if parsed["stat "+name] > 0 {
+				parsed["stat "+name]--
+				break
+			}
+			if isRunScratch(name) || isBuildCache(name) || isProcessLocal(name) {
+				break
+			}
+			if rel, ok := inModCache(name); ok {
+				fmt.Fprintf(h, "stat $GOMODCACHE/%s modcache\n", rel)
 				break
 			}
 			fmt.Fprintf(h, "stat %s %x\n", name, hashStat(name))
@@ -2516,7 +2602,15 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, error)
 			if !filepath.IsAbs(name) {
 				name = filepath.Join(pwd, name)
 			}
-			if isRunScratch(name) {
+			if parsed["open "+name] > 0 {
+				parsed["open "+name]--
+				break
+			}
+			if isRunScratch(name) || isBuildCache(name) || isProcessLocal(name) {
+				break
+			}
+			if rel, ok := inModCache(name); ok {
+				fmt.Fprintf(h, "open $GOMODCACHE/%s modcache\n", rel)
 				break
 			}
 			fh, err := hashOpen(name)
@@ -2524,12 +2618,399 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, error)
 				if cache.DebugTest {
 					fmt.Fprintf(os.Stderr, "testcache: %s: input file %s: %s\n", a.Package.ImportPath, name, err)
 				}
-				return cache.ActionID{}, err
+				return cache.ActionID{}, nil, err
 			}
 			fmt.Fprintf(h, "open %s %x\n", name, fh)
 		}
 	}
-	return sum.Sum(), nil
+	return sum.Sum(), lines.Bytes(), nil
+}
+
+// parsedReads counts, by op and absolute name, the stats and opens a parser
+// said it made. Each cancels one logged line of its own op and name, wherever
+// in the log the two stand: a parser may say so before the read or after it
+// succeeds.
+func parsedReads(dir string, testlog []byte) (map[string]int, error) {
+	parsed := make(map[string]int)
+	pwd := dir
+	for _, line := range bytes.Split(testlog, []byte("\n")) {
+		op, name, _ := strings.Cut(string(line), " ")
+		switch op {
+		case "chdir":
+			pwd = name
+		case "parse":
+			parseOp, file, ok := strings.Cut(name, " ")
+			if !ok || (parseOp != "stat" && parseOp != "open") {
+				return nil, fmt.Errorf("%w: %q", errBadTestInputs, line)
+			}
+			if !filepath.IsAbs(file) {
+				file = filepath.Join(pwd, file)
+			}
+			parsed[parseOp+" "+file]++
+		}
+	}
+	return parsed, nil
+}
+
+// parseLookup splits a lookup line's name into its parser kind, the file and
+// the query, which is quoted and stands between the two.
+func parseLookup(name string) (kind, file, query string, err error) {
+	kind, rest, ok := strings.Cut(name, " ")
+	if !ok {
+		return "", "", "", errBadTestInputs
+	}
+	quoted, err := strconv.QuotedPrefix(rest)
+	if err != nil {
+		return "", "", "", err
+	}
+	query, err = strconv.Unquote(quoted)
+	if err != nil {
+		return "", "", "", err
+	}
+	file, ok = strings.CutPrefix(rest[len(quoted):], " ")
+	if !ok || file == "" {
+		return "", "", "", errBadTestInputs
+	}
+	return kind, file, query, nil
+}
+
+// lookupAnswer hashes what file answers query through the parser kind
+// names, which is all a lookup takes from the file. sources keeps the
+// certificates of each root source already read for this testlog.
+func lookupAnswer(kind, file, query string, sources map[string][]rootCert) (cache.ActionID, error) {
+	h := cache.NewHash("lookup")
+	switch kind {
+	default:
+		return cache.ActionID{}, fmt.Errorf("unknown lookup kind %q", kind)
+	case "x509file", "x509dir":
+		certs, ok := sources[kind+" "+file]
+		if !ok {
+			certs = readRootSource(kind, file)
+			sources[kind+" "+file] = certs
+		}
+		if err := answerRootQuery(h, certs, query); err != nil {
+			return cache.ActionID{}, err
+		}
+		return h.Sum(), nil
+	case "hostsname", "hostsaddr":
+		byName, byAddr, err := readHostsFile(file)
+		if err != nil {
+			fmt.Fprintf(h, "err %v\n", err)
+			return h.Sum(), nil
+		}
+		if kind == "hostsname" {
+			entry := byName[netconf.NameKey(query)]
+			fmt.Fprintf(h, "addrs %q canonical %q\n", entry.Addrs, entry.Canonical)
+			return h.Sum(), nil
+		}
+		addr := netconf.AddrKey(query)
+		fmt.Fprintf(h, "addr %q names %q\n", addr, byAddr[addr])
+		return h.Sum(), nil
+	case "resolvorder", "resolvnames", "resolvservers":
+		conf, openErr := readResolvFile(file)
+		switch kind {
+		case "resolvorder":
+			fmt.Fprintf(h, "err %s unknownopt %v lookup %q\n", openErr, conf.UnknownOpt, conf.Lookup)
+		case "resolvnames":
+			search := conf.Search
+			if len(search) == 0 {
+				// The host's own domain stands in, as package net reads it.
+				hostname, _ := os.Hostname()
+				search = netconf.DefaultSearch(hostname)
+			}
+			fmt.Fprintf(h, "names %q\n", netconf.NameList(query, conf.Ndots, search))
+		case "resolvservers":
+			fmt.Fprintf(h, "servers %q timeout %v attempts %d rotate %v tcp %v trustad %v single %v\n",
+				conf.Servers, conf.Timeout, conf.Attempts, conf.Rotate, conf.UseTCP, conf.TrustAD, conf.SingleRequest)
+		}
+		return h.Sum(), nil
+	}
+}
+
+// rootCert is one certificate a root source holds, or a read of the source
+// that failed, which crypto/x509 skips.
+type rootCert struct {
+	subject []byte
+	raw     []byte
+	err     string
+}
+
+// readRootSource reads a root certificate file, or every file of a root
+// directory, as crypto/x509's system pool loader does.
+func readRootSource(kind, file string) []rootCert {
+	if kind == "x509file" {
+		data, err := os.ReadFile(file)
+		if err != nil {
+			return []rootCert{{err: err.Error()}}
+		}
+		return pemRootCerts(data)
+	}
+	entries, err := os.ReadDir(file)
+	if err != nil {
+		return []rootCert{{err: err.Error()}}
+	}
+	var certs []rootCert
+	for _, entry := range entries {
+		if entry.Type()&fs.ModeSymlink != 0 {
+			// A link to a file beside it names a root the directory already holds.
+			target, err := os.Readlink(filepath.Join(file, entry.Name()))
+			if err == nil && !strings.ContainsRune(target, filepath.Separator) {
+				continue
+			}
+		}
+		data, err := os.ReadFile(filepath.Join(file, entry.Name()))
+		if err != nil {
+			certs = append(certs, rootCert{err: entry.Name() + ": " + err.Error()})
+			continue
+		}
+		certs = append(certs, pemRootCerts(data)...)
+	}
+	return certs
+}
+
+// answerRootQuery writes what a root source answers query to h. "issuer X"
+// asks for the certificates whose subject is the hex-encoded X, "contains X"
+// whether one has the hex-encoded SHA-224 X, and "all" for every one.
+func answerRootQuery(h io.Writer, certs []rootCert, query string) error {
+	verb, arg, _ := strings.Cut(query, " ")
+	switch verb {
+	default:
+		return fmt.Errorf("unknown root query %q", query)
+	case "all":
+		for _, cert := range certs {
+			fmt.Fprintf(h, "cert %x err %q\n", cert.raw, cert.err)
+		}
+	case "issuer":
+		subject, err := hex.DecodeString(arg)
+		if err != nil {
+			return err
+		}
+		for _, cert := range certs {
+			if bytes.Equal(cert.subject, subject) {
+				fmt.Fprintf(h, "cert %x\n", cert.raw)
+			}
+		}
+	case "contains":
+		sum, err := hex.DecodeString(arg)
+		if err != nil {
+			return err
+		}
+		for _, cert := range certs {
+			if digest := sha256.Sum224(cert.raw); bytes.Equal(digest[:], sum) {
+				fmt.Fprintf(h, "contains\n")
+				break
+			}
+		}
+	}
+	return nil
+}
+
+// readResolvFile reads a resolv.conf as package net does, and names how its
+// open failed: "" when it did not. A file that does not open reads as one
+// with nothing in it.
+func readResolvFile(file string) (netconf.Resolv, string) {
+	conf, err := os.Open(file)
+	switch {
+	case err == nil:
+		defer conf.Close()
+		return netconf.ReadResolv(conf), ""
+	case errors.Is(err, fs.ErrNotExist):
+		return netconf.ReadResolv(strings.NewReader("")), "notexist"
+	case errors.Is(err, fs.ErrPermission):
+		return netconf.ReadResolv(strings.NewReader("")), "permission"
+	default:
+		return netconf.ReadResolv(strings.NewReader("")), err.Error()
+	}
+}
+
+// readHostsFile reads a hosts file as package net does. A file that is
+// missing or unreadable answers nothing, and any other error is the answer.
+func readHostsFile(file string) (map[string]netconf.ByName, map[string][]string, error) {
+	hosts, err := os.Open(file)
+	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, fs.ErrPermission) {
+		return nil, nil, nil
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	defer hosts.Close()
+	byName, byAddr := netconf.ReadHosts(hosts)
+	return byName, byAddr, nil
+}
+
+// maxTestlogs bounds how many distinct testlogs one test binary keeps.
+const maxTestlogs = 16
+
+// testlogsKey is where the digests of every distinct testlog written under
+// testID are kept, newest first, one hex digest a line.
+func testlogsKey(testID cache.ActionID) cache.ActionID {
+	return cache.Subkey(testID, "testlogs")
+}
+
+// testlogDigestKey is where the testlog with the given digest is kept.
+func testlogDigestKey(testID cache.ActionID, digest string) cache.ActionID {
+	return cache.Subkey(testID, "testlog:"+digest)
+}
+
+// saveTestlog writes testlog as the latest under testID, and adds it to the
+// testlogs a lookup under testID tries.
+func saveTestlog(testID cache.ActionID, testlog []byte) {
+	cache.PutNoVerify(cache.Default(), testID, bytes.NewReader(testlog))
+	digest := fmt.Sprintf("%x", sha256.Sum256(testlog))
+	cache.PutNoVerify(cache.Default(), testlogDigestKey(testID, digest), bytes.NewReader(testlog))
+	digests := []string{digest}
+	saved, _, _ := cache.GetBytes(cache.Default(), testlogsKey(testID))
+	for line := range strings.Lines(string(saved)) {
+		line = strings.TrimSpace(line)
+		if line == "" || line == digest || len(digests) == maxTestlogs {
+			continue
+		}
+		digests = append(digests, line)
+	}
+	cache.PutNoVerify(cache.Default(), testlogsKey(testID), strings.NewReader(strings.Join(digests, "\n")+"\n"))
+}
+
+// otherTestlogs answers every testlog saved under testID except latest,
+// newest first. One evicted from the cache is left out.
+func otherTestlogs(testID cache.ActionID, latest []byte) [][]byte {
+	saved, _, err := cache.GetBytes(cache.Default(), testlogsKey(testID))
+	if err != nil {
+		return nil
+	}
+	skip := fmt.Sprintf("%x", sha256.Sum256(latest))
+	var others [][]byte
+	for line := range strings.Lines(string(saved)) {
+		line = strings.TrimSpace(line)
+		if line == "" || line == skip {
+			continue
+		}
+		testlog, _, err := cache.GetBytes(cache.Default(), testlogDigestKey(testID, line))
+		if err != nil || !bytes.HasPrefix(testlog, testlogMagic) || testlog[len(testlog)-1] != '\n' {
+			continue
+		}
+		others = append(others, testlog)
+	}
+	return others
+}
+
+// inputLinesKey is where the lines behind a test result's inputs ID are kept,
+// beside the testlog that lists them.
+func inputLinesKey(testID cache.ActionID) cache.ActionID {
+	return cache.Subkey(testID, "inputlines")
+}
+
+// explainInputsMiss names what moved when a test ran with a known binary and
+// arguments but its result was not under the inputs this run computed. The
+// lines saved with the last result are compared with now's, one input at a
+// time: a line is an operation and a name, then the hash of what it read.
+func explainInputsMiss(a *work.Action, testID cache.ActionID, lines []byte) {
+	saved, _, err := cache.GetBytes(cache.Default(), inputLinesKey(testID))
+	if err != nil {
+		cache.MissNotice("testcache: %s: no saved inputs to compare with this run's (%v); it read:", a.Package.ImportPath, err)
+		for line := range strings.Lines(string(lines)) {
+			cache.MissNotice("testcache: %s:   %s", a.Package.ImportPath, strings.TrimSuffix(line, "\n"))
+		}
+		return
+	}
+	before := inputHashes(saved)
+	after := inputHashes(lines)
+	moved := 0
+	for _, name := range slices.Sorted(maps.Keys(after)) {
+		was, known := before[name]
+		switch {
+		case !known:
+			cache.MissNotice("testcache: %s: input %s is new", a.Package.ImportPath, name)
+		case was != after[name]:
+			cache.MissNotice("testcache: %s: input %s changed", a.Package.ImportPath, name)
+		default:
+			continue
+		}
+		moved++
+	}
+	for _, name := range slices.Sorted(maps.Keys(before)) {
+		if _, kept := after[name]; !kept {
+			cache.MissNotice("testcache: %s: input %s is gone", a.Package.ImportPath, name)
+			moved++
+		}
+	}
+	if moved == 0 {
+		cache.MissNotice("testcache: %s: every input matches the last run's, and its result is not in the cache", a.Package.ImportPath)
+	}
+}
+
+// inputHashes maps each input line's operation and name to its hash. A name
+// read twice in one run hashes the same both times.
+func inputHashes(lines []byte) map[string]string {
+	hashes := make(map[string]string)
+	for line := range strings.Lines(string(lines)) {
+		line = strings.TrimSuffix(line, "\n")
+		at := strings.LastIndexByte(line, ' ')
+		if at < 0 {
+			continue
+		}
+		hashes[line[:at]] = line[at+1:]
+	}
+	return hashes
+}
+
+// identityKey is where the description of the last binary a package's tests
+// ran from is kept, for these arguments and this kind of identity.
+func identityKey(a *work.Action, cacheArgs []string, kind string) cache.ActionID {
+	h := cache.NewHash("testIdentity")
+	fmt.Fprintf(h, "package %s args %q execcmd %q kind %s", a.Package.ImportPath, cacheArgs, work.ExecCmd, kind)
+	return h.Sum()
+}
+
+// explainBinaryMiss names what differs between the binary this run asks about
+// and the last one the package's tests were looked up with, when no testlog is
+// known for this one. An identity is a list of words; a word holding '=' is a
+// package and the code it compiled to, and the rest stand by position.
+func explainBinaryMiss(a *work.Action, cacheArgs []string, id string) {
+	kind := "compiles"
+	if strings.HasPrefix(id, "reach ") {
+		kind = "reach"
+	}
+	key := identityKey(a, cacheArgs, kind)
+	saved, _, err := cache.GetBytes(cache.Default(), key)
+	cache.PutNoVerify(cache.Default(), key, strings.NewReader(id))
+	if err != nil {
+		cache.MissNotice("testcache: %s: no result for this %s identity, and none saved to compare it with", a.Package.ImportPath, kind)
+		return
+	}
+	before := identityWords(string(saved))
+	after := identityWords(id)
+	var moved []string
+	for _, name := range slices.Sorted(maps.Keys(after)) {
+		if before[name] != after[name] {
+			moved = append(moved, name)
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(before)) {
+		if _, kept := after[name]; !kept {
+			moved = append(moved, name)
+		}
+	}
+	if len(moved) == 0 {
+		cache.MissNotice("testcache: %s: the %s identity matches the last one looked up, and no testlog is saved for it", a.Package.ImportPath, kind)
+		return
+	}
+	cache.MissNotice("testcache: %s: the %s identity moved in %s", a.Package.ImportPath, kind, strings.Join(moved, " "))
+}
+
+// identityWords splits an identity into named parts. A word holding '=' names
+// itself; any other word is named for where it stands among the unnamed ones.
+func identityWords(id string) map[string]string {
+	words := make(map[string]string)
+	unnamed := 0
+	for _, word := range strings.Fields(id) {
+		name, value, named := strings.Cut(word, "=")
+		if !named {
+			name, value = "#"+strconv.Itoa(unnamed), word
+			unnamed++
+		}
+		words[name] = value
+	}
+	return words
 }
 
 // isRunScratch reports whether name is scratch space this run created, which is
@@ -2563,6 +3044,53 @@ func isRunScratch(name string) bool {
 		real = name
 	}
 	return search.InDir(real, realTmp) != "" || search.InDir(name, realTmp) != ""
+}
+
+// isProcessLocal reports whether name is a path that names whichever process
+// reads it: its own /proc entry, its descriptor table, its standard streams.
+// The test process read its own. The go command can only read the go
+// command's, which says nothing about the test.
+func isProcessLocal(name string) bool {
+	switch name {
+	case "/proc/self", "/proc/thread-self", "/dev/fd", "/dev/stdin", "/dev/stdout", "/dev/stderr":
+		return true
+	}
+	for _, dir := range []string{"/proc/self/", "/proc/thread-self/", "/dev/fd/"} {
+		if strings.HasPrefix(name, dir) {
+			return true
+		}
+	}
+	return false
+}
+
+// isBuildCache reports whether name is in this build's cache directory. A
+// test binary that uses the build cache in process reads its entries and its
+// shard directories, and each entry is the output of the action its key names.
+// The directory's contents follow which builds have run here, not what the test
+// computes from.
+func isBuildCache(name string) bool {
+	dir, _, err := cache.DefaultDir()
+	if err != nil || dir == "off" {
+		return false
+	}
+	return search.InDir(name, dir) != ""
+}
+
+// inModCache reports where name sits in the module cache, as a slash path
+// relative to GOMODCACHE. A module cache is keyed by its names. The files of
+// a module version are fixed by the checksum database the moment the version
+// is downloaded, and the name carries the version. Whether a version is there
+// yet says only what ran here before: a test that downloads its own vectors
+// finds none before its first run on a fresh checkout.
+func inModCache(name string) (string, bool) {
+	if cfg.GOMODCACHE == "" {
+		return "", false
+	}
+	rel := search.InDir(name, cfg.GOMODCACHE)
+	if rel == "" {
+		return "", false
+	}
+	return filepath.ToSlash(rel), true
 }
 
 func hashGetenv(name string) cache.ActionID {
@@ -2672,10 +3200,17 @@ func (c *runCache) saveOutput(a *work.Action) {
 				fmt.Fprintf(os.Stderr, "testcache: %s: reading testlog: malformed\n", a.Package.ImportPath)
 			}
 		}
+		if err != nil {
+			cache.MissNotice("testcache: %s: result not saved: %v", a.Package.ImportPath, err)
+		} else {
+			cache.MissNotice("testcache: %s: result not saved: the testlog of %d bytes is malformed: starts %q, ends %q",
+				a.Package.ImportPath, len(testlog), testlog[:min(len(testlog), 64)], testlog[max(0, len(testlog)-64):])
+		}
 		return
 	}
-	testInputsID, err := computeTestInputsID(a, testlog)
+	testInputsID, inputLines, err := computeTestInputsID(a, testlog)
 	if err != nil {
+		cache.MissNotice("testcache: %s: result not saved: %v", a.Package.ImportPath, err)
 		return
 	}
 	var coverProfile []byte
@@ -2692,7 +3227,8 @@ func (c *runCache) saveOutput(a *work.Action) {
 		if cache.DebugTest {
 			fmt.Fprintf(os.Stderr, "testcache: %s: save test ID %x => input ID %x => %x\n", a.Package.ImportPath, c.id1, testInputsID, testAndInputKey(c.id1, testInputsID))
 		}
-		cache.PutNoVerify(cache.Default(), c.id1, bytes.NewReader(testlog))
+		saveTestlog(c.id1, testlog)
+		cache.PutNoVerify(cache.Default(), inputLinesKey(c.id1), bytes.NewReader(inputLines))
 		cache.PutNoVerify(cache.Default(), testAndInputKey(c.id1, testInputsID), bytes.NewReader(a.TestOutput.Bytes()))
 		if coverProfile != nil {
 			cache.PutNoVerify(cache.Default(), coverProfileAndInputKey(c.id1, testInputsID, c.covMeta), bytes.NewReader(coverProfile))
@@ -2706,7 +3242,8 @@ func (c *runCache) saveOutput(a *work.Action) {
 		if cache.DebugTest {
 			fmt.Fprintf(os.Stderr, "testcache: %s: save test ID %x => input ID %x => %x\n", a.Package.ImportPath, c.id2, testInputsID, testAndInputKey(c.id2, testInputsID))
 		}
-		cache.PutNoVerify(cache.Default(), c.id2, bytes.NewReader(testlog))
+		saveTestlog(c.id2, testlog)
+		cache.PutNoVerify(cache.Default(), inputLinesKey(c.id2), bytes.NewReader(inputLines))
 		cache.PutNoVerify(cache.Default(), testAndInputKey(c.id2, testInputsID), bytes.NewReader(a.TestOutput.Bytes()))
 		if coverProfile != nil {
 			cache.PutNoVerify(cache.Default(), coverProfileAndInputKey(c.id2, testInputsID, c.covMeta), bytes.NewReader(coverProfile))
@@ -2790,9 +3327,11 @@ type testmainCompileActor struct {
 
 func (actor *testmainCompileActor) Act(b *work.Builder, ctx context.Context, a *work.Action) error {
 	drop := make(map[string]bool)
+	kept := make([]*work.Action, 0, len(a.Deps))
 	for _, dep := range a.Deps {
 		if dep.Failed == nil || dep.Package == nil {
-			continue // an action of no package only orders the ones that build
+			kept = append(kept, dep) // an action of no package only orders the ones that build
+			continue
 		}
 		unit, isMember := actor.units[dep]
 		if !isMember {
@@ -2800,6 +3339,9 @@ func (actor *testmainCompileActor) Act(b *work.Builder, ctx context.Context, a *
 		}
 		drop[unit] = true
 	}
+	// The main rendered without a unit imports nothing of it, so the compile
+	// neither hashes nor names a package that produced no object.
+	a.Deps = kept
 	if len(drop) > 0 {
 		content, err := load.RenderTestmainWithout(actor.testMain, drop)
 		if err != nil {

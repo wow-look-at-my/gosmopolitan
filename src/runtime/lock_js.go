@@ -21,10 +21,6 @@ const (
 	note_woken   = 1
 	note_timeout = 2
 
-	active_spin     = 4
-	active_spin_cnt = 30
-	passive_spin    = 1
-
 	mutexMLocksDelta = 16
 )
 

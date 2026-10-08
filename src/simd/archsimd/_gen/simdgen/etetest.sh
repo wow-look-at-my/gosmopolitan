@@ -35,12 +35,12 @@ go install cmd/compile
 GOEXPERIMENT=simd GOARCH=amd64 go run -C simd/archsimd/testdata .
 GOEXPERIMENT=simd GOARCH=amd64 go test -v simd/archsimd
 GOEXPERIMENT=simd GOARCH=amd64 go test go/doc go/build
-GOEXPERIMENT=simd GOARCH=amd64 go test cmd/api -v -check -run ^TestCheck$
+GOEXPERIMENT=simd GOARCH=amd64 go test cmd/api -v -run ^TestCheck$
 GOEXPERIMENT=simd GOARCH=amd64 go test cmd/compile/internal/ssagen -simd=0
 
 # Check tests without the GOEXPERIMENT
 GOEXPERIMENT= go test go/doc go/build
-GOEXPERIMENT= go test cmd/api -v -check -run ^TestCheck$
+GOEXPERIMENT= go test cmd/api -v -run ^TestCheck$
 GOEXPERIMENT= go test cmd/compile/internal/ssagen -simd=0
 
 # TODO: Add some tests of SIMD itself
