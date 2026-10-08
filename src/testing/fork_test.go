@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -442,6 +443,12 @@ func (log *recordedLog) Getenv(key string) { log.events = append(log.events, "ge
 func (log *recordedLog) Stat(file string)  { log.events = append(log.events, "stat "+file) }
 func (log *recordedLog) Open(file string)  { log.events = append(log.events, "open "+file) }
 func (log *recordedLog) Chdir(dir string)  { log.events = append(log.events, "chdir "+dir) }
+func (log *recordedLog) Parse(op, file string) {
+	log.events = append(log.events, "parse "+op+" "+file)
+}
+func (log *recordedLog) Lookup(kind, file, query string) {
+	log.events = append(log.events, "lookup "+kind+" "+strconv.Quote(query)+" "+file)
+}
 
 func TestTakeForkLogRecordsWhatTheChildRead(t *T) {
 	scratch := t.TempDir()
@@ -453,7 +460,10 @@ func TestTakeForkLogRecordsWhatTheChildRead(t *T) {
 		"open testdata/in.txt\n" +
 		"chdir " + moved + "\n" +
 		"stat out.txt\n" +
-		"open " + filepath.Join(scratch, "abs.txt") + "\n"
+		"open " + filepath.Join(scratch, "abs.txt") + "\n" +
+		"parse open hosts\n" +
+		"lookup hostsname \"a \\\"b\\\"\" /etc/hosts\n" +
+		"lookup x509dir \"all\" certs\n"
 	if err := os.WriteFile(file, []byte(child), 0o666); err != nil {
 		t.Fatal(err)
 	}
@@ -467,6 +477,9 @@ func TestTakeForkLogRecordsWhatTheChildRead(t *T) {
 		"stat " + moved,
 		"stat " + filepath.Join(moved, "out.txt"),
 		"open " + filepath.Join(scratch, "abs.txt"),
+		"parse open " + filepath.Join(moved, "hosts"),
+		"lookup hostsname \"a \\\"b\\\"\" /etc/hosts",
+		"lookup x509dir \"all\" " + filepath.Join(moved, "certs"),
 	}
 	if !slices.Equal(log.events, want) {
 		t.Errorf("recorded %q, want %q", log.events, want)
@@ -479,6 +492,9 @@ func TestTakeForkLogRefusesALogItCannotRead(t *T) {
 		{"not a test log", "getenv HOME\n"},
 		{"a line with no name", "# test log\nopen\n"},
 		{"an unknown operation", "# test log\nunlink /x\n"},
+		{"a parse with no file", "# test log\nparse open\n"},
+		{"a lookup with no file", "# test log\nlookup hostsname \"a\"\n"},
+		{"a lookup with an unquoted query", "# test log\nlookup hostsname a /etc/hosts\n"},
 	} {
 		file := filepath.Join(scratch, strings.ReplaceAll(tc.name, " ", "-"))
 		if err := os.WriteFile(file, []byte(tc.content), 0o666); err != nil {

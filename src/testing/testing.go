@@ -2223,24 +2223,61 @@ func takeForkLog(file, dir string, logger actionlog.Interface) error {
 		if !found {
 			return errors.New("the forked run's test log holds " + strconv.Quote(line))
 		}
-		if op != "getenv" && !filepath.IsAbs(name) {
-			name = filepath.Join(dir, name)
+		abs := func(name string) string {
+			if filepath.IsAbs(name) {
+				return name
+			}
+			return filepath.Join(dir, name)
 		}
 		switch op {
 		case "getenv":
 			logger.Getenv(name)
 		case "open":
-			logger.Open(name)
+			logger.Open(abs(name))
 		case "stat":
-			logger.Stat(name)
+			logger.Stat(abs(name))
 		case "chdir":
-			dir = name
-			logger.Stat(name)
+			dir = abs(name)
+			logger.Stat(dir)
+		case "parse":
+			read, file, found := strings.Cut(name, " ")
+			if !found || file == "" {
+				return errors.New("the forked run's test log holds " + strconv.Quote(line))
+			}
+			logger.Parse(read, abs(file))
+		case "lookup":
+			kind, query, file, err := splitForkLookup(name)
+			if err != nil {
+				return errors.New("the forked run's test log holds " + strconv.Quote(line))
+			}
+			logger.Lookup(kind, abs(file), query)
 		default:
 			return errors.New("the forked run's test log holds " + strconv.Quote(line))
 		}
 	}
 	return nil
+}
+
+// splitForkLookup reads a lookup line's fields: the kind, the quoted query,
+// and the file after it.
+func splitForkLookup(fields string) (kind, query, file string, err error) {
+	kind, rest, found := strings.Cut(fields, " ")
+	if !found {
+		return "", "", "", errors.New("no query")
+	}
+	quoted, err := strconv.QuotedPrefix(rest)
+	if err != nil {
+		return "", "", "", err
+	}
+	query, err = strconv.Unquote(quoted)
+	if err != nil {
+		return "", "", "", err
+	}
+	file, found = strings.CutPrefix(rest[len(quoted):], " ")
+	if !found || file == "" {
+		return "", "", "", errors.New("no file")
+	}
+	return kind, query, file, nil
 }
 
 // startEnv is the environment this test binary was started with. A child
