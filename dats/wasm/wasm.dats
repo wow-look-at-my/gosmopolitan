@@ -1,6 +1,6 @@
 # The wasm ports: std builds for both, the object writer's host-side
 # tests, both transports that need a real host (node fetch streams, the
-# wasip1sock reference host) and the wasmexport compiler tests. GOOS is
+# wasip1sock reference host). The wasmexport compiler tests. GOOS is
 # pinned on every host-side go test: the fork defaults to cosmo.
 tests:
 	- desc: std builds for js/wasm and wasip1/wasm

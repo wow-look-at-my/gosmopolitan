@@ -19,7 +19,7 @@ import (
 
 // printfBlobTestInput returns a blob exercising every byte value plus
 // adjacency cases where an octal escape is immediately followed by an
-// octal digit, which must not be absorbed into the escape.
+// octal digit. This must not be absorbed into the escape.
 func printfBlobTestInput() []byte {
 	blob := make([]byte, 0, 256+16)
 	for i := 0; i < 256; i++ {
@@ -30,7 +30,7 @@ func printfBlobTestInput() []byte {
 }
 
 // decodePrintfBlob decodes the body of a printf '...' format string the way
-// both POSIX printf and the APE loader's header scanner do: a backslash
+// both POSIX printf and the APE loader's header scanner do. A backslash
 // introduces an octal escape of one to digits, and every other byte is taken
 // literally.
 func decodePrintfBlob(t *testing.T, s string) []byte {
@@ -228,7 +228,7 @@ func buildTestELFForMachine(t *testing.T, machine uint16, entry uint64, phdrs []
 
 // testELFPhdrs is a program header table shaped like the cosmo linker's
 // amd64 output: an executable text load (which also covers the ELF header),
-// a read-only load, and a writable load whose p_memsz exceeds p_filesz
+// a read-only load, and a writable. Load whose p_memsz exceeds p_filesz
 // (BSS). A PT_NOTE is included to check that non-LOAD entries are skipped.
 func testELFPhdrs() []testProgHeader {
 	return []testProgHeader{
@@ -242,7 +242,7 @@ func testELFPhdrs() []testProgHeader {
 const testELFEntry = 0x100001200
 
 // buildTestNTELF returns a synthetic amd64 payload with the NT import
-// blob (runtime.ntidata) and IAT (runtime.ntiat) placed in its RW load
+// blob (runtime.ntidata). IAT (runtime.ntiat) placed in its RW load
 // exactly as apePrepareNTBoot would leave them after patching, plus the
 // matching apePEInfo. The blob sits at payload offset (== RVA) 0x4100,
 // the IAT at 0x4180, both file-backed within the RW load's p_filesz.
@@ -271,8 +271,8 @@ func buildTestNTELF(t *testing.T) ([]byte, *apePEInfo) {
 	}
 }
 
-// checkCosmoPEInvariants parses an APE with debug/pe and asserts the
-// real amd64 header shape for the buildTestNTELF payload: sections
+// checkCosmoPEInvariants parses an APE with debug/pe. It asserts the
+// real amd64 header shape for the buildTestNTELF payload. Sections
 // mirroring the PT_LOADs (with the ELF-header page skipped and BSS as
 // VirtualSize > SizeOfRawData), the entry inside .text, the fixed
 // optional-header parameters, and the kernel32 import set.
@@ -397,10 +397,10 @@ func TestPECosmoHeaderStructure(t *testing.T) {
 	checkCosmoPEInvariants(t, bin)
 }
 
-// TestAPEFatPETransplant runs the full fat chain: a thin APE with the
+// TestAPEFatPETransplant runs the full fat chain. A thin APE with the
 // real PE header is re-ingested by payloadFromAPEOrELF (capturing its
-// head), merged with an arm64 payload, and the fat output must carry
-// the thin header region byte for byte - valid as-is, since the amd64
+// head), merged with an arm64 payload, and the fat output must carry.
+// The thin header region byte for byte - valid as-is, since the amd64
 // image lands at the same file offset with identical bytes.
 func TestAPEFatPETransplant(t *testing.T) {
 	elf, info := buildTestNTELF(t)

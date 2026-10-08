@@ -1,14 +1,14 @@
 // Copyright The Go Authors. All rights reserved. Use of this source code is
 // governed by a BSD-style license that can be found in the LICENSE file.
 
-// Package gendep completes a fetched module: it runs the module's own
+// Package gendep completes a fetched module. It runs the module's own
 // go:generate directives once, over the whole module, and adds what they
 // wrote to the extracted tree.
 //
 // A module zip carries no generated file, and a submodule's contents are not
 // in it either. So a dependency that generates part of its own API ships a
-// package the compiler reads as empty, and every consumer fails on a symbol
-// that the package's source never declares.
+// package the compiler reads as empty. Every consumer fails on a symbol that
+// the package's source never declares.
 package gendep
 
 import (
@@ -36,7 +36,7 @@ const generatePrefix = "//go:generate"
 
 // Complete runs the generate directives of the module extracted at modroot, with the module's path mod, and adds the files they wrote into modroot. It answers the added files, in slash form relative to modroot and sorted, or nothing when the module carries no directive at all.
 //
-// Each package that carries a directive generates on its own, in path order. A directive that fails stops the build. The module asked for that file, so a build that continues without it is compiling a module nobody wrote. What it reports is the symbol the missing file defines, named at the first line that uses it, which is nowhere near the generator that never ran.
+// Each package that carries a directive generates on its own, in path order. A directive that fails stops the build. The module asked for that file, so a build that continues without it is compiling a module nobody wrote. What it reports is the symbol the missing file defines, named at the first line that uses it. This is nowhere near the generator that never ran.
 //
 // Directives are the exception, and the answer is partial when either is skipped. One names a program this machine lacks. The other writes into a submodule's directory, which no zip of the parent carries. A partial answer is short a file the module's own repository has, so a caller keeps it out of any store the fleet reads.
 func Complete(modroot, mod string, pkgs []string) (added []string, partial bool, err error) {
@@ -172,7 +172,7 @@ func additions(modroot, stage string) ([]string, error) {
 // the module's own, so every machine generates in the same order.
 //
 // An empty answer means the module needs nothing, and a caller asks before it
-// reaches for anything else: a module with no directive costs a build only
+// reaches for anything else. A module with no directive costs a build only
 // this scan.
 //
 // A nested module is skipped. It is its own module, with its own zip, and `go
@@ -223,8 +223,8 @@ func Packages(modroot string) []string {
 //
 // Which directives a module has is decided by the module's own bytes and by
 // nothing else. A count that also asked what this machine has installed would
-// make one module version mean different things, and both would be stored
-// under the key the whole fleet reads.
+// make one module version mean different things. Both would be stored under
+// the key the whole fleet reads.
 func directives(files []string) int {
 	count := 0
 	for _, file := range files {
@@ -253,7 +253,7 @@ func directives(files []string) int {
 
 // generatorNotShipped answers the path a directive of pkg names that the module does not carry, or "" when every path it names is present.
 //
-// The go command drops a directory whose name opens with an underscore from a module zip, so a generator kept beside the package it writes reaches no consumer. testify ships one at _codegen. Running the directive is impossible for anyone who fetched the module, so the module ships what that directive writes as well, and a consumer needs nothing from it.
+// The go command drops a directory whose name opens with an underscore from a module zip. A generator kept beside the package it writes reaches no consumer. testify ships one at _codegen. Running the directive is impossible for anyone who fetched the module. The module ships what that directive writes as well, and a consumer needs nothing from it.
 //
 // This asks what the module carries rather than what a run did. A directive that CAN run and fails is the module's own defect, and it stops the build.
 func generatorNotShipped(stage, pkg string) string {
@@ -345,7 +345,7 @@ func programMissing(err error) bool {
 // wroteNowhere answers the path a failed generator could not open because a
 // directory above it is absent from the staged copy, or "". The go command
 // leaves a submodule's whole directory out of the parent's zip, so a directive
-// that writes into one reports exactly this, on every machine, for every
+// that writes into one reports exactly. This, on every machine, for every
 // consumer of that module version.
 //
 // The generator's own message supplies the candidate and the staged tree
@@ -415,8 +415,8 @@ func giveGoMod(stage, mod string) (bool, error) {
 // this exists for.
 //
 // Every directive runs. There is no -skip: what a module generates is the
-// module's own business, and a machine that cannot run one of its directives is
-// a machine to fix.
+// module's own business. A machine that cannot run one of its directives is a
+// machine to fix.
 func runGenerate(root, pkg string) error {
 	goCmd, err := base.GoCommand()
 	if err != nil {

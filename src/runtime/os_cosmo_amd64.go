@@ -71,8 +71,8 @@ func cosmo_xlat_oflags_dx()
 // cosmoXlatErrno is the Go-callable form of cosmo_xlat_errno_ax (sys_cosmo_amd64.s), so a test can pin the table.
 func cosmoXlatErrno(e uint32) uint32
 
-// cosmoDarwinNumCPU reads hw.ncpu through raw XNU __sysctl. amd64 has no Syslib and so cannot call sysctlbyname the way arm64 does, but the numeric MIB needs no name lookup: the syscall number and both MIB constants come from this tree
-// (syscall/zsysnum_darwin_amd64.go and os_darwin.go's own getCPUCount).
+// cosmoDarwinNumCPU reads hw.ncpu through raw XNU __sysctl. amd64 has no
+// Syslib and so cannot call sysctlbyname the way arm64 does.
 func cosmoDarwinNumCPU() int32 {
 	mib := [2]uint32{_CTL_HW, _HW_NCPU}
 	out := uint32(0)

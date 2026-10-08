@@ -13,7 +13,7 @@ import (
 )
 
 // TestWasmThreadsRunOnNewM exercises the GOWASM=threads thread-creation path
-// end to end under the test runner: newosproc hands an M to a pool worker
+// end to end under the test runner. Newosproc hands an M to a pool worker
 // (spawned by wasm_exec_node.js), real Go code runs on it, and heap, channels
 // and mutexes are coherent across the Ms.
 //

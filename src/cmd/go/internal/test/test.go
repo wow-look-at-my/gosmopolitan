@@ -627,6 +627,13 @@ var (
 	testODir = false
 )
 
+// testInterruptGrace is how long a running test binary gets to finish what an
+// interrupt started before the command stops it. A binary that handles the
+// interrupt, such as a fuzz target, reports its result within this; one that
+// only catches the signal without ending is stopped, so the command exits with
+// the interrupt instead of waiting out the test timeout.
+const testInterruptGrace = 5 * time.Second
+
 // testProfile returns the name of an arbitrary single-package profiling flag
 // that is set, if any.
 func testProfile() string {
@@ -715,6 +722,11 @@ var defaultVetFlags = []string{
 }
 
 func runTest(ctx context.Context, cmd *base.Command, args []string) {
+	// The handler that turns an interrupt into a nonzero exit must be in
+	// place before any work, because a run whose results all come from the
+	// cache starts no test binary, and the per-test install below is
+	// unreachable then.
+	base.StartSigHandlers()
 	moduleLoader := modload.NewLoader()
 	pkgArgs, testArgs = testFlags(args)
 	moduleLoader.InitWorkfile() // The test command does custom flag processing; initialize workspaces after that.
@@ -1987,7 +1999,33 @@ func (r *runTestActor) Act(b *work.Builder, ctx context.Context, a *work.Action)
 
 		base.StartSigHandlers()
 		t0 = time.Now()
-		err = cmd.Run()
+		if err = cmd.Start(); err != nil {
+			// No process to watch; like Run, report the start failure.
+		} else {
+			// A test binary can take the interrupt for itself -- a package's
+			// signal test does -- and then outlive it. Give it the moment it
+			// needs to finish what the signal started, then stop it, so the
+			// command exits with the interrupt instead of waiting out the
+			// test timeout.
+			started := cmd.Process
+			interrupted := make(chan struct{})
+			go func() {
+				select {
+				case <-base.Interrupted:
+				case <-interrupted:
+					return
+				}
+				timer := time.NewTimer(testInterruptGrace)
+				defer timer.Stop()
+				select {
+				case <-interrupted:
+				case <-timer.C:
+					started.Kill()
+				}
+			}()
+			err = cmd.Wait()
+			close(interrupted)
+		}
 
 		if !base.IsETXTBSY(err) {
 			// We didn't hit the race in #22315, so there is no reason to retry the

@@ -3,7 +3,8 @@
 
 // Embedstd writes the blob a go binary carries its standard library in:
 // the compiled archive of every standard package for cosmo/amd64,
-// cosmo/arm64, js/wasm and wasip1/wasm, the assembly headers under pkg/include, and a manifest per
+// cosmo/arm64, js/wasm and wasip1/wasm. The assembly headers under
+// pkg/include, and a manifest per
 // target naming each package, its imports and its build ID. The linker's
 // -apeappend flag puts the blob past an APE's load span, and
 // internal/cosmo/embedded reads it back. The go command running it, from
@@ -142,7 +143,7 @@ func Main(args []string) int {
 
 // addHeaders puts the assembly headers of the go command into the blob.
 //
-// A go command that carries its own standard library has no GOROOT directory:
+// A go command that carries its own standard library has no GOROOT directory.
 // GOROOT names the executable, and pkg/include is an entry of the blob that
 // executable carries. This tool runs inside that executable, so its own blob
 // is where those headers come from. A go command with a GOROOT on disk keeps
@@ -261,7 +262,7 @@ func listStd(goCmd []string, goos, goarch string, cgo bool) []listed {
 
 // canonicalArchive answers the archive with a build ID derived from its own
 // bytes, and that ID. The go command stamps an archive with an ID that hashes
-// the compiler binary, so compilers of one source stamp IDs into the same
+// the compiler binary, so compilers of one source stamp IDs. Into the same
 // object code. A blob built by each compiler in turn must converge, so the ID
 // the blob carries names the content alone.
 func canonicalArchive(pkg listed, archive []byte) ([]byte, string) {
@@ -283,7 +284,7 @@ func canonicalArchive(pkg listed, archive []byte) ([]byte, string) {
 	return archive, canonical
 }
 
-// contentID spells hash in the shape of id: the same number of parts, each of
+// contentID spells hash in the shape of id. The same number of parts, each of
 // the same length, so the rewrite fits the bytes it replaces.
 func contentID(id string, hash [32]byte) string {
 	word := buildid.HashToString(hash)

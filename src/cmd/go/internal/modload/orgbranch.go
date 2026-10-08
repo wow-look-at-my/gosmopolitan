@@ -93,7 +93,7 @@ func orgMainDir(ld *Loader) string {
 }
 
 // gitCheckedOutBranch returns the branch checked out in the git repository
-// containing dir, or "" if there is none: dir is not in a repository, git is
+// containing dir, or "" if there is none. Dir is not in a repository, git is
 // not installed, or HEAD is detached.
 func gitCheckedOutBranch(dir string) string {
 	cmd := exec.Command("git", "-C", dir, "rev-parse", "--abbrev-ref", "HEAD")
@@ -131,7 +131,7 @@ func orgVersion(ld *Loader, ctx context.Context, path string) (string, error) {
 			// Nothing answers for that branch, so the default branch is next.
 			return orgBranchVersion(ld, ctx, path, orgDefaultRev)
 		}
-		return orgmod.Version(ctx, orgmod.CIBuild(), orgmod.CurrentRunLock, path, branch, resolve)
+		return orgmod.Version(ctx, orgmod.RunLocked(), orgmod.NamedRun(), orgmod.CurrentRunLock, path, branch, resolve)
 	})
 }
 
@@ -139,7 +139,7 @@ func orgVersion(ld *Loader, ctx context.Context, path string) (string, error) {
 // publishes path.
 //
 // The repository is asked before the proxy for a named branch. Query reads a
-// version-shaped revision as a version query: a branch named v1 resolves to the
+// version-shaped revision as a version query. A branch named v1 resolves to the
 // newest v1 tag, or to the default branch where there is none, and never to the
 // branch. Stat resolves a revision and has no such reading.
 func orgBranchVersion(ld *Loader, ctx context.Context, path, branch string) (string, error) {
