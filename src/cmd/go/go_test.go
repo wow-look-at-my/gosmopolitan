@@ -2304,8 +2304,10 @@ func TestTestCache(t *testing.T) {
 	tg.tempFile("src/p1/p1.go", "package p1\nvar X = 02\n")
 	tg.run("test", "-p=1", "-x", "-v", "-short", "t/...")
 
-	// p2 should have been rebuilt.
-	tg.grepStderr(`([\\/]compile|gccgo).*p2.go`, "did not recompile p2")
+	// p1 is recompiled. A variable's initial value is code, not export data,
+	// so nothing that imports p1 compiles differently, and none recompiles.
+	tg.grepStderr(`([\\/]compile|gccgo).*p1.go`, "did not recompile p1")
+	tg.grepStderrNot(`([\\/]compile|gccgo).*p2.go`, "incorrectly recompiled p2")
 
 	// The four packages share one test binary, named for the first of them,
 	// so the change links that binary once.
@@ -2319,15 +2321,16 @@ func TestTestCache(t *testing.T) {
 	tg.grepStderrNot(`t1\.test.*-test.short`, "incorrectly reran t1_test")
 	tg.grepStdout(`ok  \tt/t1\t\(cached\)`, "did not cache t/t1")
 
-	// t2 imports p1 and must be rebuilt, but its tests never reach p1.X, so
-	// the code they run is what it was and the result still comes from the
-	// cache.
-	tg.grepStderr(`([\\/]compile|gccgo).*t2_test.go`, "did not recompile t2")
+	// t2 imports p1, whose export data is unchanged, so t2 is not
+	// recompiled. Its tests never reach p1.X, so the code they run is what it
+	// was and the result still comes from the cache.
+	tg.grepStderrNot(`([\\/]compile|gccgo).*t2_test.go`, "incorrectly recompiled t2")
 	tg.grepStderrNot(`t2\.test.*-test.short`, "incorrectly reran t2_test")
 	tg.grepStdout(`ok  \tt/t2\t\(cached\)`, "did not cache t/t2")
 
-	// t3 imports p1, and changing X changes what t3's tests do.
-	tg.grepStderr(`([\\/]compile|gccgo).*t3_test.go`, "did not recompile t3")
+	// t3 compiles as it did, but its tests read p1.X, so the code they run
+	// changed and they run again.
+	tg.grepStderrNot(`([\\/]compile|gccgo).*t3_test.go`, "incorrectly recompiled t3")
 	tg.grepStderr(`t3\.test.*-test.short`, "did not rerun t3_test")
 	tg.grepStdoutNot(`ok  \tt/t3\t\(cached\)`, "reported cached t3_test result")
 	tg.grepStdout(`t3_test.go:6: 2`, "t3_test did not see the new p1.X")

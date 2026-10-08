@@ -495,6 +495,30 @@ func pthread_cond_signal(c *pthreadcond) int32 {
 }
 func pthread_cond_signal_trampoline()
 
+// ulock_wait sleeps while the 32-bit word at addr equals value, for at
+// most timeout microseconds, 0 meaning no limit.
+//
+//go:nosplit
+//go:cgo_unsafe_args
+func ulock_wait(operation uint32, addr unsafe.Pointer, value uint64, timeout uint32) int32 {
+	ret := libcCall(unsafe.Pointer(abi.FuncPCABI0(ulock_wait_trampoline)), unsafe.Pointer(&operation))
+	KeepAlive(addr)
+	return ret
+}
+func ulock_wait_trampoline()
+
+// ulock_wake wakes threads sleeping in ulock_wait on addr. It is a system
+// call, safe in a signal handler.
+//
+//go:nosplit
+//go:cgo_unsafe_args
+func ulock_wake(operation uint32, addr unsafe.Pointer, wakeValue uint64) int32 {
+	ret := libcCall(unsafe.Pointer(abi.FuncPCABI0(ulock_wake_trampoline)), unsafe.Pointer(&operation))
+	KeepAlive(addr)
+	return ret
+}
+func ulock_wake_trampoline()
+
 //go:nosplit
 //go:cgo_unsafe_args
 func arc4random_buf(p unsafe.Pointer, n int32) {
@@ -624,6 +648,8 @@ func proc_regionfilename_trampoline()
 //go:cgo_import_dynamic libc_pthread_cond_wait pthread_cond_wait "/usr/lib/libSystem.B.dylib"
 //go:cgo_import_dynamic libc_pthread_cond_timedwait_relative_np pthread_cond_timedwait_relative_np "/usr/lib/libSystem.B.dylib"
 //go:cgo_import_dynamic libc_pthread_cond_signal pthread_cond_signal "/usr/lib/libSystem.B.dylib"
+//go:cgo_import_dynamic libc___ulock_wait __ulock_wait "/usr/lib/libSystem.B.dylib"
+//go:cgo_import_dynamic libc___ulock_wake __ulock_wake "/usr/lib/libSystem.B.dylib"
 //go:cgo_import_dynamic libc_arc4random_buf arc4random_buf "/usr/lib/libSystem.B.dylib"
 
 //go:cgo_import_dynamic libc_notify_is_valid_token notify_is_valid_token "/usr/lib/libSystem.B.dylib"

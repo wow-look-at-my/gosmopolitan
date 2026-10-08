@@ -9,6 +9,7 @@ import (
 	"internal/bytealg"
 	"internal/godebug"
 	"internal/stringslite"
+	"internal/testlog"
 	"io/fs"
 	"os"
 	"runtime"
@@ -283,6 +284,9 @@ func (c *conf) lookupOrder(r *Resolver, hostname string) (ret hostLookupOrder, d
 	// than fallbackOrder to use the Go resolver with that order.
 
 	dnsConf = getSystemDNSConfig()
+	if dnsConf.path != "" {
+		testlog.Lookup("resolvorder", dnsConf.path, "")
+	}
 
 	if canUseCgo && dnsConf.err != nil && !errors.Is(dnsConf.err, fs.ErrNotExist) && !errors.Is(dnsConf.err, fs.ErrPermission) {
 		// We can't read the resolv.conf file, so use cgo if we can.
