@@ -442,6 +442,12 @@ func (log *recordedLog) Getenv(key string) { log.events = append(log.events, "ge
 func (log *recordedLog) Stat(file string)  { log.events = append(log.events, "stat "+file) }
 func (log *recordedLog) Open(file string)  { log.events = append(log.events, "open "+file) }
 func (log *recordedLog) Chdir(dir string)  { log.events = append(log.events, "chdir "+dir) }
+func (log *recordedLog) Parse(op, file string) {
+	log.events = append(log.events, "parse "+op+" "+file)
+}
+func (log *recordedLog) Lookup(kind, file, query string) {
+	log.events = append(log.events, "lookup "+kind+" "+file+" "+query)
+}
 
 func TestTakeForkLogRecordsWhatTheChildRead(t *T) {
 	scratch := t.TempDir()
