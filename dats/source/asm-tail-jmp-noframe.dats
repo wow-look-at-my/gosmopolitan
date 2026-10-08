@@ -1,7 +1,7 @@
 # The assembler frames any calling TEXT that is not NOFRAME, and a tail JMP
-# never pops that frame. runtime.write1 shipped the shape: its NT branch
+# never pops that frame. runtime.write1 shipped the shape. Its NT branch
 # jumped into ntwrite1tramp over a stray PUSHQ BP, so the trampoline returned
-# through the caller's frame pointer and every runtime print on NT died.
+# through the caller's frame pointer. Every runtime print on NT died.
 tests:
 	- desc: no framed cosmo TEXT tail-jumps to another symbol
 	  cmd: dats/source/asm-tail-jmp-noframe.sh .

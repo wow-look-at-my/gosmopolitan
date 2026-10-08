@@ -23,13 +23,13 @@ import (
 
 // A module zip carries no generated file, and a submodule's contents are not
 // in it either. So a dependency that generates part of its own API ships a
-// package the compiler reads as empty, and every consumer fails on a symbol
-// that the package's source never declares.
+// package the compiler reads as empty. Every consumer fails on a symbol that
+// the package's source never declares.
 //
 // Complete, in complete.go, runs a module's directives over the whole module
 // when the module is fetched. Dir is the loader's path for a package that
 // reaches it without its module completed: that one package is generated in a
-// sandbox, and the compiler reads the tree the generator left.
+// sandbox. The compiler reads the tree the generator left.
 
 // Dir answers the directory to read a package from: the copy carrying its
 // generated files, or dir unchanged.
@@ -132,8 +132,8 @@ func generateRoot() string {
 // modroot. modfetch records a checksum for the completed directory beside the
 // module's own downloads, and that file is the answer both paths read.
 //
-// The name under the module cache is the escaped path the fetch wrote, so
-// this reads it as it stands rather than escaping one of its own.
+// The name under the module cache is the escaped path the fetch wrote.
+// This reads it as it stands rather than escaping one of its own.
 func completed(modroot string) bool {
 	rel, err := filepath.Rel(cfg.GOMODCACHE, modroot)
 	if err != nil {
@@ -149,7 +149,7 @@ func completed(modroot string) bool {
 }
 
 // modPath answers the module path of the extracted module at modroot. It
-// answers "" for a directory the module cache does not name that way, and
+// answers "" for a directory the module cache does not name that way.
 // Allowed then reads the go.mod alone, which grants nothing on its own.
 func modPath(modroot string) string {
 	rel, err := filepath.Rel(cfg.GOMODCACHE, modroot)
@@ -221,7 +221,7 @@ func generateModule(modroot, pkgrel string) (string, error) {
 		}
 		return "", err
 	}
-	// The tree carries what the module and its generators wrote, so the go.mod
+	// The tree carries what the module. Its generators wrote, so the go.mod
 	// written to make the stage a main module does not reach it.
 	if synthesized {
 		if err := os.Remove(filepath.Join(stage, "go.mod")); err != nil {
@@ -245,7 +245,7 @@ func generateModule(modroot, pkgrel string) (string, error) {
 // publishGenerated moves what a generator did in stage into root, the tree
 // builds read. The first package of a module becomes root whole. A later one
 // brings only the files its generator wrote, changed or removed relative to
-// the fetched module in modroot, so the packages already generated into root
+// the fetched module in modroot. The packages already generated into root
 // keep what they have.
 func publishGenerated(modroot, stage, root string) error {
 	_, err := os.Stat(root)
@@ -371,7 +371,7 @@ func sameContent(path, base string) (bool, error) {
 	}
 }
 
-// placeFile copies src over dst by renaming a finished copy into place, so a
+// placeFile copies src over dst by renaming a finished copy into place. A
 // build reading dst sees either the file or the new one and never a part.
 func placeFile(src, dst string) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o777); err != nil {

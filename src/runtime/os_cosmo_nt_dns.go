@@ -17,8 +17,7 @@ import (
 // every lookup goes to localhost, where nothing answers.
 
 // FIXED_INFO and IP_ADDR_STRING, win64. Spelled as the sum of the members
-// rather than as a total, because a total is a number nobody can check;
-// dns_cosmo_nt_test.go pins the sums against the layout iphlpapi writes.
+// rather than as a total, because a total is a number nobody can check.
 const (
 	// FIXED_INFO opens with name buffers, then the CurrentDnsServer pointer, then DnsServerList inline.
 	_NT_HOSTNAME_FIELD      = 128 + 4

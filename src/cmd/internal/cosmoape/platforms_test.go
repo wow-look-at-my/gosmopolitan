@@ -12,7 +12,7 @@ import (
 // TestPlatformTableIsClosed pins the whole platform table, and
 // windows/arm64's absence in particular.
 //
-// os_cosmo_nt_arm64.go answers every entry point with a throw, which is
+// os_cosmo_nt_arm64.go answers every entry point with a throw. This is
 // safe only because no APE this toolchain emits starts on that host.
 // Adding the row without the runtime turns those throws into a crash in
 // the scheduler. If this test stopped you, that is the work it asks for.

@@ -1,9 +1,9 @@
 // apeld: boot an APE from a memfd on Linux. Freestanding, raw syscalls only.
 //
-// The APE's program headers hold absolute file offsets, so the whole file
-// is copied into a memfd and only the first many bytes change: the
-// payload's own ELF header, with e_phoff rebased to the payload's file
-// offset. The kernel then execs the memfd directly. Nothing touches the disk.
+// The APE's program headers hold absolute file offsets. The whole file is
+// copied into a memfd. Only the first many bytes change: the payload's own
+// ELF header, with e_phoff rebased to the payload's file offset. The kernel
+// then execs the memfd directly. Nothing touches the disk.
 //
 // The host arch selects the payload. This binary is compiled per arch, so
 // the selector is a compile-time constant.
@@ -84,7 +84,7 @@ __attribute__((noreturn, used)) static void run(i64 argc, char **argv) {
 
 	// -u removes this loader's own file before anything else. A caller that
 	// unpacked a throwaway copy passes it, so an APE leaves no second file on
-	// the host. It is argv and not an environment variable on purpose: an
+	// the host. It is argv and not an environment variable on purpose. An
 	// environment variable reaches the payload, and a nested run could then
 	// delete a loader somebody installed.
 	if (argc > 2 && argv[1][0] == '-' && argv[1][1] == 'u' && argv[1][2] == 0) {

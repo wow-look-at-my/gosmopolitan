@@ -7,7 +7,7 @@
 // modifications specific to the Go distribution. Please consider
 // upstreaming any modifications to these packages.
 
-package main
+package pprof
 
 import (
 	"crypto/tls"
@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"cmd/internal/disasm"
+	"cmd/internal/objabi"
 	"cmd/internal/objfile"
 	"cmd/internal/telemetry/counter"
 
@@ -32,7 +33,10 @@ import (
 	"github.com/google/pprof/profile"
 )
 
-func main() {
+// Main runs pprof with args, the command line after the program name, and
+// answers its exit status.
+func Main(args []string) int {
+	objabi.Enter("pprof", args, nil)
 	counter.Open()
 	counter.Inc("pprof/invocations")
 	options := &driver.Options{
@@ -44,8 +48,9 @@ func main() {
 	counter.CountFlags("pprof/flag:", *flag.CommandLine) // pprof will use the flag package as its default
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
-		os.Exit(2)
+		return 2
 	}
+	return 0
 }
 
 type fetcher struct {

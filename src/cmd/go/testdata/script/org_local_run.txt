@@ -1,0 +1,136 @@
+# A local build that names a run in GOSMOPOLITAN_RUN locks each org module head
+# the first go command of the run resolves. Every later go command of the same
+# run builds that version instead of resolving its own head, which is what makes
+# a build of many go commands pay for each ls-remote once. A new run resolves
+# the head again, so a commit that lands between runs is picked up.
+#
+# This needs no CI: the run name alone selects the lock. The store is named too,
+# here as a directory, so the test leaves nothing in the user cache.
+
+[short] skip 'constructs local git repositories'
+[!git] skip
+
+env GIT_CONFIG_GLOBAL=$WORK${/}home${/}gopher${/}.gitconfig
+env HOME=$WORK${/}home${/}gopher
+env GIT_ALLOW_PROTOCOL=file
+env GOPRIVATE=github.com/wow-look-at-my
+[!GOOS:windows] exec git config --global 'url.file://'$WORK'/alpha.insteadOf' 'https://github.com/wow-look-at-my/alpha'
+[GOOS:windows]  exec git config --global 'url.file:///'$WORK'/alpha.insteadOf' 'https://github.com/wow-look-at-my/alpha'
+
+env GIT_AUTHOR_NAME='Go Gopher'
+env GIT_AUTHOR_EMAIL='gopher@golang.org'
+env GIT_COMMITTER_NAME=$GIT_AUTHOR_NAME
+env GIT_COMMITTER_EMAIL=$GIT_AUTHOR_EMAIL
+
+# No CI: the run name, not GITHUB_ACTIONS, is what locks the heads.
+env GITHUB_ACTIONS=
+env GITHUB_REPOSITORY=
+env GITHUB_RUN_ID=
+env GITHUB_RUN_ATTEMPT=
+env GOSMOPOLITAN_RUN=wow-look-at-my/consumer/4242/1
+[!GOOS:windows] env LOCKS=file://$WORK/locks
+[GOOS:windows]  env LOCKS=file:///$WORK/locks
+env GOSMOPOLITAN_RUN_LOCK_STORE=$LOCKS
+
+cd $WORK/alpha
+exec git init
+env GIT_AUTHOR_DATE=2026-01-02T03:04:05Z
+env GIT_COMMITTER_DATE=2026-01-02T03:04:05Z
+exec git add -A
+exec git commit -m 'alpha main'
+exec git branch -m main
+
+# The first go command of the run resolves the head and locks it.
+cd $WORK/m
+go run .
+stdout '^alpha-main$'
+exists $WORK/locks
+
+# alpha moves while the run is under way.
+cd $WORK/alpha
+cp $WORK${/}alpha-next${/}alpha.go alpha.go
+env GIT_AUTHOR_DATE=2026-01-03T04:05:06Z
+env GIT_COMMITTER_DATE=2026-01-03T04:05:06Z
+exec git commit -am 'alpha next'
+
+# Another go command of the same run builds the locked version, not the new head.
+cd $WORK/m2
+go run .
+stdout '^alpha-main$'
+
+# A new run resolves the head again and picks up the move.
+env GOSMOPOLITAN_RUN=wow-look-at-my/consumer/9999/1
+cd $WORK/m3
+go run .
+stdout '^alpha-next$'
+
+-- $WORK/home/gopher/.gitconfig --
+[user]
+	name = Go Gopher
+	email = gopher@golang.org
+-- $WORK/alpha/go.mod --
+module github.com/wow-look-at-my/alpha
+
+go 1.21
+-- $WORK/alpha/alpha.go --
+package alpha
+
+func Name() string { return "alpha-main" }
+-- $WORK/alpha-next/alpha.go --
+package alpha
+
+func Name() string { return "alpha-next" }
+-- $WORK/m/go.mod --
+module example.com/consumer
+
+go 1.21
+
+require github.com/wow-look-at-my/alpha v0.0.0
+-- $WORK/m/main.go --
+package main
+
+import (
+	"fmt"
+
+	"github.com/wow-look-at-my/alpha"
+)
+
+func main() {
+	fmt.Println(alpha.Name())
+}
+-- $WORK/m2/go.mod --
+module example.com/consumer
+
+go 1.21
+
+require github.com/wow-look-at-my/alpha v0.0.0
+-- $WORK/m2/main.go --
+package main
+
+import (
+	"fmt"
+
+	"github.com/wow-look-at-my/alpha"
+)
+
+func main() {
+	fmt.Println(alpha.Name())
+}
+-- $WORK/m3/go.mod --
+module example.com/consumer
+
+go 1.21
+
+require github.com/wow-look-at-my/alpha v0.0.0
+-- $WORK/m3/main.go --
+package main
+
+import (
+	"fmt"
+
+	"github.com/wow-look-at-my/alpha"
+)
+
+func main() {
+	fmt.Println(alpha.Name())
+}

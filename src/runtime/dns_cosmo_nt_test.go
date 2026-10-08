@@ -11,7 +11,7 @@ import (
 )
 
 // The DNS server list is read by walking raw offsets into a buffer iphlpapi
-// filled, and a wrong offset reads plausible garbage rather than failing: the
+// filled. A wrong offset reads plausible garbage rather than failing. The
 // walk would hand net a nameserver that is not one, on the host where net has
 // no other source. Only a Windows host executes it, so these are the numbers
 // documented for win64, pinned.

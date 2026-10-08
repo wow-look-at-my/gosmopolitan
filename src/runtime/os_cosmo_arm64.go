@@ -286,9 +286,8 @@ var cosmoDarwinKillFn uintptr
 // cosmoDarwinSysctlFn is Apple libc sysctl, the MIB-ARRAY form, resolved at startup.
 var cosmoDarwinSysctlFn uintptr
 
-// cosmoDarwinSysctlCall calls Apple's sysctl(3) with a numeric MIB.
-// Plain integer arguments, so the ordinary call works: sysctl is not
-// variadic.
+// cosmoDarwinSysctlCall calls Apple's sysctl(3) with a numeric MIB. Plain
+// integer arguments, so the ordinary call works: sysctl is not variadic.
 func cosmoDarwinSysctlCall(mib *uint32, miblen uint32, old unsafe.Pointer, oldlen *uintptr, newp unsafe.Pointer, newlen uintptr) int32 {
 	if cosmoDarwinSysctlFn == 0 {
 		return -1
@@ -423,10 +422,8 @@ func cosmoSyslibGetentropy() uintptr {
 	return lib.getentropy
 }
 
-// cosmoCheckSyslib dies with a clear message if the APE loader's Syslib is
-// older than what this runtime needs, instead of reading past the end of a
-// shorter struct (undefined behavior with confusing crashes). Runs from
-// osinit, before anything else touches version-dependent fields.
+// cosmoCheckSyslib dies with a clear message. This happens if the APE loader's Syslib is older than what this runtime needs, instead of reading past the end of a shorter struct (undefined behavior with confusing crashes). Runs from osinit, before
+// anything else touches version-dependent fields.
 func cosmoCheckSyslib() {
 	lib := __syslib
 	if lib != nil && lib.magic == _SYSLIB_MAGIC && lib.version >= _SYSLIB_MIN_VERSION {
@@ -442,10 +439,10 @@ func mstart_stub_cosmo()
 // pipe2 creates a pipe with the given Linux O_NONBLOCK/O_CLOEXEC flags. On
 // Linux hosts it is the pipe2 syscall. macOS has no pipe2 and the Syslib's
 // pipe takes no flags, so the flags are applied with fcntl afterwards (the
-// darwin dispatcher translates cmd/arg encodings). If fcntl is unavailable
-// and flags were requested, fail with ENOSYS instead of silently returning
-// descriptors without the requested semantics - runtime users
-// (nonblockingPipe for the netpoller) depend on the flags being set.
+// darwin dispatcher translates cmd/arg encodings). Fail with ENOSYS instead
+// of silently returning descriptors without the requested semantics - runtime
+// users (nonblockingPipe for the netpoller) depend on the flags being set. Do
+// this if fcntl is unavailable and flags were requested.
 func pipe2(flags int32) (r, w int32, errno int32) {
 	if !isdarwin() {
 		return pipe2Linux(flags)
