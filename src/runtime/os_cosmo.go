@@ -269,27 +269,17 @@ func sysargs(argc int32, argv **byte) {
 		physPageSize = 0x1000
 		return
 	}
+	if isdarwin() {
+		// Darwin hands the process no auxv, and /proc is a Linux path.
+		probePageSize()
+		publishDarwinAuxv()
+		return
+	}
 	// Fall back to /proc/self/auxv.
 	fd := open(&procAuxv[0], 0 /* O_RDONLY */, 0)
 	if fd < 0 {
-		// On some platforms, /proc might not be available. Try to detect page size using mincore.
-		const size = 256 << 10
-		p, err := mmap(nil, size, _PROT_READ|_PROT_WRITE, _MAP_ANON|_MAP_PRIVATE, -1, 0)
-		if err != 0 {
-			return
-		}
-		var n uintptr
-		for n = 4 << 10; n < size; n <<= 1 {
-			err := mincore(unsafe.Pointer(uintptr(p)+n), 1, &addrspace_vec[0])
-			if err == 0 {
-				physPageSize = n
-				break
-			}
-		}
-		if physPageSize == 0 {
-			physPageSize = size
-		}
-		munmap(p, size)
+		// On some platforms, /proc might not be available.
+		probePageSize()
 		return
 	}
 
@@ -301,6 +291,35 @@ func sysargs(argc int32, argv **byte) {
 	auxvreadbuf[len(auxvreadbuf)-2] = _AT_NULL
 	pairs := sysauxv(auxvreadbuf[:])
 	auxv = auxvreadbuf[: pairs*2 : pairs*2]
+}
+
+// probePageSize measures the page size with mmap and mincore, for a host
+// that publishes no AT_PAGESZ. It leaves physPageSize alone when mmap fails.
+func probePageSize() {
+	const size = 256 << 10
+	p, err := mmap(nil, size, _PROT_READ|_PROT_WRITE, _MAP_ANON|_MAP_PRIVATE, -1, 0)
+	if err != 0 {
+		return
+	}
+	var n uintptr
+	for n = 4 << 10; n < size; n <<= 1 {
+		if mincore(unsafe.Pointer(uintptr(p)+n), 1, &addrspace_vec[0]) == 0 {
+			physPageSize = n
+			break
+		}
+	}
+	if physPageSize == 0 {
+		physPageSize = size
+	}
+	munmap(p, size)
+}
+
+// darwinauxvbuf backs the auxv published below. It is static because sysargs runs before the allocator exists.
+var darwinauxvbuf = [2]uintptr{_AT_HWCAP, 0}
+
+// publishDarwinAuxv gives a macOS host an auxv, which Darwin does not.
+func publishDarwinAuxv() {
+	auxv = darwinauxvbuf[:]
 }
 
 var secureMode bool
