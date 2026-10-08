@@ -481,7 +481,6 @@ const (
 )
 
 // appleXucredHead is the leading several bytes of Apple's struct
-// xucred: cr_version, cr_uid, cr_ngroups.
 type appleXucredHead struct {
 	Version uint32
 	Uid     uint32
