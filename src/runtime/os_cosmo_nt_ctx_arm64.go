@@ -5,7 +5,7 @@
 
 // The architecture-dependent half of the NT signal, preemption and profiling
 // machinery: the Windows CONTEXT record and the small set of operations the
-// shared code performs on it. Layout and flag value come from upstream
+// shared code. Performs on it. Layout and flag value come from upstream
 // internal/runtime/syscall/windows/defs_windows_arm64.go.
 
 package runtime

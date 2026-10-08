@@ -104,8 +104,8 @@ func TestSigactionMaskXlat(t *testing.T) {
 	}
 }
 
-// The Linux struct is a wire format: rt_sigaction's caller lays it out
-// and the emulation reads it, so a field that moves is a silent
+// The Linux struct is a wire format: rt_sigaction's caller lays it
+// out. The emulation reads it, so a field that moves is a silent
 // corruption rather than a build failure. Layout from
 // runtime.sigactiont (defs_cosmo_amd64.go, identical on arm64).
 func TestLinuxSigactionLayout(t *testing.T) {

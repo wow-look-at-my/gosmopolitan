@@ -3,11 +3,10 @@
 
 // Package vendorlist answers which packages a vendor tree vendors.
 //
-// A vendor directory in this distribution holds whole repositories,
-// checked out as git submodules, so it also carries packages nothing in
-// the distribution imports and whose own dependencies were never
-// vendored. modules.txt names the packages that are part of the build;
-// the rest is checkout residue.
+// A vendor directory in this distribution holds whole repositories, checked
+// out as git submodules. It also carries packages nothing in the distribution
+// imports and whose own dependencies were never vendored. modules.txt names
+// the packages that are part of the build; the rest is checkout residue.
 package vendorlist
 
 import (

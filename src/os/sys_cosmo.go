@@ -10,10 +10,10 @@ import (
 )
 
 // One APE runs on kernels, and each keeps the machine's name somewhere
-// else. uname's nodename answers on Linux and on NT, and a name of many
-// bytes or more arrives truncated there, so a long one is re-read from
-// the place the host publishes it in full: /proc on Linux,
-// kern.hostname on macOS, where Apple's uname leaves nodename empty.
+// else. uname's nodename answers on Linux and on NT. A name of many
+// bytes or more arrives truncated there. A long one is re-read from the
+// place the host publishes it in full: /proc on Linux, kern.hostname on
+// macOS, where Apple's uname. Leaves nodename empty.
 func hostname() (name string, err error) {
 	var un syscall.Utsname
 	var buf [512]byte // Enough for a DNS name.

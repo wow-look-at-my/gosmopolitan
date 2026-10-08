@@ -41,9 +41,9 @@ func main() { // line 20
 }
 `
 
-// TestWasmDwarf checks the DWARF embedded in a wasm module's custom sections:
-// subprogram low/high PC values must be code-section-relative byte offsets
-// matching the module's code section layout, and the line table must resolve
+// TestWasmDwarf checks the DWARF embedded in a wasm module's custom sections.
+// Subprogram low/high PC values must be code-section-relative byte offsets
+// matching the module's code section layout. The line table must resolve
 // function entries and mid-function statements to the right source lines.
 func TestWasmDwarf(t *testing.T) {
 	testenv.MustHaveGoBuild(t)

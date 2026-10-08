@@ -4,7 +4,7 @@
 
 //go:build unix || js || wasip1
 
-package main
+package test2json
 
 import (
 	"os"

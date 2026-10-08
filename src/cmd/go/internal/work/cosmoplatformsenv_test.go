@@ -5,12 +5,12 @@ package work
 
 import "testing"
 
-// Every GOCOSMO* variable reports its effective value, and cmd/go publishes
+// Every GOCOSMO* variable reports. Its effective value, and cmd/go publishes
 // each reported value back into its own environment so the tools it invokes
 // agree with it. That is only safe for a value that parses back to itself.
 // GOCOSMOPLATFORMS reports the default set when the caller chose none, which
-// parses back as a deliberate selection of exactly those -- so it is the one
-// that must be withheld.
+// parses back as a deliberate selection of exactly those -- so it is the
+// one. That one must be withheld.
 func TestOnlyGOCOSMOPLATFORMSIsWithheldFromTheEnvironment(t *testing.T) {
 	if EnvSelfPublishable(CosmoPlatformsEnv) {
 		t.Errorf("%s is published: an unset selection reads back as a choice of the default set",

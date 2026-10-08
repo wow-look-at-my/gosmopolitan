@@ -26,8 +26,8 @@ var exeOnce struct {
 
 func executable() (string, error) {
 	// Only a Linux host answers this link with a path. Cosmopolitan serves parts
-	// of procfs on the other hosts, so a success here is no proof the answer
-	// names a file, and trusting one hands back a name that opens nothing.
+	// of procfs on the other hosts. A success here is no proof the answer names
+	// a file, and trusting one hands back a name that opens nothing.
 	if runtime.CosmoHostOS() == "linux" {
 		if path, err := Readlink("/proc/self/exe"); err == nil {
 			// Readlink appends " (deleted)" for a file nothing links to.

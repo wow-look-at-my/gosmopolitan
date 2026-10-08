@@ -160,7 +160,7 @@ func wasmThreadsCurMID() int64 {
 
 // wasmThreadsIdleWorkerMs returns the number of worker Ms linked on
 // sched.midle - parked Ms that a startm can claim via mget instead of asking
-// newosproc for a fresh pool worker.
+// newosproc. For a fresh pool worker.
 func wasmThreadsIdleWorkerMs() int32 {
 	lock(&sched.lock)
 	n := sched.nmidle

@@ -64,8 +64,8 @@ func stdImportcfg(want stdBuild) (file, content string, err error) {
 }
 
 // listStd builds one std. A package that does not build under it, such as
-// runtime/cgo for a target this host has no C compiler for, is left out with a
-// comment saying why, so only a program that imports it fails, as it would
+// runtime/cgo for a target this host has no C compiler for, is left out. With
+// a comment saying why, so only a program that imports it fails, as it would
 // under the go command.
 func listStd(want stdBuild) (string, string, error) {
 	format := `{{if .Export}}packagefile {{.ImportPath}}={{.Export}}{{else if .Error}}# {{.ImportPath}}: {{printf "%q" .Error.Err}}{{end}}`

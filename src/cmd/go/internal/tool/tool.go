@@ -18,7 +18,6 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"path"
 	"slices"
 	"sort"
 	"strings"
@@ -26,7 +25,6 @@ import (
 	"cmd/go/internal/base"
 	"cmd/go/internal/cfg"
 	"cmd/go/internal/load"
-	"cmd/go/internal/modindex"
 	"cmd/go/internal/modload"
 	"cmd/go/internal/str"
 	"cmd/go/internal/work"
@@ -111,16 +109,6 @@ func runTool(ctx context.Context, cmd *base.Command, args []string) {
 				counter.Inc("go/subcommand:tool-dist")
 				return
 			}
-		}
-
-		// See if tool can be a builtin tool. If so, try to build and run it.
-		// buildAndRunBuiltinTool will fail if the install target of the loaded package is not
-		// the tool directory.
-		if tool := loadBuiltinTool(toolName); tool != "" {
-			// Increment a counter for the tool subcommand with the tool name.
-			counter.Inc("go/subcommand:tool-" + toolName)
-			buildAndRunBuiltinTool(moduleLoader, ctx, toolName, tool, args[1:])
-			return
 		}
 
 		// Try to build and run mod tool.
@@ -264,23 +252,6 @@ func defaultExecName(importPath string) string {
 	return p.DefaultExecName()
 }
 
-func loadBuiltinTool(toolName string) string {
-	if !base.ValidToolName(toolName) {
-		return ""
-	}
-	cmdTool := path.Join("cmd", toolName)
-	if !modindex.IsStandardPackage(cfg.GOROOT, cfg.BuildContext.Compiler, cmdTool) {
-		return ""
-	}
-	// Create a fake package and check to see if it would be installed to the tool directory.
-	// If not, it's not a builtin tool.
-	p := &load.Package{PackagePublic: load.PackagePublic{Name: "main", ImportPath: cmdTool, Goroot: true}}
-	if load.InstallTargetDir(p) != load.ToTool {
-		return ""
-	}
-	return cmdTool
-}
-
 func loadModTool(ld *modload.Loader, ctx context.Context, name string) string {
 	ld.InitWorkfile()
 	modload.LoadModFile(ld, ctx)
@@ -309,28 +280,6 @@ func loadModTool(ld *modload.Loader, ctx context.Context, name string) string {
 
 func builtTool(b *work.Builder, runAction *work.Action) (string, error) {
 	return b.RunnableTarget(runAction.Deps[0])
-}
-
-func buildAndRunBuiltinTool(ld *modload.Loader, ctx context.Context, toolName, tool string, args []string) {
-	// Override GOOS and GOARCH for the build to build the tool using
-	// the same GOOS and GOARCH as this go command.
-	cfg.ForceHost()
-
-	// Ignore go.mod and go.work: we don't need them, and we want to be able
-	// to run the tool even if there's an issue with the module or workspace the
-	// user happens to be in.
-	ld.RootMode = modload.NoRoot
-
-	runFunc := func(b *work.Builder, ctx context.Context, a *work.Action) error {
-		exe, err := builtTool(b, a)
-		if err != nil {
-			return err
-		}
-		cmdline := str.StringList(exe, a.Args)
-		return runBuiltTool(toolName, nil, cmdline)
-	}
-
-	buildAndRunTool(ld, ctx, tool, args, runFunc)
 }
 
 func buildAndRunModtool(ld *modload.Loader, ctx context.Context, toolName, tool string, args []string) {

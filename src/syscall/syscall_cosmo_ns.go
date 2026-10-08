@@ -6,8 +6,8 @@
 package syscall
 
 // The clone flags. GOOS=cosmo presents the Linux ABI, so a program written
-// against the linux port names these, and the linux port declares them in
-// exec_linux.go, which cosmo does not build. The values are that file's,
+// against the linux port names these, and the linux port declares them. In
+// exec_linux.go. Cosmo does not build that. The values are that file's,
 // unchanged.
 //
 // They describe namespaces only Linux has, so only a Linux host acts on
