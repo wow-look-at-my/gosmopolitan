@@ -67,6 +67,31 @@ cosmo_bind_go_tls(void)
 	cosmo_set_gs(&cosmo_go_tls[0]);
 }
 
+// cosmo_foreign_enter returns the GS base that Go reads g through. libcosmo's
+// foreign dlopen resets the thread pointer, and cosmo_foreign_leave puts the
+// base back.
+static uintptr_t
+cosmo_foreign_enter(void)
+{
+	uintptr_t base = 0;
+	long ret;
+
+	if (__hostos & (COSMO_HOST_WINDOWS | COSMO_HOST_XNU)) {
+		return 0;
+	}
+	// arch_prctl(ARCH_GET_GS, &base)
+	__asm__ volatile("syscall" : "=a"(ret) : "0"(158L), "D"(0x1004L), "S"(&base) : "rcx", "r11", "memory", "cc");
+	return ret == 0 ? base : 0;
+}
+
+static void
+cosmo_foreign_leave(uintptr_t base)
+{
+	if (base != 0) {
+		cosmo_set_gs((uintptr_t *)(base + 0x28));
+	}
+}
+
 // cosmo_host_slots fills the runtime's ntiat. The Go runtime finds every NT
 // function through GetProcAddress and LoadLibraryA.
 static void
@@ -154,6 +179,23 @@ cosmo_bind_go_tls(void)
 	__asm__ volatile("msr tpidr_el0, %0" : : "r"(tib));
 }
 
+// The helper that libcosmo's foreign dlopen loads moves TPIDR_EL0 to glibc's
+// block.
+static uintptr_t
+cosmo_foreign_enter(void)
+{
+	return 0;
+}
+
+static void
+cosmo_foreign_leave(uintptr_t base)
+{
+	(void)base;
+	if (!(__hostos & (COSMO_HOST_WINDOWS | COSMO_HOST_XNU))) {
+		cosmo_bind_go_tls();
+	}
+}
+
 // cosmo_host_slots fills the runtime's cosmoHostSlots. macOS calls go
 // through the Syslib.
 static void
@@ -238,26 +280,96 @@ void *cosmo_dlsym(void *, const char *);
 int cosmo_dlclose(void *);
 char *cosmo_dlerror(void);
 
+extern char *__program_executable_name;
+extern char **__argv;
+char *GetProgramExecutableName(void);
+char *realpath(const char *, char *);
+char *getenv(const char *);
+int access(const char *, int);
+
+static pthread_once_t cosmo_progname_once = PTHREAD_ONCE_INIT;
+static char cosmo_progname[4096];
+
+// cosmo_path_lookup finds a bare command name on PATH, as the shell did.
+static int
+cosmo_path_lookup(const char *cmd, char *out, size_t size)
+{
+	char cand[4096];
+	const char *dir = getenv("PATH");
+	while (dir != NULL && *dir != 0) {
+		const char *end = strchr(dir, ':');
+		size_t len = end != NULL ? (size_t)(end - dir) : strlen(dir);
+		size_t need = len + 1 + strlen(cmd) + 1;
+		if (len > 0 && need <= sizeof cand) {
+			memcpy(cand, dir, len);
+			cand[len] = '/';
+			strcpy(cand + len + 1, cmd);
+			if (access(cand, 1) == 0 && realpath(cand, out) != NULL)
+				return 1;
+		}
+		dir = end != NULL ? end + 1 : NULL;
+	}
+	return 0;
+}
+
+// cosmo_find_progname gives libcosmo the program's real path. An APE loader
+// execs a memfd, so /proc/self/exe names "/memfd:<name>". cosmo_dlopen stats
+// the program path, and a path that opens nothing stops it.
+static void
+cosmo_find_progname(void)
+{
+	const char *name = GetProgramExecutableName();
+	if (name != NULL && strncmp(name, "/memfd:", 7) != 0)
+		return;
+	if (__argv == NULL || __argv[0] == NULL)
+		return;
+	if (strchr(__argv[0], '/') != NULL) {
+		if (realpath(__argv[0], cosmo_progname) != NULL)
+			__program_executable_name = cosmo_progname;
+		return;
+	}
+	if (cosmo_path_lookup(__argv[0], cosmo_progname, sizeof cosmo_progname))
+		__program_executable_name = cosmo_progname;
+}
+
 void *
 __wrap_dlopen(const char *path, int mode)
 {
-	return cosmo_dlopen(path, mode);
+	uintptr_t base = cosmo_foreign_enter();
+	void *handle;
+
+	pthread_once(&cosmo_progname_once, cosmo_find_progname);
+	handle = cosmo_dlopen(path, mode);
+	cosmo_foreign_leave(base);
+	return handle;
 }
 
 void *
 __wrap_dlsym(void *handle, const char *name)
 {
-	return cosmo_dlsym(handle, name);
+	uintptr_t base = cosmo_foreign_enter();
+	void *sym = cosmo_dlsym(handle, name);
+
+	cosmo_foreign_leave(base);
+	return sym;
 }
 
 int
 __wrap_dlclose(void *handle)
 {
-	return cosmo_dlclose(handle);
+	uintptr_t base = cosmo_foreign_enter();
+	int err = cosmo_dlclose(handle);
+
+	cosmo_foreign_leave(base);
+	return err;
 }
 
 char *
 __wrap_dlerror(void)
 {
-	return cosmo_dlerror();
+	uintptr_t base = cosmo_foreign_enter();
+	char *msg = cosmo_dlerror();
+
+	cosmo_foreign_leave(base);
+	return msg;
 }
