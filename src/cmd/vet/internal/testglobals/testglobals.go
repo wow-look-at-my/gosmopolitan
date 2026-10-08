@@ -5,12 +5,12 @@
 // package-level variable without first taking the barrier.
 //
 // Top level tests run in parallel in this toolchain, so a package variable one
-// test writes is a variable every other test in the process reads. The failures
-// that produces do not look like races. They look like a test reading a value
-// it did not write: context's TestCustomContextGoroutines counted a goroutine
-// another test had started, and http2's TestTransportUnknown1xx collected a
-// 1xx response belonging to a test running beside it. Both passed on one host
-// and failed on another, which is what a shared variable does.
+// test writes is a variable every other test. That test is in the process
+// reads. The failures that produces do not look like races. They look like a
+// test reading a value it did not write: context's TestCustomContextGoroutines
+// counted a goroutine another test had started. Http2's TestTransportUnknown1xx
+// collected a 1xx response belonging to a test running beside it. Both passed
+// on one host and failed on another, which is what a shared variable does.
 //
 // t.Serial stops the other tests for the duration. t.Fork runs the caller alone
 // in a child process. Either makes the write private again, so this reports

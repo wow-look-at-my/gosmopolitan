@@ -139,7 +139,7 @@ func StartSpanArgs(ctx context.Context, name string, args map[string]any) (conte
 	return ctx, span
 }
 
-// StartNamedGoroutine puts the context on a fresh lane and labels it, so the
+// StartNamedGoroutine puts the context on a fresh lane and labels it. The
 // row reads as the worker that owns it rather than as a number.
 func StartNamedGoroutine(ctx context.Context, name string, sortIndex int) context.Context {
 	ctx = StartGoroutine(ctx)
@@ -154,7 +154,7 @@ func NameProcess(ctx context.Context, name string) {
 
 // NameProcessID labels one process group in the trace. A trace holds more
 // than one when a build runs a second go command -- the cosmo
-// sibling-architecture build -- and its events are folded in here.
+// sibling-architecture build. Its events are folded in here.
 func NameProcessID(ctx context.Context, pid uint64, name string) {
 	tc, ok := getTraceContext(ctx)
 	if !ok {

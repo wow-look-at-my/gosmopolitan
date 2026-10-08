@@ -1269,7 +1269,7 @@ TEXT runtime·cosmoXlatErrno(SB),NOSPLIT,$0-12
 	MOVL	AX, ret+8(FP)
 	RET
 
-TEXT runtime·osyield(SB),NOSPLIT,$0
+TEXT runtime·osyield(SB),NOSPLIT,$8
 	CHECK_WINDOWS(osyield_nt)
 	CHECK_DARWIN(osyield_darwin)
 	// Linux path
@@ -1277,11 +1277,11 @@ TEXT runtime·osyield(SB),NOSPLIT,$0
 	SYSCALL
 	RET
 osyield_darwin:
-	// swtch_pri(0), the mach trap Apple libc's sched_yield issues. BSD
-	// 331 is __disable_threadsignal, not a yield.
-	MOVL	$0, DI
-	MOVL	$MACH_swtch_pri, AX
-	SYSCALL
+	// usleep(1), as upstream darwin. XNU's own yield (swtch_pri) holds
+	// the caller at priority 0 for a quantum, so on a saturated host each
+	// yield costs ~10ms.
+	MOVL	$1, 0(SP)
+	CALL	runtime·usleep(SB)
 	RET
 osyield_nt:
 	// Sleep(0) yields to any ready thread. Direct win64 call;

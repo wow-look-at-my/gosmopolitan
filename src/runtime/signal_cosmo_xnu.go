@@ -29,11 +29,11 @@ type xnuSigactiont struct {
 }
 
 // It takes Apple's struct sigaction {handler, mask u32, flags i32} with APPLE
-// numbers and flag values, and libc supplies its own trampoline, which
-// invokes the handler under SA_SIGINFO and calls sigreturn. So sigtramp here
-// returns and needs no restorer. A signal with no Apple equivalent succeeds
-// as a no-op, because it cannot be generated on an XNU host and initsig stays
-// oblivious; reading one back reports SIG_DFL.
+// numbers and flag values, and libc supplies its own trampoline. This invokes
+// the handler under SA_SIGINFO and calls sigreturn. So sigtramp here returns
+// and needs no restorer. A signal with no Apple equivalent succeeds as a
+// no-op, because it cannot be generated on an XNU host and initsig stays
+// oblivious. Reading one back reports SIG_DFL.
 //
 //go:nosplit
 //go:nowritebarrierrec
@@ -169,8 +169,8 @@ func sigaltstack(new, old *stackt) {
 func sigaltstackLinux(new, old *stackt)
 
 // darwinSetitimer implements setitimer on XNU hosts. setitimer is not in the
-// Syslib, so this calls Apple libc setitimer, resolved by dlsym at startup;
-// that stub is a shallow syscall wrapper, so the direct cosmoLibcCall6 style
+// Syslib. This calls Apple libc setitimer, resolved by dlsym at startup.
+// That stub is a shallow syscall wrapper, so the direct cosmoLibcCall6 style
 // applies and no asmcgocall is needed. Apple's tv_usec is a 32-bit
 // suseconds_t where Linux arm64's is an int64, and _ITIMER_* coincides, so
 // mode passes through.

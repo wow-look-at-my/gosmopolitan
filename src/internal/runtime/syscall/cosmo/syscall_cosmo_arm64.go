@@ -347,11 +347,11 @@ func darwinCallNoError(fn uintptr) (r1, r2, errno uintptr) {
 // not handle, using dlsym-resolved Apple libc functions. It is called from
 // Syscall6's darwin path, so it must keep exactly Syscall6's signature.
 //
-// The dispatch spine and every syscall a forked child can reach are nosplit,
-// so that path never grows the stack, and the linker verifies the bound. The
+// The dispatch spine and every syscall a forked child can reach are nosplit.
+// That path never grows the stack, and the linker verifies the bound. The
 // stat family, getcwd and getrandom are deliberately NOT nosplit: nothing
-// invokes them between fork and exec, and their Apple stat buffers would blow
-// the budget.
+// invokes them between fork and exec. Their Apple stat buffers would blow the
+// budget.
 //
 //go:nosplit
 func syscall6SlowDarwin(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uintptr) {
@@ -593,7 +593,7 @@ func darwinMadvise(addr, length, advice uintptr) (r1, r2, errno uintptr) {
 
 // darwinGetcwd emulates the Linux getcwd syscall, which returns the
 // number of bytes written including the trailing NUL, on top of Apple's
-// libc getcwd, which returns the buffer pointer or NULL.
+// libc getcwd. This returns the buffer pointer or NULL.
 //
 //go:nosplit
 func darwinGetcwd(buf, size uintptr) (r1, r2, errno uintptr) {
@@ -706,7 +706,7 @@ const (
 // readdir. Apple fills the caller's buffer with Apple-layout records,
 // which are rewritten IN PLACE into Linux dirent64 records. That is
 // safe front to back: for any name length the Linux record is never
-// longer than the Apple one, so the write cursor never passes the read
+// longer than the Apple one. The write cursor never passes the read
 // cursor and no record can be truncated. Quirk: at bufsize >= 1024 the
 // kernel reserves the FINAL a few bytes for a flags word and fills at
 // most bufsize-4. Returning slightly fewer bytes per call than Linux
