@@ -22,6 +22,15 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+      - name: Print the concurrency group
+        shell: bash
+        run: |
+          echo "repo: ${{ github.repository }}"
+          echo "workflow: ${{ github.workflow }}"
+          echo "ref: ${{ github.ref }}"
+          echo "run_id: ${{ github.run_id }}"
+          echo "group: gha_${{ github.repository }}_${{ github.workflow }}_${{ github.ref != 'refs/heads/master' && github.ref || github.run_id }}"
+          echo "cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}"
       - uses: wow-look-at-my/actions@no-all-builds-job#latest
       - uses: wow-look-at-my/slopfix@master
       - uses: wow-look-at-my/actions@no-tests-in-yaml#latest
