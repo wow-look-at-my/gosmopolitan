@@ -264,13 +264,25 @@ func (r *gitRepo) githubRefs(ctx context.Context) (map[string]string, error) {
 	return nil, err
 }
 
-// githubInfoRefs reads the ref advertisement git itself fetches first.
+// githubInfoRefs reads the ref advertisement git itself fetches first. A
+// private repository refuses it until a credential is presented. Git's own
+// credential is therefore sent with the first request, not found by a refusal.
 func (r *gitRepo) githubInfoRefs(source archiveSource) (map[string]string, error) {
 	u, err := url.Parse(source.url)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := web.GetPinned(u, source.allowHost, source.credentialFor)
+	opts := source.pinOptions()
+	if opts.CredentialURL == "" && opts.Bearer == "" {
+		opts.BasicAuth = githubBasicAuth(source.url)
+	}
+	return r.readInfoRefs(u, opts)
+}
+
+// readInfoRefs fetches and parses the advertisement at u, with the credential
+// the options name. A request with no credential goes out anonymously.
+func (r *gitRepo) readInfoRefs(u *url.URL, opts web.PinOptions) (map[string]string, error) {
+	resp, err := web.GetPinnedWith(u, opts)
 	if err != nil {
 		return nil, err
 	}

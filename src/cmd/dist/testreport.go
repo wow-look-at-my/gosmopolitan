@@ -42,8 +42,18 @@ type testTimings struct {
 	lock sync.Mutex
 	all  []testTiming
 
+	// started counts the tests that announced a run, subtests included. Every entry in all ended one of them.
+	started int
+
 	// recent holds the tests that ended since the progress line last drained the buffer.
 	recent []testTiming
+}
+
+// start records that a test began.
+func (tim *testTimings) start() {
+	tim.lock.Lock()
+	defer tim.lock.Unlock()
+	tim.started++
 }
 
 func (tim *testTimings) add(pkg, test string, seconds float64) {
@@ -51,6 +61,14 @@ func (tim *testTimings) add(pkg, test string, seconds float64) {
 	defer tim.lock.Unlock()
 	tim.all = append(tim.all, testTiming{pkg, test, seconds})
 	tim.recent = append(tim.recent, testTiming{pkg, test, seconds})
+}
+
+// testCounts answers how many tests ended and how many began. A test is
+// known only once its binary runs it, so started grows as packages start.
+func (tim *testTimings) testCounts() (ended, started int) {
+	tim.lock.Lock()
+	defer tim.lock.Unlock()
+	return len(tim.all), tim.started
 }
 
 // drainRecent returns the tests that ended since the last call, slowest
@@ -191,6 +209,10 @@ func (rep *testReport) process(line []byte) {
 
 	key := evt.Package + "\t" + evt.Test
 	switch evt.Action {
+	case "run":
+		if evt.Test != "" {
+			rep.timings.start()
+		}
 	case "output":
 		if evt.Test == "" && isBareResult(evt.Output) {
 			// The lone PASS or FAIL line adds nothing to the package's own result line, which carries the name and the duration.

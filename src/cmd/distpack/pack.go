@@ -177,12 +177,12 @@ func main() {
 			if !strings.HasPrefix(name, "pkg/tool/"+goosUnderGoarch+"/") {
 				return false
 			}
-			// Inside pkg/tool/$GOOS_$GOARCH, keep only tools needed for build actions.
+			// Inside pkg/tool/$GOOS_$GOARCH, keep every tool bin/go links.
 			switch strings.TrimSuffix(path.Base(name), ".exe") {
 			default:
 				return false
-			// Keep in sync with toolsIncludedInDistpack in cmd/dist/build.go.
-			case "asm", "cgo", "compile", "cover", "fix", "link", "preprofile", "vet":
+			// Keep in sync with linkedTools in cmd/dist/build.go.
+			case "addr2line", "asm", "buildid", "cgo", "compile", "covdata", "cover", "embedstd", "fix", "link", "nm", "objdump", "pack", "pprof", "preprofile", "test2json", "trace", "vet":
 			}
 		}
 		return true

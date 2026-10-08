@@ -16,7 +16,7 @@
 //
 // This tool is intended for use only by pprof; its interface may change or
 // it may be deleted entirely in future releases.
-package main
+package addr2line
 
 import (
 	"bufio"
@@ -27,6 +27,7 @@ import (
 	"strconv"
 	"strings"
 
+	"cmd/internal/objabi"
 	"cmd/internal/objfile"
 	"cmd/internal/telemetry/counter"
 )
@@ -43,15 +44,18 @@ func usage() {
 	os.Exit(2)
 }
 
-func main() {
+// Main runs addr2line with args, the command line after the program name,
+// and answers its exit status.
+func Main(args []string) int {
+	objabi.Enter("addr2line", args, nil)
 	log.SetFlags(0)
 	log.SetPrefix("addr2line: ")
 	counter.Open()
 
 	// pprof expects this behavior when checking for addr2line
-	if len(os.Args) > 1 && os.Args[1] == "--help" {
+	if len(args) > 0 && args[0] == "--help" {
 		printUsage(os.Stdout)
-		os.Exit(0)
+		return 0
 	}
 
 	flag.Usage = usage
@@ -103,4 +107,5 @@ func main() {
 	if err := stdin.Err(); err != nil {
 		log.Fatalf("reading standard input: %v", err)
 	}
+	return 0
 }
