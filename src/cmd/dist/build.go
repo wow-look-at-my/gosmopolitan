@@ -1456,9 +1456,11 @@ var (
 	// cmd/go/internal/selftool/tools.go.
 	linkedTools = []string{"addr2line", "asm", "buildid", "cgo", "compile", "covdata", "cover", "embedstd", "fix", "link", "nm", "objdump", "pack", "pprof", "preprofile", "test2json", "trace", "vet"}
 
-	// Only the binaries distpack ships are installed. The tools are packages
-	// of bin/go now, so there is nothing more to install for them.
-	toolsToInstall = binExesIncludedInDistpack
+	// The binaries distpack ships are installed, and dist beside the linked
+	// tools: run.bash, the stamp and distpack run it from the source tree,
+	// and distpack leaves it out of the archive. The other tools are
+	// packages of bin/go, so there is nothing more to install for them.
+	toolsToInstall = append(binExesIncludedInDistpack, "cmd/dist")
 )
 
 // linkTools points every pkg/tool/<host>/<name> that bin/go links at bin/go,
