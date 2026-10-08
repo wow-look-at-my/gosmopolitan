@@ -49,6 +49,7 @@ type dnsConfig struct {
 	useTCP        bool          // force usage of TCP for DNS resolutions
 	trustAD       bool          // add AD flag to queries
 	noReload      bool          // do not check for config file updates
+	path          string        // the file read, or "" for a config built in memory
 }
 
 // serverOffset returns an offset that can be used to determine

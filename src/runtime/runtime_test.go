@@ -507,7 +507,7 @@ func BenchmarkProcYield(b *testing.B) {
 
 	b.Run("1", benchN(1))
 	b.Run("10", benchN(10))
-	b.Run("30", benchN(30)) // active_spin_cnt in lock_sema.go and lock_futex.go
+	b.Run("30", benchN(30))
 	b.Run("100", benchN(100))
 	b.Run("1000", benchN(1000))
 }
@@ -683,9 +683,9 @@ func BenchmarkMutexHandoff(b *testing.B) {
 			// to runtime.unlock and ending when the worker's call to
 			// runtime.lock returns. The benchmark can specify a "delay"
 			// function to simulate the length of the mutex-holder's critical
-			// section, including to arrange for the worker's thread to be in
-			// either the "spinning" or "sleeping" portions of the runtime.lock2
-			// implementation. Measurement starts after any such "delay".
+			// section, including to arrange for the worker's thread to be
+			// asleep in runtime.lock2. Measurement starts after any such
+			// "delay".
 			//
 			// The two threads' goroutines communicate their current position to
 			// each other in a non-blocking way via the "turn" state.
@@ -762,7 +762,7 @@ func BenchmarkMutexHandoff(b *testing.B) {
 
 	b.Run("FastPingPong", testcase(func(l *Mutex) {}))
 	b.Run("SlowPingPong", testcase(func(l *Mutex) {
-		// Wait for the worker to stop spinning and prepare to sleep
+		// Wait for the worker to push itself onto the waiter stack
 		for !MutexContended(l) {
 		}
 		// Wait a bit longer so the OS can finish committing the worker to its

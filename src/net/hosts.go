@@ -6,9 +6,9 @@ package net
 
 import (
 	"errors"
-	"internal/bytealg"
+	"internal/netconf"
+	"internal/testlog"
 	"io/fs"
-	"net/netip"
 	"sync"
 	"time"
 )
@@ -16,16 +16,7 @@ import (
 const cacheMaxAge = 5 * time.Second
 
 func parseLiteralIP(addr string) string {
-	ip, err := netip.ParseAddr(addr)
-	if err != nil {
-		return ""
-	}
-	return ip.String()
-}
-
-type byName struct {
-	addrs         []string
-	canonicalName string
+	return netconf.AddrKey(addr)
 }
 
 // hosts contains known host entries.
@@ -36,7 +27,7 @@ var hosts struct {
 	// name. It would be part of DNS labels, a FQDN or an absolute
 	// FQDN.
 	// For now the key is converted to lower case for convenience.
-	byName map[string]byName
+	byName map[string]netconf.ByName
 
 	// Key for the list of host names must be a literal IP address
 	// including IPv6 address with zone identifier.
@@ -56,15 +47,15 @@ func readHosts() {
 	if now.Before(hosts.expire) && hosts.path == hp && len(hosts.byName) > 0 {
 		return
 	}
+	// A test's input is the answer each lookup logs, not the file.
+	testlog.Parse("stat", hp)
 	mtime, size, err := stat(hp)
 	if err == nil && hosts.path == hp && hosts.mtime.Equal(mtime) && hosts.size == size {
 		hosts.expire = now.Add(cacheMaxAge)
 		return
 	}
 
-	hs := make(map[string]byName)
-	is := make(map[string][]string)
-
+	testlog.Parse("open", hp)
 	file, err := open(hp)
 	if err != nil {
 		if !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, fs.ErrPermission) {
@@ -72,49 +63,11 @@ func readHosts() {
 		}
 	}
 
+	hs := make(map[string]netconf.ByName)
+	is := make(map[string][]string)
 	if file != nil {
 		defer file.close()
-		for line, ok := file.readLine(); ok; line, ok = file.readLine() {
-			if i := bytealg.IndexByteString(line, '#'); i >= 0 {
-				// Discard comments.
-				line = line[0:i]
-			}
-			f := getFields(line)
-			if len(f) < 2 {
-				continue
-			}
-			addr := parseLiteralIP(f[0])
-			if addr == "" {
-				continue
-			}
-
-			var canonical string
-			for i := 1; i < len(f); i++ {
-				name := absDomainName(f[i])
-				h := []byte(f[i])
-				lowerASCIIBytes(h)
-				key := absDomainName(string(h))
-
-				if i == 1 {
-					canonical = key
-				}
-
-				is[addr] = append(is[addr], name)
-
-				if v, ok := hs[key]; ok {
-					hs[key] = byName{
-						addrs:         append(v.addrs, addr),
-						canonicalName: v.canonicalName,
-					}
-					continue
-				}
-
-				hs[key] = byName{
-					addrs:         []string{addr},
-					canonicalName: canonical,
-				}
-			}
-		}
+		hs, is = netconf.ReadHosts(file.file)
 	}
 	// Update the data cache.
 	hosts.expire = now.Add(cacheMaxAge)
@@ -129,17 +82,13 @@ func readHosts() {
 func lookupStaticHost(host string) ([]string, string) {
 	hosts.Lock()
 	defer hosts.Unlock()
+	testlog.Lookup("hostsname", hostsFilePath, host)
 	readHosts()
 	if len(hosts.byName) != 0 {
-		if hasUpperCase(host) {
-			lowerHost := []byte(host)
-			lowerASCIIBytes(lowerHost)
-			host = string(lowerHost)
-		}
-		if byName, ok := hosts.byName[absDomainName(host)]; ok {
-			ipsCp := make([]string, len(byName.addrs))
-			copy(ipsCp, byName.addrs)
-			return ipsCp, byName.canonicalName
+		if byName, ok := hosts.byName[netconf.NameKey(host)]; ok {
+			ipsCp := make([]string, len(byName.Addrs))
+			copy(ipsCp, byName.Addrs)
+			return ipsCp, byName.Canonical
 		}
 	}
 	return nil, ""
@@ -149,6 +98,7 @@ func lookupStaticHost(host string) ([]string, string) {
 func lookupStaticAddr(addr string) []string {
 	hosts.Lock()
 	defer hosts.Unlock()
+	testlog.Lookup("hostsaddr", hostsFilePath, addr)
 	readHosts()
 	addr = parseLiteralIP(addr)
 	if addr == "" {
