@@ -10,7 +10,7 @@ import (
 )
 
 // runtime.GOOS and runtime.GOARCH are VARIABLES on the cosmo port: one APE
-// boots on kernels, and a payload can run on a machine of another
+// boots on kernels. A payload can run on a machine of another
 // architecture, so both are read at startup.
 func dynamicConstVal(obj *Var) (constant.Value, bool) {
 	if obj.pkg == nil || obj.pkg.Path() != "runtime" || obj.parent != obj.pkg.scope {

@@ -57,10 +57,10 @@ func ntVolumePathW(w []uint16) ([]uint16, uintptr) {
 
 // ntStatfsVolume fills dst for the volume whose mount point is volW.
 //
-// The cluster geometry is what Linux reports as a block, so Bsize and Frsize
-// are bytes-per-sector times sectors-per-cluster and the counts are in
-// clusters. GetDiskFreeSpaceW's own free-cluster count is the volume's, which
-// ignores a per-user quota; Bavail therefore comes from GetDiskFreeSpaceExW's
+// The cluster geometry is what Linux reports as a block. Bsize and Frsize are
+// bytes-per-sector times sectors-per-cluster and the counts are in clusters.
+// GetDiskFreeSpaceW's own free-cluster count is the volume's, which ignores a
+// per-user quota. Bavail therefore comes from GetDiskFreeSpaceExW's
 // caller-available figure instead, converted to clusters. That is the same
 // split Linux draws between f_bfree and f_bavail.
 func ntStatfsVolume(volW []uint16, dst *ntLinuxStatfs) uintptr {

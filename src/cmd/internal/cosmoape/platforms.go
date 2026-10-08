@@ -69,7 +69,7 @@ func Names() string {
 }
 
 // Parse turns a comma-separated os/arch list into a Set. An unknown token
-// or an empty entry is an error: a build that silently dropped a requested
+// or an empty entry is an error. A build that silently dropped a requested
 // platform would produce a binary that dies on a user's machine with no
 // symptom to search for. Callers treat an unset variable as Default rather
 // than passing "" here, which Parse rejects.

@@ -18,7 +18,7 @@ type xnuSigactiont struct {
 
 // darwinSigactionSyslib emulates rt_sigaction with the Syslib's sigaction,
 // whose address the assembly dispatch reads out of the Syslib table and
-// passes in fn: this package cannot reach runtime.__syslib from Go, and
+// passes in fn. This package cannot reach runtime.__syslib from Go, and
 // DarwinFns holds only dlsym entries. It is called from Syscall6's darwin
 // path, so it keeps that result shape and must not grow the stack.
 //

@@ -13,4 +13,4 @@
 //	go tool pprof -h
 //
 // For an example, see https://go.dev/blog/pprof.
-package main
+package pprof

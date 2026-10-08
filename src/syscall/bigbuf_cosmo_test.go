@@ -43,8 +43,8 @@ type (
 )
 
 // The statfs and utsname conversions (bigbuf_cosmo.go) are pure struct
-// rewriting, so they are pinned here on any host rather than only where
-// a macOS runner can reach them.
+// rewriting. They are pinned here on any host rather than only where a
+// macOS runner can reach them.
 
 func TestDarwinStatfsToLinux(t *testing.T) {
 	src := cosmo.DarwinStatfs{
@@ -118,11 +118,11 @@ func TestDarwinMntFlagsToLinux(t *testing.T) {
 }
 
 // TestRawStatfsLinuxBuffer issues statfs and fstatfs the way
-// golang.org/x/sys/unix does: straight through Syscall and Syscall6, with
+// golang.org/x/sys/unix does. Straight through Syscall and Syscall6, with
 // a Linux Statfs_t and nothing in a3. On a macOS host that buffer is not
 // the shape Apple's statfs fills, so this is the call the conversion in
-// Syscall exists for. A disk-pressure check that reads free space
-// through x/sys sees these numbers or an error.
+// Syscall exists for. A disk-pressure check that reads free space through
+// x/sys sees these numbers or an error.
 func TestRawStatfsLinuxBuffer(t *testing.T) {
 	dir := t.TempDir()
 	path, err := syscall.BytePtrFromString(dir)

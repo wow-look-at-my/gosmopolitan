@@ -24,8 +24,8 @@ const (
 //
 // A unix kernel refuses the MZqFpD header, so execve answers ENOEXEC
 // unless the host carries a binfmt_misc entry for the magic - which
-// needs root, and a CI runner is not root. Without the /bin/sh retry in
-// exec_cosmo.go every such start fails "exec format error", which takes
+// needs root. A CI runner is not root. Without the /bin/sh retry in
+// exec_cosmo.go every such start fails "exec format error". This takes
 // down t.Fork, t.Setenv, t.Chdir and every test that runs a helper.
 func TestAPEExec(t *testing.T) {
 	target := os.Getenv(apeTargetEnv)
