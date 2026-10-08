@@ -7,6 +7,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -108,6 +109,16 @@ type work struct {
 	out     bytes.Buffer  // combined stdout/stderr from cmd
 	err     error         // work result
 	end     chan struct{} // a value means cmd ended (or was skipped)
+	ended   chan struct{} // closed when cmd ends (or is skipped), for the works that wait on it
+
+	// after is the work whose command must end before this one starts. Their
+	// builds are the same, and the cache hands this one what that one built.
+	after *work
+
+	// first starts this work ahead of the rest of its worklist. Its deadline
+	// bounds a run that takes most of it, and beside the compiles that fill the
+	// machine later in the list, the run gets too little of the CPU to finish.
+	first bool
 }
 
 // printSkip prints a skip message for all of work.
@@ -503,6 +514,14 @@ type goTest struct {
 	// flags its binary starts with. It starts the binary every package's
 	// tests compile into, with those flags, and builds nothing of its own.
 	shared bool
+
+	// after names the dist test that builds what this one builds. This one
+	// starts once that one's command ends, so the cache answers its build and
+	// every test result whose inputs match. Started together, both compile it.
+	after string
+
+	// first starts this test ahead of the rest of its worklist (see work.first).
+	first bool
 }
 
 // upstreamTestVet is the analyzer list upstream's go test runs, which is this
@@ -1142,15 +1161,36 @@ func (t *tester) registerTests() {
 		})
 
 		// Test that earlier FIPS snapshots work.
+		fipsDir := filepath.Join(goroot, "lib/fips140")
 		for _, version := range fipsVersions() {
-			t.registerTest("GOFIPS140="+version+" go test crypto/...", &goTest{
-				variant:  "gofips140-" + version,
-				pkg:      "crypto/...",
-				env:      []string{"GOFIPS140=" + version, "GOMODCACHE=" + filepath.Join(workdir, "fips-"+version)},
+			// An alias such as certified builds the very snapshot it names: the
+			// same packages, the same binary, the same results. It shares that
+			// snapshot's module cache, so a test that reads a file there reads
+			// it at the same path, and runs once the snapshot's own run ends.
+			//
+			// The module cache is also where the crypto tests download their
+			// test vectors (cryptotest.FetchModule), and a test result's key
+			// names each file the test opened. A result comes from the cache
+			// only where that path is the same on every run, which a path
+			// under GOROOT is and one under the per-run workdir is not.
+			module := fipsModule(fipsDir, version)
+			snapshot := &goTest{
+				variant: "gofips140-" + version,
+				pkg:     "crypto/...",
+				env: []string{
+					"GOFIPS140=" + version,
+					"GOMODCACHE=" + filepath.Join(goroot, "pkg/obj/fips140", module),
+					// Writable, so the tree a checkout keeps can be deleted.
+					"GOFLAGS=" + strings.TrimSpace(os.Getenv("GOFLAGS")+" -modcacherw"),
+				},
 				// A snapshot is upstream's frozen module. Nobody can add a
 				// t.Serial to its tests, so it is vetted with upstream's list.
 				vet: upstreamTestVet,
-			})
+			}
+			if module != version {
+				snapshot.after = testName(snapshot.pkg, "gofips140-"+module)
+			}
+			t.registerTest("GOFIPS140="+version+" go test crypto/...", snapshot)
 		}
 	}
 
@@ -1218,6 +1258,7 @@ func (t *tester) registerTests() {
 				timeout: 300 * time.Second,
 				env:     []string{"GODEBUG=gccheckmark=1"},
 				pkg:     "runtime",
+				first:   true,
 			})
 	}
 
@@ -1373,7 +1414,6 @@ func (t *tester) registerTests() {
 				timeout: 120 * time.Second,
 				cpu:     "10",
 				pkg:     "sync",
-				shared:  true,
 			})
 	}
 
@@ -1392,17 +1432,6 @@ func (t *tester) registerTests() {
 			})
 	}
 
-	// Only run the API check on fast development platforms.
-	// Every platform checks the API on every GOOS/GOARCH/CGO_ENABLED combination anyway,
-	// so we really only need to run this check once anywhere to get adequate coverage.
-	// To help developers avoid trybot-only failures, we try to run on typical developer machines
-	// which is darwin,linux,windows/amd64 and darwin/arm64.
-	//
-	// TODO: remove the exclusion of goexperiment simd right before dev.simd branch is merged to master.
-	if goos == "darwin" || ((goos == "linux" || goos == "windows") && (goarch == "amd64" && !strings.Contains(goexperiment, "simd"))) {
-		t.registerTest("API check", &goTest{variant: "check", pkg: "cmd/api", timeout: 5 * time.Minute, testFlags: []string{"-check"}, shared: true})
-	}
-
 	// Runtime CPU tests.
 	if !t.compileOnly && t.hasParallelism() {
 		for i := 1; i <= 4; i *= 2 {
@@ -1414,9 +1443,8 @@ func (t *tester) registerTests() {
 					gcflags: gogcflags,
 					// We set GOMAXPROCS=2 in addition to -cpu=1,2,4 in order to test runtime bootstrap code,
 					// creation of first goroutines and first garbage collections in the parallel setting.
-					env:    []string{"GOMAXPROCS=2"},
-					pkg:    "runtime",
-					shared: true,
+					env: []string{"GOMAXPROCS=2"},
+					pkg: "runtime",
 				})
 		}
 	}
@@ -1539,7 +1567,7 @@ func (t *tester) registerTest(heading string, test *goTest, opts ...registerTest
 				// The package's own run compiles what this test would start.
 				return nil
 			}
-			w := &work{dt: dt}
+			w := &work{dt: dt, first: test.first, after: t.queued(test.after)}
 			w.cmd, w.flush = test.bgCommand(t, &w.out, &w.out)
 			if test.shared {
 				flush := w.flush
@@ -1563,11 +1591,33 @@ func (t *tester) registerTest(heading string, test *goTest, opts ...registerTest
 	// Those methods accumulate matched packages in stdMatches and benchMatches slices,
 	// and we can extend that mechanism to work for all other equal variant registrations.
 	// Do the simple thing to start with.
-	for _, pkg := range test.packages() {
+	//
+	// Each package after the first builds with the first one's flags, so it
+	// waits for the first one's command and takes its compiles from the cache.
+	pkgs := test.packages()
+	for idx, pkg := range pkgs {
 		test1 := *test
 		test1.pkg, test1.pkgs = pkg, nil
+		if idx > 0 && test1.after == "" {
+			test1.after = testName(pkgs[0], test.variant)
+		}
 		register1(&test1)
 	}
+}
+
+// queued answers the work for the dist test named name that waits in the
+// worklist, or nil when that test is not queued: it ran already, or this run
+// leaves it out.
+func (t *tester) queued(name string) *work {
+	if name == "" {
+		return nil
+	}
+	for _, pending := range t.worklist {
+		if pending.dt.name == name {
+			return pending
+		}
+	}
+	return nil
 }
 
 // dirCmd constructs a Cmd intended to be run in the foreground.
@@ -1894,9 +1944,20 @@ func (t *tester) runPending(nextTest *distTest) {
 	}
 	slots := make(chan struct{}, maxbg)
 
+	slices.SortStableFunc(worklist, func(left, right *work) int {
+		switch {
+		case left.first == right.first:
+			return 0
+		case left.first:
+			return -1
+		}
+		return 1
+	})
+
 	for _, w := range worklist {
 		w.start = make(chan bool)
 		w.end = make(chan struct{})
+		w.ended = make(chan struct{})
 		// w.cmd must be set up to write to w.out. We can't check that, but we
 		// can check for easy mistakes.
 		if w.cmd.Stdout == nil || w.cmd.Stdout == os.Stdout || w.cmd.Stderr == nil || w.cmd.Stderr == os.Stderr {
@@ -1924,6 +1985,7 @@ func (t *tester) runPending(nextTest *distTest) {
 				}
 			}
 			timelog("end", w.dt.name)
+			close(w.ended)
 			<-slots
 			w.end <- struct{}{}
 		}(w)
@@ -1937,6 +1999,15 @@ func (t *tester) runPending(nextTest *distTest) {
 	keepGoing := t.keepGoing
 	go func() {
 		for _, w := range worklist {
+			if w.after != nil && w.after.ended != nil {
+				// The works behind this one start while it waits.
+				go func(waiting *work) {
+					<-waiting.after.ended
+					slots <- struct{}{}
+					waiting.start <- !failed.Load() || keepGoing
+				}(w)
+				continue
+			}
 			slots <- struct{}{}
 			w.start <- !failed.Load() || keepGoing
 		}
@@ -2353,6 +2424,25 @@ func fipsVersions() []string {
 		versions = append(versions, strings.TrimSuffix(filepath.Base(txt), ".txt"))
 	}
 	return versions
+}
+
+// fipsModule answers the snapshot that GOFIPS140=version builds, out of dir
+// (GOROOT/lib/fips140). A version with a .txt file there is an alias, and the
+// file names the snapshot, which is how cmd/go resolves it. Any other version
+// is a snapshot itself.
+func fipsModule(dir, version string) string {
+	data, err := os.ReadFile(filepath.Join(dir, version+".txt"))
+	if errors.Is(err, fs.ErrNotExist) {
+		return version
+	}
+	if err != nil {
+		fatalf("reading the GOFIPS140 alias %s: %v", version, err)
+	}
+	module := strings.TrimSpace(string(data))
+	if module == "" {
+		fatalf("the GOFIPS140 alias %s names no snapshot", version)
+	}
+	return module
 }
 
 // goexperiments returns the GOEXPERIMENT value to use

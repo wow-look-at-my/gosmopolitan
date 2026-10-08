@@ -234,7 +234,7 @@ func traceAcquireEnabled() traceLocker {
 	// what we did and bail.
 	gen := trace.gen.Load()
 	if gen == 0 {
-		mp.trace.writing.Store(false)
+		traceWriterDone(mp)
 		releasem(mp)
 		return traceLocker{}
 	}
@@ -260,9 +260,26 @@ func traceRelease(tl traceLocker) {
 	if tl.mp.trace.reentered > 0 {
 		tl.mp.trace.reentered--
 	} else {
-		tl.mp.trace.writing.Store(false)
+		traceWriterDone(tl.mp)
 	}
 	releasem(tl.mp)
+}
+
+// traceWriterDone clears mp's write flag and wakes traceAdvance if it
+// sleeps waiting for a write flag to clear. traceCPUSample calls it from
+// a signal handler.
+//
+// nosplit because it's called on the syscall path when stack movement is forbidden.
+//
+//go:nosplit
+func traceWriterDone(mp *m) {
+	mp.trace.writing.Store(false)
+	if trace.flushWait.waiting.Load() == 0 {
+		return
+	}
+	systemstack(func() {
+		trace.flushWait.wake()
+	})
 }
 
 // traceExitingSyscall marks a goroutine as exiting the syscall slow path.
@@ -272,9 +289,12 @@ func traceExitingSyscall() {
 	trace.exitingSyscall.Add(1)
 }
 
-// traceExitedSyscall marks a goroutine as having exited the syscall slow path.
+// traceExitedSyscall marks a goroutine as having exited the syscall slow
+// path. The last one out wakes StartTrace if it waits for them.
 func traceExitedSyscall() {
-	trace.exitingSyscall.Add(-1)
+	if trace.exitingSyscall.Add(-1) == 0 {
+		trace.exitingWait.wake()
+	}
 }
 
 // Gomaxprocs emits a ProcsChange event.
@@ -710,5 +730,5 @@ func traceThreadDestroy(mp *m) {
 		}
 		unlock(&trace.lock)
 	})
-	mp.trace.writing.Store(false)
+	traceWriterDone(mp)
 }

@@ -31,17 +31,6 @@ func runtime_SemacquireMutex(s *uint32, lifo bool, skipframes int)
 //go:linkname runtime_Semrelease
 func runtime_Semrelease(s *uint32, handoff bool, skipframes int)
 
-// Active spinning runtime support.
-// runtime_canSpin reports whether spinning makes sense at the moment.
-//
-//go:linkname runtime_canSpin
-func runtime_canSpin(i int) bool
-
-// runtime_doSpin does active spinning.
-//
-//go:linkname runtime_doSpin
-func runtime_doSpin()
-
 //go:linkname runtime_nanotime
 func runtime_nanotime() int64
 

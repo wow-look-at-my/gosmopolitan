@@ -18,6 +18,15 @@ type Interface interface {
 	Stat(file string)
 	Open(file string)
 	Chdir(dir string)
+
+	// Parse says that the caller's next op ("stat" or "open") of file
+	// reads it only to answer lookups, and that each lookup is logged with
+	// Lookup. The file then stands in a test's inputs as those answers.
+	Parse(op, file string)
+
+	// Lookup says that the caller asked file for query, through the
+	// parser kind names.
+	Lookup(kind, file, query string)
 }
 
 // logger is the current logger Interface.
@@ -64,5 +73,19 @@ func Open(name string) {
 func Stat(name string) {
 	if log := Logger(); log != nil {
 		log.Stat(name)
+	}
+}
+
+// Parse calls Logger().Parse, if a logger has been set.
+func Parse(op, file string) {
+	if log := Logger(); log != nil {
+		log.Parse(op, file)
+	}
+}
+
+// Lookup calls Logger().Lookup, if a logger has been set.
+func Lookup(kind, file, query string) {
+	if log := Logger(); log != nil {
+		log.Lookup(kind, file, query)
 	}
 }
