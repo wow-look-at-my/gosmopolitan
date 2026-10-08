@@ -90,13 +90,13 @@ func Main(args []string) int {
 		os.Exit(2)
 	}
 
-	args := flag.Args()
-	filePrefix = len(args) > 1
-	if len(args) == 0 {
+	files := flag.Args()
+	filePrefix = len(files) > 1
+	if len(files) == 0 {
 		flag.Usage()
 	}
 
-	for _, file := range args {
+	for _, file := range files {
 		nm(file)
 	}
 
