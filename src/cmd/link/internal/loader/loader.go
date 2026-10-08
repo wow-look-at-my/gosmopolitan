@@ -2444,8 +2444,6 @@ var blockedLinknames = map[string][]string{
 	"internal/runtime/maps.typedmemclr":     {"internal/runtime/maps"},
 	"internal/runtime/maps.typedmemmove":    {"internal/runtime/maps"},
 	"internal/sync.fatal":                   {"internal/sync"},
-	"internal/sync.runtime_canSpin":         {"internal/sync"},
-	"internal/sync.runtime_doSpin":          {"internal/sync"},
 	"internal/sync.runtime_nanotime":        {"internal/sync"},
 	"internal/sync.runtime_Semrelease":      {"internal/sync"},
 	"internal/sync.runtime_SemacquireMutex": {"internal/sync"},

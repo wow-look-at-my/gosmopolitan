@@ -6,17 +6,16 @@
 
 package runtime
 
+import "unsafe"
+
 // wasm has no support for threads yet. There is no preemption.
 // See proposal: https://github.com/WebAssembly/threads
-// Waiting for a mutex or timeout is implemented as a busy loop
-// while allowing other goroutines to run.
+// A mutex is never contended. A goroutine waiting on a note parks, and
+// the goroutine that wakes the note, or the note's timer, readies it.
 
 const (
 	mutex_unlocked = 0
 	mutex_locked   = 1
-
-	active_spin     = 4
-	active_spin_cnt = 30
 
 	mutexMLocksDelta = 16
 )
@@ -63,17 +62,28 @@ func unlock2(l *mutex) {
 	l.key = mutex_unlocked
 }
 
-// One-time notifications.
+// One-time notifications. Every goroutine runs on one thread, so a note
+// needs no atomics. Its key is note_cleared, note_woken, or the g parked
+// in notetsleepg until notewakeup readies it.
+const (
+	note_cleared = 0
+	note_woken   = 1
+)
+
 func noteclear(n *note) {
-	n.key = 0
+	n.key = note_cleared
 }
 
 func notewakeup(n *note) {
-	if n.key != 0 {
-		print("notewakeup - double wakeup (", n.key, ")\n")
+	old := n.key
+	if old == note_woken {
+		print("notewakeup - double wakeup (", old, ")\n")
 		throw("notewakeup - double wakeup")
 	}
-	n.key = 1
+	n.key = note_woken
+	if old != note_cleared {
+		goready((*g)(unsafe.Pointer(old)), 1)
+	}
 }
 
 func notesleep(n *note) {
@@ -91,20 +101,37 @@ func notetsleepg(n *note, ns int64) bool {
 	if gp == gp.m.g0 {
 		throw("notetsleepg on g0")
 	}
-
-	deadline := nanotime() + ns
-	for {
-		if n.key != 0 {
-			return true
-		}
-		if sched_yield() != 0 {
-			throw("sched_yield failed")
-		}
-		Gosched()
-		if ns >= 0 && nanotime() >= deadline {
-			return false
-		}
+	if n.key == note_woken {
+		return true
 	}
+	if n.key != note_cleared {
+		throw("notetsleepg - note already has a waiting g")
+	}
+
+	n.key = uintptr(unsafe.Pointer(gp))
+	if ns < 0 {
+		gopark(nil, nil, waitReasonZero, traceBlockGeneric, 1)
+		return true
+	}
+	timeout := new(timer)
+	timeout.init(noteTimedOut, unsafe.Pointer(n))
+	timeout.reset(nanotime()+ns, 0)
+	gopark(nil, nil, waitReasonSleep, traceBlockSleep, 1)
+	timeout.stop()
+	return n.key == note_woken
+}
+
+// noteTimedOut is the timer function of a timed notetsleepg. If the
+// waiting g is still parked on the note, it clears the note and readies
+// the g, which then reports the timeout.
+func noteTimedOut(arg any, _ uintptr, _ int64) {
+	n := (*note)(arg.(unsafe.Pointer))
+	if n.key == note_cleared || n.key == note_woken {
+		return
+	}
+	waiter := (*g)(unsafe.Pointer(n.key))
+	n.key = note_cleared
+	goready(waiter, 1)
 }
 
 func beforeIdle(int64, int64) (*g, bool) {
@@ -112,6 +139,3 @@ func beforeIdle(int64, int64) (*g, bool) {
 }
 
 func checkTimeouts() {}
-
-//go:wasmimport wasi_snapshot_preview1 sched_yield
-func sched_yield() errno
