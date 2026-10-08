@@ -314,20 +314,10 @@ func probePageSize() {
 	munmap(p, size)
 }
 
-// darwinauxvbuf backs the auxv published below. It is static because
-// sysargs runs before the allocator exists.
+// darwinauxvbuf backs the auxv published below. It is static because sysargs runs before the allocator exists.
 var darwinauxvbuf = [2]uintptr{_AT_HWCAP, 0}
 
 // publishDarwinAuxv gives a macOS host an auxv, which Darwin does not.
-// An empty one is not merely missing information: a reader that finds
-// nothing falls back to reading the aarch64 ID registers, and that
-// instruction is privileged on Darwin, so the process dies of SIGILL in a
-// package init before main runs (golang.org/x/sys/cpu takes that path).
-//
-// The one entry states that no CPU feature is advertised, which is what
-// this runtime knows on Darwin. Every reader then derives false for every
-// feature bit and takes its generic path. A bit named here without being
-// measured would arm the very instruction the empty auxv dies on.
 func publishDarwinAuxv() {
 	auxv = darwinauxvbuf[:]
 }
