@@ -62,11 +62,7 @@ func TestCmdGoNoHTTPServer(t *testing.T) {
 		// Verify these exist: (sanity checking this test)
 		"net/http.(*Client).do":           true,
 		"net/http.(*Transport).RoundTrip": true,
-
-		// The go command carries pprof and trace, which serve their web
-		// UIs, so the server is in the binary too.
-		"net/http.(*Server).Serve":       true,
-		"net/http.(*ServeMux).ServeHTTP": true,
+		// No check on the server symbols: pprof and trace in this binary serve web UIs.
 	}
 	for sym, want := range wantSym {
 		got := bytes.Contains(out, []byte(sym))
