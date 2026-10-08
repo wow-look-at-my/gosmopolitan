@@ -302,6 +302,7 @@ jobs:
 
       - name: The whole test suite (run.bash)
         # the distribution's own all-tests entry point, on every host it builds on. tee feeds the timing step; `shell: bash` is -o pipefail, so a red suite still fails. see docs/CI.md.
+        id: suite
         if: runner.os != 'Windows'
         shell: bash
         run: |
@@ -314,8 +315,9 @@ jobs:
             cd src && ./run.bash 2>&1 | tee "${{ runner.temp }}/suite.log"
           fi
 
+      # profile-suite.bash writes the report once it starts, so a suite step that ran has one, and a step that never started has none.
       - name: Where the suite spent its CPU (Linux)
-        if: always() && runner.os == 'Linux'
+        if: always() && runner.os == 'Linux' && contains(fromJSON('["success","failure","cancelled"]'), steps.suite.outcome)
         shell: bash
         run: cat "${{ runner.temp }}/suiteprof/report.md" >> "$GITHUB_STEP_SUMMARY"
 
