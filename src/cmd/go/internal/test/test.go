@@ -2382,6 +2382,7 @@ func (c *runCache) tryCacheWithID(b *work.Builder, a *work.Action, id string) bo
 	// Parse cached result in preparation for changing run time to "(cached)".
 	// If we can't parse the cached result, don't use it.
 	data, entry, err = cache.GetBytes(cache.Default(), testAndInputKey(testID, testInputsID))
+	tried := []triedTestlog{{inputList, inputLines}}
 	if err != nil {
 		// Runs of one binary that differ in their environment read different
 		// files, and the last testlog written belongs to whichever ran last.
@@ -2391,6 +2392,7 @@ func (c *runCache) tryCacheWithID(b *work.Builder, a *work.Action, id string) bo
 			if otherErr != nil {
 				continue
 			}
+			tried = append(tried, triedTestlog{other, otherLines})
 			otherData, otherEntry, getErr := cache.GetBytes(cache.Default(), testAndInputKey(testID, otherID))
 			if getErr != nil {
 				continue
@@ -2440,7 +2442,7 @@ func (c *runCache) tryCacheWithID(b *work.Builder, a *work.Action, id string) bo
 			}
 		}
 		if cache.MissNotices() {
-			c.misses = append(c.misses, func() { explainInputsMiss(a, testID, inputLines) })
+			c.misses = append(c.misses, func() { explainInputsMiss(a, testID, tried) })
 		}
 		return false
 	}
@@ -2476,7 +2478,7 @@ func (c *runCache) tryCacheWithID(b *work.Builder, a *work.Action, id string) bo
 		}
 		if readErr == nil {
 			saveTestlog(c.id1, inputList)
-			cache.PutNoVerify(cache.Default(), inputLinesKey(c.id1), bytes.NewReader(inputLines))
+			cache.PutNoVerify(cache.Default(), inputLinesKey(c.id1, inputList), bytes.NewReader(inputLines))
 			cache.PutNoVerify(cache.Default(), testAndInputKey(c.id1, testInputsID), bytes.NewReader(data))
 			if testCoverProfile != "" || c.covMeta != (cache.ActionID{}) {
 				cache.PutNoVerify(cache.Default(), coverProfileAndInputKey(c.id1, testInputsID, c.covMeta), bytes.NewReader(profile))
@@ -2894,48 +2896,74 @@ func otherTestlogs(testID cache.ActionID, latest []byte) [][]byte {
 }
 
 // inputLinesKey is where the lines behind a test result's inputs ID are kept,
-// beside the testlog that lists them.
-func inputLinesKey(testID cache.ActionID) cache.ActionID {
-	return cache.Subkey(testID, "inputlines")
+// one set for each testlog saved under testID.
+func inputLinesKey(testID cache.ActionID, testlog []byte) cache.ActionID {
+	return cache.Subkey(testID, fmt.Sprintf("inputlines:%x", sha256.Sum256(testlog)))
+}
+
+// A triedTestlog is a testlog saved under a test ID, and the input lines this
+// run computed from it.
+type triedTestlog struct {
+	testlog []byte
+	lines   []byte
 }
 
 // explainInputsMiss names what moved when a test ran with a known binary and
-// arguments but its result was not under the inputs this run computed. The
-// lines saved with the last result are compared with now's, one input at a
-// time: a line is an operation and a name, then the hash of what it read.
-func explainInputsMiss(a *work.Action, testID cache.ActionID, lines []byte) {
-	saved, _, err := cache.GetBytes(cache.Default(), inputLinesKey(testID))
-	if err != nil {
-		cache.MissNotice("testcache: %s: no saved inputs to compare with this run's (%v); it read:", a.Package.ImportPath, err)
-		for line := range strings.Lines(string(lines)) {
+// arguments but its result was not under the inputs this run computed. Each
+// testlog tried has the lines saved with its result. The saved lines nearest
+// now's are compared with them, one input at a time: a line is an operation
+// and a name, then the hash of what it read. Runs that differ in their
+// environment, such as dist's GOFIPS140 variants, each keep their own testlog,
+// and only that one says what moved for this run.
+func explainInputsMiss(a *work.Action, testID cache.ActionID, tried []triedTestlog) {
+	var nearest []string
+	var lastErr error
+	for _, candidate := range tried {
+		saved, _, err := cache.GetBytes(cache.Default(), inputLinesKey(testID, candidate.testlog))
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		moved := movedInputs(inputHashes(saved), inputHashes(candidate.lines))
+		if nearest == nil || len(moved) < len(nearest) {
+			nearest = moved
+		}
+	}
+	if nearest == nil {
+		cache.MissNotice("testcache: %s: no saved inputs to compare with this run's (%v); it read:", a.Package.ImportPath, lastErr)
+		for line := range strings.Lines(string(tried[0].lines)) {
 			cache.MissNotice("testcache: %s:   %s", a.Package.ImportPath, strings.TrimSuffix(line, "\n"))
 		}
 		return
 	}
-	before := inputHashes(saved)
-	after := inputHashes(lines)
-	moved := 0
+	for _, line := range nearest {
+		cache.MissNotice("testcache: %s: %s", a.Package.ImportPath, line)
+	}
+	if len(nearest) == 0 {
+		cache.MissNotice("testcache: %s: every input matches the last run's, and its result is not in the cache", a.Package.ImportPath)
+	}
+}
+
+// movedInputs says, one line each, which inputs are new, changed or gone
+// between the saved hashes before and now's after. It is empty, not nil,
+// when none moved.
+func movedInputs(before, after map[string]string) []string {
+	moved := []string{}
 	for _, name := range slices.Sorted(maps.Keys(after)) {
 		was, known := before[name]
 		switch {
 		case !known:
-			cache.MissNotice("testcache: %s: input %s is new", a.Package.ImportPath, name)
+			moved = append(moved, "input "+name+" is new")
 		case was != after[name]:
-			cache.MissNotice("testcache: %s: input %s changed", a.Package.ImportPath, name)
-		default:
-			continue
+			moved = append(moved, "input "+name+" changed")
 		}
-		moved++
 	}
 	for _, name := range slices.Sorted(maps.Keys(before)) {
 		if _, kept := after[name]; !kept {
-			cache.MissNotice("testcache: %s: input %s is gone", a.Package.ImportPath, name)
-			moved++
+			moved = append(moved, "input "+name+" is gone")
 		}
 	}
-	if moved == 0 {
-		cache.MissNotice("testcache: %s: every input matches the last run's, and its result is not in the cache", a.Package.ImportPath)
-	}
+	return moved
 }
 
 // inputHashes maps each input line's operation and name to its hash. A name
@@ -3228,7 +3256,7 @@ func (c *runCache) saveOutput(a *work.Action) {
 			fmt.Fprintf(os.Stderr, "testcache: %s: save test ID %x => input ID %x => %x\n", a.Package.ImportPath, c.id1, testInputsID, testAndInputKey(c.id1, testInputsID))
 		}
 		saveTestlog(c.id1, testlog)
-		cache.PutNoVerify(cache.Default(), inputLinesKey(c.id1), bytes.NewReader(inputLines))
+		cache.PutNoVerify(cache.Default(), inputLinesKey(c.id1, testlog), bytes.NewReader(inputLines))
 		cache.PutNoVerify(cache.Default(), testAndInputKey(c.id1, testInputsID), bytes.NewReader(a.TestOutput.Bytes()))
 		if coverProfile != nil {
 			cache.PutNoVerify(cache.Default(), coverProfileAndInputKey(c.id1, testInputsID, c.covMeta), bytes.NewReader(coverProfile))
@@ -3243,7 +3271,7 @@ func (c *runCache) saveOutput(a *work.Action) {
 			fmt.Fprintf(os.Stderr, "testcache: %s: save test ID %x => input ID %x => %x\n", a.Package.ImportPath, c.id2, testInputsID, testAndInputKey(c.id2, testInputsID))
 		}
 		saveTestlog(c.id2, testlog)
-		cache.PutNoVerify(cache.Default(), inputLinesKey(c.id2), bytes.NewReader(inputLines))
+		cache.PutNoVerify(cache.Default(), inputLinesKey(c.id2, testlog), bytes.NewReader(inputLines))
 		cache.PutNoVerify(cache.Default(), testAndInputKey(c.id2, testInputsID), bytes.NewReader(a.TestOutput.Bytes()))
 		if coverProfile != nil {
 			cache.PutNoVerify(cache.Default(), coverProfileAndInputKey(c.id2, testInputsID, c.covMeta), bytes.NewReader(coverProfile))
