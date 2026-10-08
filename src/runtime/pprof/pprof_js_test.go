@@ -1,9 +1,8 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 // CPU profiling test for js/wasm. The general CPU profiling tests live in
-// pprof_test.go, which does not build on js; this file gives the js port
+// pprof_test.go, which does not build on js. This file gives the js port
 // end-to-end coverage of the wasm loop-backedge CPU sampler: profile
 // collection, sample volume, and per-function attribution.
 
@@ -36,17 +35,11 @@ func cpuHogJS2(x uint64, n int) uint64 {
 var cpuHogJSSink uint64
 
 func TestCPUProfileJS(t *testing.T) {
-	// Run two hot functions with identical loop bodies in a 70:30
-	// iteration ratio and check that the profile sees roughly that
-	// split. Retry with a longer duration once in case the host is
-	// slow or loaded.
 	duration := 1 * time.Second
 	for {
 		hog1, hog2, total := cpuProfileJSCounts(t, duration)
 		t.Logf("duration %v: %d samples: cpuHogJS1=%d cpuHogJS2=%d", duration, total, hog1, hog2)
 
-		// Mirror profileOk in pprof_test.go: accept 10 or more
-		// samples as evidence that profiling occurs at all.
 		if total >= 10 && hog1 > 0 && hog2 > 0 && hog1 > hog2 {
 			return
 		}
@@ -58,8 +51,6 @@ func TestCPUProfileJS(t *testing.T) {
 	}
 }
 
-// cpuProfileJSCounts profiles the 70:30 workload for roughly dur and
-// returns the sample counts attributed to each hog and in total.
 func cpuProfileJSCounts(t *testing.T, dur time.Duration) (hog1, hog2, total int64) {
 	var buf bytes.Buffer
 	if err := StartCPUProfile(&buf); err != nil {

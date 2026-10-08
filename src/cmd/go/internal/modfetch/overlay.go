@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package modfetch
 
@@ -25,18 +24,9 @@ import (
 	"golang.org/x/mod/sumdb/dirhash"
 )
 
-// A module is fetched in two parts. The BASE is the zip the proxy serves, or
-// what the repository holds, verified against go.sum exactly as ever. The
-// OVERLAY is the files the module's own generators add to it, and it is the one
-// part go-s3-server caches: the proxy and go.sum already serve and pin the base.
-//
-// An empty overlay is stored too. It is what says the module needs nothing, and
-// it is what lets the next build skip generation entirely.
+// A module is fetched in parts.
 
-// overlayVersion names the entry format. A change to what the entry holds, or
-// to how a module is completed, is a new version, and every module is completed
-// again under it. A build that completes a module differently but reads the
-// entries an older one stored serves that older answer to the whole fleet.
+// overlayVersion names the entry format.
 const overlayVersion = "overlay v5"
 
 // overlayKey is the cache key of the overlay of mod whose base zip has checksum
@@ -48,8 +38,7 @@ func overlayKey(mod module.Version, baseSum string) cache.ActionID {
 }
 
 // overlayEntry is what the cache holds for a module version: the checksum of
-// the added files, and a zip of them in the module's own <path>@<version>/
-// layout.
+// the added files.
 type overlayEntry struct {
 	sum string
 	zip []byte
@@ -74,15 +63,11 @@ func decodeOverlay(body []byte) (*overlayEntry, error) {
 	return &overlayEntry{sum: fields[2], zip: body[nl+1:]}, nil
 }
 
-// InstallTargets are the package paths of a `go install pkg@version`, set
-// before anything is fetched. See completingSelf.
+// InstallTargets are the package paths of a `go install pkg@version`, set before anything is fetched.
 var InstallTargets []string
 
 // completingSelf reports whether mod provides a package this command is
-// installing. Completing such a module cannot terminate: completing
-// golang.org/x/tools runs the stringer directive it carries, and stringer is
-// the program being installed from it. The generator lives in the module that
-// needs it, so there is no order in which the module is ready first.
+// installing.
 func completingSelf(mod module.Version) bool {
 	for _, target := range InstallTargets {
 		if target == mod.Path || strings.HasPrefix(target, mod.Path+"/") {
@@ -92,14 +77,12 @@ func completingSelf(mod module.Version) bool {
 	return false
 }
 
-// Superseded reports whether a replacement stands in for mod. modload sets it,
-// because the replace directives belong to the main module and this package
-// reads none of them.
+// Superseded reports whether a replacement stands in for mod. modload sets it.
 var Superseded func(mod module.Version) bool
 
-// completeDir completes the module extracted at dir: it adds the files the
+// completeDir completes the module extracted at dir. It adds the files the
 // module's own generators write, from the cache when the cache holds them and
-// by running the generators when it does not.
+// by running the generators. This happens when it does not.
 func (f *Fetcher) completeDir(ctx context.Context, mod module.Version, dir string) error {
 	// A replaced module is fetched for what its go.mod says. The build compiles
 	// the replacement instead, so nothing here reads what these generators write.
@@ -107,24 +90,18 @@ func (f *Fetcher) completeDir(ctx context.Context, mod module.Version, dir strin
 		overlayDebugf("modfetch: %s@%s: a replacement stands in for it, so its generators do not run", mod.Path, mod.Version)
 		return nil
 	}
-	// A module that carries no directive completes to itself. Asking this first
-	// keeps the build cache out of the fetch of every such module, and `go mod
-	// download` needs no build cache to fetch one.
+	// A module that carries no directive completes to itself.
 	pkgs := gendep.Packages(dir)
 	if len(pkgs) == 0 {
 		return nil
 	}
-	// A module outside the org runs nothing until it asks. Said out loud,
-	// because it compiles as its zip published it: whatever its generators
-	// would have added is missing, and the compiler names that at the first
-	// symbol nobody declared rather than here.
+	// A module outside the org runs nothing until it asks.
 	if !gendep.Allowed(dir, mod.Path) {
 		fmt.Fprintf(os.Stderr, "go: %s@%s is outside %s and its go.mod carries no %s line, so its generators do not run\n", mod.Path, mod.Version, gendep.OrgPrefix, gendep.OptIn)
 		return nil
 	}
-	// The one module that cannot complete. Said out loud, because the package
-	// installed from it is built from the zip alone: whatever its own
-	// generators would have added is missing.
+	// The module that cannot complete. Said out loud, because the package installed from it is built from the zip alone: whatever its own generators
+	// would have added is missing.
 	if completingSelf(mod) {
 		fmt.Fprintf(os.Stderr, "go: %s@%s provides the program being installed, so its own generators do not run\n", mod.Path, mod.Version)
 		return nil
@@ -146,9 +123,7 @@ func (f *Fetcher) completeDir(ctx context.Context, mod module.Version, dir strin
 	if err != nil {
 		return fmt.Errorf("generating %s@%s: %w", mod.Path, mod.Version, err)
 	}
-	// A partial answer is a fact about this machine's installed programs. The
-	// key names neither, so storing one would serve it to every machine that
-	// asks, including the machines that can produce the whole answer.
+	// A partial answer is a fact about this machine's installed programs.
 	if partial {
 		overlayDebugf("modfetch: %s@%s: completed without a program this host lacks, so nothing is stored", mod.Path, mod.Version)
 		return recordComplete(ctx, mod, dir)
@@ -161,10 +136,10 @@ func (f *Fetcher) completeDir(ctx context.Context, mod module.Version, dir strin
 	if err != nil {
 		return err
 	}
-	// A generator that answers differently on two machines would give the cache
-	// two bodies for one key, and every build after the second would read
-	// whichever won. So the store asks first: an entry already there holds the
-	// same files, or the build stops and names the file that differs.
+	// A generator that answers differently on machines would give the cache
+	// bodies for one key, and every build after the second would read whichever
+	// won. So the store asks first: an entry already there holds the same
+	// files, or the build stops and names the file that differs.
 	if body, _, err := cache.GetBytes(cache.Default(), key); err == nil {
 		have, err := decodeOverlay(body)
 		if err != nil {
@@ -323,8 +298,8 @@ func zipSum(data []byte) (string, error) {
 	})
 }
 
-// zipDifference names the first file that differs between two zips: one present
-// in only one of them, or one whose bytes differ.
+// zipDifference names the first file that differs between zips: one present in
+// only one of them, or one whose bytes differ.
 func zipDifference(left, right []byte) string {
 	leftZip, err := zip.NewReader(bytes.NewReader(left), int64(len(left)))
 	if err != nil {

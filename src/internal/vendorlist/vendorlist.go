@@ -1,14 +1,12 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 // Package vendorlist answers which packages a vendor tree vendors.
 //
-// A vendor directory in this distribution holds whole repositories,
-// checked out as git submodules, so it also carries packages nothing in
-// the distribution imports and whose own dependencies were never
-// vendored. modules.txt names the packages that are part of the build;
-// the rest is checkout residue.
+// A vendor directory in this distribution holds whole repositories, checked
+// out as git submodules. It also carries packages nothing in the distribution
+// imports and whose own dependencies were never vendored. modules.txt names
+// the packages that are part of the build; the rest is checkout residue.
 package vendorlist
 
 import (
@@ -19,8 +17,7 @@ import (
 	"sync"
 )
 
-// lists caches one vendor tree's package set, by its directory. A nil
-// set means the tree has no modules.txt and makes no claim.
+// lists caches one vendor tree's package set, by its directory.
 var lists sync.Map
 
 // Vendors reports whether the distribution vendors the package in dir.

@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo
 
@@ -8,15 +7,11 @@ package syscall
 
 import _ "unsafe" // for linkname
 
-// The routing MIB, as every BSD numbers it. An APE carries these for the
-// Darwin host it may boot on; a Linux host never reaches this file's
-// caller, because netlink answers there.
+// The routing MIB, as every BSD numbers it.
 const (
 	CTL_NET = 4
 
-	// Apple's AF_ROUTE. It is NOT the Linux constant of that number:
-	// Linux calls 17 AF_PACKET and has no AF_ROUTE at all. This MIB is
-	// read by a Darwin kernel, so it carries Darwin's numbering.
+	// Apple's AF_ROUTE. It is NOT the Linux constant of that number: Linux calls AF_PACKET and has no AF_ROUTE at all.
 	darwinAFRoute = 17
 
 	NET_RT_DUMP    = 1
@@ -25,22 +20,12 @@ const (
 	NET_RT_IFLIST2 = 6
 )
 
-// Implemented in the runtime, which is the only package that can reach
-// Apple's libc here: it is pushed across with //go:linkname rather than
-// pulled, because a pull out of the runtime is refused.
+// Implemented in the runtime, which is the only package that can reach Apple's libc here.
 func cosmoDarwinSysctl(mib []uint32, out []byte) (int, bool)
 
 // RouteRIB fetches the routing information base from the host, the way
-// every BSD publishes it: a sysctl over the AF_ROUTE branch, sized by a
-// first call that writes nothing and then read by a second.
-//
-// Only a Darwin host serves it. macOS keeps no netlink socket, and its
-// routing table has no name for sysctlbyname to ask for, so the numeric
-// MIB is the whole interface. A host that is not Darwin answers
-// EAFNOSUPPORT, the same errno its netlink socket would.
-//
-// The table can grow between the two calls. ENOMEM is what the kernel
-// says when it does, and internal/routebsd retries on exactly that.
+// every BSD publishes it: a sysctl over the AF_ROUTE branch, sized. By
+// a first call that writes nothing and then read by a second.
 func RouteRIB(facility, param int) ([]byte, error) {
 	mib := []uint32{CTL_NET, darwinAFRoute, 0, 0, uint32(facility), uint32(param)}
 	n, ok := cosmoDarwinSysctl(mib, nil)
@@ -59,10 +44,7 @@ func RouteRIB(facility, param int) ([]byte, error) {
 	return tab[:got], nil
 }
 
-// The routing-message vocabulary, with Apple's numbers. A Linux host
-// never reads them: netlink answers there and RouteRIB refuses. They are
-// here because internal/routebsd parses what a Darwin kernel wrote, and
-// the cosmo zerrors files carry Linux's numbering, where several of
+// The routing-message vocabulary, with Apple's numbers. A Linux host never reads them: netlink answers there and RouteRIB refuses. They are here. This is because internal/routebsd parses what a Darwin kernel wrote, and the cosmo zerrors files carry Linux's numbering. This holds where several of
 // these names either mean something else or do not exist.
 const (
 	AF_LINK = 0x12

@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo
 
@@ -15,24 +14,15 @@ const (
 	_NT_IMAGE_FILE_MACHINE_I386  = 0x014c
 )
 
-// cosmoHostArch reports the machine this process is running on, which is
-// not always the machine the payload was built for. It answers "" when
-// the host cannot be asked, and the caller then keeps the payload's own
-// architecture.
-//
-// No host is probed. The boot path picks the payload matching the
-// machine, and the one case where it would not - an amd64 payload under
-// WoA emulation - fails to boot at all, so nothing reaches here.
-//
-// This runs in osinit, ahead of the NT layer's std handles, where a
-// wrong call is a throw that prints nowhere and exits 2.
+// cosmoHostArch reports the machine this process is running on, which is not
+// always the machine the payload was built for.
 func cosmoHostArch() string {
 	return ""
 }
 
 // cosmoHostArchNT reads the machine from IsWow64Process2, which reports
-// it even for a process that is not under WOW64. Nothing calls it yet:
-// it is the probe an arm64 Windows bring-up needs, kept beside the
+// it even for a process that is not under WOW64. Nothing calls it yet.
+// It is the probe an arm64 Windows bring-up needs, kept beside the
 // numbers it reads rather than rewritten from scratch then.
 func cosmoHostArchNT() string {
 	if !iswindows() || ntIsWow64Process2Fn == 0 {

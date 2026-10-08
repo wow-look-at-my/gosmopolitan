@@ -1,8 +1,7 @@
 # The wasm ports: std builds for both, the object writer's host-side
-# tests, the two transports that need a real host (node fetch streams,
-# the wasip1sock reference host) and the wasmexport compiler tests. The
-# toolchain must already be built; node 18+ and wazero must be on PATH.
-# GOOS is pinned on every host-side go test: the fork defaults to cosmo.
+# tests, both transports that need a real host (node fetch streams, the
+# wasip1sock reference host). The wasmexport compiler tests. GOOS is
+# pinned on every host-side go test: the fork defaults to cosmo.
 tests:
 	- desc: std builds for js/wasm and wasip1/wasm
 	  cmd: export PATH="$PWD/bin:$PATH"; GOOS=js GOARCH=wasm go build std && GOOS=wasip1 GOARCH=wasm go build std

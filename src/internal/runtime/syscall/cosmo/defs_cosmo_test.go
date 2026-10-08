@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package cosmo_test
 
@@ -11,11 +10,9 @@ import (
 	"unsafe"
 )
 
-// TestEpollEventLayout verifies that EpollEvent matches the Linux
-// kernel's struct epoll_event ABI for the current architecture. The
-// kernel packs the struct on x86-64 (12 bytes, data at offset 4) but
-// aligns it naturally on arm64 (16 bytes, data at offset 8). A mismatch
-// makes the kernel write past the end of the events array in netpoll.
+// TestEpollEventLayout verifies that EpollEvent matches the Linux kernel's
+// struct epoll_event ABI for the current architecture. A mismatch makes the
+// kernel write past the end of the events array in netpoll.
 func TestEpollEventLayout(t *testing.T) {
 	var ev cosmo.EpollEvent
 	var wantSize, wantOff uintptr

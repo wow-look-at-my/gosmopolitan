@@ -1,5 +1,5 @@
 # A release is named for $GOROOT/VERSION, and a go command that switches to a
-# toolchain fatals when the binary it execs reports another version. So the two
+# toolchain fatals when the binary it execs reports another version. So both
 # move together or a published release cannot be selected. dist stamp is what
 # the publish leg runs over the toolchain its build leg built.
 tests:
@@ -34,15 +34,15 @@ tests:
 	  cmd: export PATH="$PWD/bin:$PATH" GOROOT="$PWD"; go tool dist stamp 1.27.0
 	  exit: 2
 
-	# -ldflags reaches the link action ID alone, so a stamp never invalidates a
+	# -ldflags reaches the link action ID alone. A stamp never invalidates a
 	# compile the build cache already holds, and a tree that moved after the
 	# build costs the one package that moved. The stamp still lands.
 	#
-	# Whether that package COMPILES here is not this suite's to say: the cache
-	# is shared and writable, so the first run of this case publishes the
-	# edited package and every later run reads it back as a hit. stampInstall
-	# names what it compiles for the log, and only a private cache could assert
-	# on it.
+	# So the first run of this case publishes the edited package. This happens
+	# whether that package COMPILES here is not this suite's to say: the cache
+	# is shared and writable. Every later run reads it back as a hit.
+	# stampInstall names what it compiles for the log, and only a private cache
+	# could assert on it.
 	- desc: dist stamp lands on a tree that moved under the built binaries
 	  cmd: |
 		set -eu
