@@ -10,10 +10,10 @@ import (
 	"cmd/go/internal/load"
 )
 
-// toolGraph links a main package that imports cmd/compile, which imports
-// cmd/compile/internal/ssa and the embedded standard package runtime, and
-// answers the link action. mainID, ssaID and runtimeID are the content IDs
-// of those packages. The packages carry no Deps, as under go build.
+// toolGraph links a main package that imports cmd/compile. cmd/compile
+// imports cmd/compile/internal/ssa and the embedded standard package runtime.
+// The result is the link action. mainID, ssaID and runtimeID are the content
+// IDs of those packages. The packages carry no Deps, as under go build.
 func toolGraph(mainID, ssaID, runtimeID string) *Action {
 	pkg := func(path string, goroot bool) *load.Package {
 		p := &load.Package{}
