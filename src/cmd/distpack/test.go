@@ -76,8 +76,10 @@ var zipRules = []testRule{
 	{name: "go/pkg/tool/*/compile", goos: "darwin"},
 	{name: "go/pkg/tool/*/compile", goos: "windows", exclude: true},
 	{name: "go/pkg/tool/*/compile.exe", goos: "windows"},
-	{name: "go/pkg/tool/*/pack", exclude: true},
-	{name: "go/pkg/tool/*/pack.exe", exclude: true},
+	{name: "go/pkg/tool/*/pack", goos: "linux"},
+	{name: "go/pkg/tool/*/pack", goos: "darwin"},
+	{name: "go/pkg/tool/*/pack", goos: "windows", exclude: true},
+	{name: "go/pkg/tool/*/pack.exe", goos: "windows"},
 }
 
 var modRules = []testRule{
@@ -116,8 +118,10 @@ var modRules = []testRule{
 	{name: "golang.org/toolchain@*/pkg/tool/*/compile", goos: "darwin"},
 	{name: "golang.org/toolchain@*/pkg/tool/*/compile", goos: "windows", exclude: true},
 	{name: "golang.org/toolchain@*/pkg/tool/*/compile.exe", goos: "windows"},
-	{name: "golang.org/toolchain@*/pkg/tool/*/pack", exclude: true},
-	{name: "golang.org/toolchain@*/pkg/tool/*/pack.exe", exclude: true},
+	{name: "golang.org/toolchain@*/pkg/tool/*/pack", goos: "linux"},
+	{name: "golang.org/toolchain@*/pkg/tool/*/pack", goos: "darwin"},
+	{name: "golang.org/toolchain@*/pkg/tool/*/pack", goos: "windows", exclude: true},
+	{name: "golang.org/toolchain@*/pkg/tool/*/pack.exe", goos: "windows"},
 
 	// go.mod are renamed to _go.mod.
 	{name: "**/go.mod", exclude: true},
