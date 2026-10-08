@@ -84,8 +84,8 @@ A hit served over the network reads exactly like one off local disk unless the c
 
 A run with `CI` set and no configuration is an error rather than a quiet local build. A build that silently stops sharing is how a cache regression hides. A store that is configured but cannot be reached is a slower build rather than a broken one. It says so on stderr.
 
-`GOCACHEDEBUG` makes the cache describe itself: which process owns it, what each tier answered, and what it moved.
+The cache describes itself as it runs: which process owns it, what each tier answered, and what it moved.
 
-A cache in trouble always reports. What `GOCACHEDEBUG` turns back on is the routine success reporting, which is the index size on every go command and a summary per batch.
+The routine success reporting is always on: the index size on every go command, and a summary per batch. A cache in trouble reports as well.
 
 `GOCACHELOG` names a file that takes those notices in place of stderr. A go command's output is DATA to whoever ran it, and tests across this tree run `go list` and read the answer. A routine line on that stream becomes a package name, a directory, or a file path somebody then opens. `dist test` sets the variable and prints the file at the end, so an outage reaches the build's output and never a test's.
