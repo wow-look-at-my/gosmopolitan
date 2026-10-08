@@ -91,6 +91,10 @@ const (
 	ntSysUmask        = 95
 	ntSysGettimeofday = 96
 	ntSysGetrusage    = 98
+	ntSysGetpriority   = 140
+	ntSysSetpriority   = 141
+	ntSysSchedSetaffin = 203
+	ntSysSchedGetaffin = 204
 	ntSysGetuid       = 102
 	ntSysGetgid       = 104
 	ntSysGeteuid      = 107
@@ -429,6 +433,14 @@ func ntSyscallEmulate(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uintpt
 		return ntEmuWait4(int32(a1), (*int32)(unsafe.Pointer(a2)), int32(a3), (*ntLinuxRusage)(unsafe.Pointer(a4)))
 	case ntSysGetrusage:
 		return ntEmuGetrusage(int32(a1), (*ntLinuxRusage)(unsafe.Pointer(a2)))
+	case ntSysGetpriority:
+		return ntEmuGetpriority(int32(a1), int32(a2))
+	case ntSysSetpriority:
+		return ntEmuSetpriority(int32(a1), int32(a2), int32(a3))
+	case ntSysSchedSetaffin:
+		return ntEmuSchedSetaffinity(int32(a1), a2, (*uint64)(unsafe.Pointer(a3)))
+	case ntSysSchedGetaffin:
+		return ntEmuSchedGetaffinity(int32(a1), a2, (*uint64)(unsafe.Pointer(a3)))
 	case ntSysGettimeofday:
 		return ntEmuGettimeofday((*ntLinuxTimeval)(unsafe.Pointer(a1)))
 
