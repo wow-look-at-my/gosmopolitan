@@ -117,9 +117,7 @@ func orgVersion(ld *Loader, ctx context.Context, path string) (string, error) {
 	if version, ok, err := orgPinned(path); err != nil || ok {
 		return version, err
 	}
-	// A name in go.mod replaces the branch this invocation would follow, and is
-	// resolved the same way after that. A branch nothing answers for therefore
-	// takes the default branch.
+	// A name in go.mod replaces the branch this invocation would follow, and is resolved the same way after that.
 	branch := orgNamedBranch(ld, path)
 	if branch == "" {
 		branch = orgBranch(ld)
