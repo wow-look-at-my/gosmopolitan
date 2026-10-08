@@ -95,6 +95,7 @@ func TestWaitsNeverSpin(t *testing.T) {
 			"casGFromPreempted",
 			"execute",
 			"checkRunqsNoP",
+			"runqgrab",
 			"runqsteal",
 			"preemptSignalDone",
 			"syscall_runtime_BeforeExec",

@@ -8760,28 +8760,9 @@ func runqgrab(pp *p, batch *[256]guintptr, batchHead uint32, stealRunNextG bool)
 			if stealRunNextG {
 				// Try to steal from pp.runnext.
 				if next := pp.runnext; next != 0 {
-					if pp.status == _Prunning && !osHasLowResTimer {
-						if mp := pp.m.ptr(); mp != nil {
-							if gp := mp.curg; gp == nil || readgstatus(gp)&^_Gscan != _Gsyscall {
-								// Sleep to ensure that pp isn't about to run the g
-								// we are about to steal.
-								// The important use case here is when the g running
-								// on pp ready()s another g and then almost
-								// immediately blocks. Instead of stealing runnext
-								// in this window, back off to give pp a chance to
-								// schedule runnext. This will avoid thrashing gs
-								// between different Ps.
-								// A sync chan send/recv takes ~50ns as of time of
-								// writing, so 3us gives ~50x overshoot.
-								// The sleep is a fixed delay in the OS, not a wait
-								// on pp: the steal below happens either way.
-								// On platforms whose system timer granularity is
-								// 1-15ms the delay would be far too long, so the
-								// thief steals at once.
-								usleep(3)
-							}
-						}
-					}
+					// The thief takes runnext at once. Nothing tells a thief
+					// when pp is about to run next itself, so a delay here
+					// would be a guess, not a wait on pp.
 					if !pp.runnext.cas(next, 0) {
 						continue
 					}
