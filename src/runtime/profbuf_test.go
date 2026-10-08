@@ -218,10 +218,8 @@ func TestProfBufWakeup(t *testing.T) {
 	// reader is blocked.
 	var waitStatus string
 	switch runtime.GOOS {
-	case "js":
+	case "js", "wasip1":
 		waitStatus = "waiting"
-	case "wasip1":
-		waitStatus = "runnable"
 	default:
 		waitStatus = "syscall"
 	}

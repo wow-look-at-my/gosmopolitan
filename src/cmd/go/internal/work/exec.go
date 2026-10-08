@@ -417,8 +417,8 @@ func (b *Builder) buildActionID(a *Action) cache.ActionID {
 		fmt.Fprintf(h, "teststartup %q\n", p.Internal.TestStartup)
 	}
 	if p.Internal.TestVariantOf != nil {
-		// The replaced package's own compile is a dependency, so its content
-		// is hashed with the others below; this says what it is used for.
+		// The replaced package's own compile is a dependency, so its export
+		// data is hashed with the others below; this says what it is used for.
 		fmt.Fprintf(h, "testvariant %q\n", p.Internal.TestVariantOf.ImportPath)
 	}
 	if len(p.CgoFiles)+len(p.SwigFiles)+len(p.SwigCXXFiles) > 0 {
@@ -558,7 +558,7 @@ func (b *Builder) buildActionID(a *Action) cache.ActionID {
 	for _, a1 := range a.Deps {
 		p1 := a1.Package
 		if p1 != nil {
-			fmt.Fprintf(h, "import %s %s\n", p1.ImportPath, contentID(a1.buildID))
+			fmt.Fprintf(h, "import %s %s\n", p1.ImportPath, b.importID(a1))
 		}
 		if a1.Mode == "preprocess PGO profile" {
 			fmt.Fprintf(h, "pgofile %s\n", b.fileHash(a1.built))
