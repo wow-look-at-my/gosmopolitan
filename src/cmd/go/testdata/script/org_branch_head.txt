@@ -11,6 +11,9 @@
 
 [!git] skip
 
+# Every org repository is a local file:// clone behind an insteadOf rule.
+env TESTGOVCSREMOTE=
+
 env GIT_CONFIG_GLOBAL=$WORK${/}home${/}gopher${/}.gitconfig
 env HOME=$WORK${/}home${/}gopher
 env GIT_ALLOW_PROTOCOL=file
