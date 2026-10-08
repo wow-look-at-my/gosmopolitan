@@ -18,8 +18,10 @@ import (
 	"go/token"
 	"go/types"
 	"internal/buildcfg"
+	"internal/cfg"
 	"internal/testenv"
 	"io"
+	"io/fs"
 	"log"
 	"os"
 	"os/exec"
@@ -489,6 +491,7 @@ func (w *Walker) loadImports() {
 
 	imports, ok := listCache.Load(name)
 	if !ok {
+		listInputs()
 		listSem <- semToken{}
 		defer func() { <-listSem }()
 
@@ -556,6 +559,34 @@ func (w *Walker) loadImports() {
 	w.importDir = li.importDir
 	w.importMap = li.importMap
 }
+
+// listInputs reads, in the test process, what 'go list std' reads in its own:
+// every environment variable the go command consults, and every directory of
+// the standard library's tree. A cached result of these tests is keyed on what
+// the test process read, so a new package or a changed setting is a miss.
+var listInputs = sync.OnceFunc(func() {
+	for _, variable := range strings.Fields(cfg.KnownEnv) {
+		os.Getenv(variable)
+	}
+	src := filepath.Join(testenv.GOROOT(nil), "src")
+	commands := filepath.Join(src, "cmd")
+	err := filepath.WalkDir(src, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !entry.IsDir() {
+			return nil
+		}
+		name := entry.Name()
+		if path == commands || name == "testdata" || path != src && (strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_")) {
+			return filepath.SkipDir
+		}
+		return nil
+	})
+	if err != nil {
+		log.Fatalf("reading the standard library's tree: %v", err)
+	}
+})
 
 // listEnv returns the process environment to use when invoking 'go list' for
 // the given context.

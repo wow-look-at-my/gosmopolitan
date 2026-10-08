@@ -91,6 +91,9 @@ sched < allg, allp;
 NONE < notifyList;
 hchan, notifyList < sudog;
 
+# Goroutines parked until signal delivery is idle
+NONE < sigIdle;
+
 hchan, pollDesc, wakeableSleep < timers;
 timers, timerSend < timer < netpollInit;
 
@@ -140,6 +143,7 @@ allg,
   hchan,
   notifyList,
   reflectOffs,
+  sigIdle,
   timer,
   traceStrings,
   typelinks,
@@ -226,6 +230,7 @@ hchan,
   sched,
   traceStrings,
   notifyList,
+  sigIdle,
   fin
 # Above TRACE is anything that can create a trace event
 < TRACE

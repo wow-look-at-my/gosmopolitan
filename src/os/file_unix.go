@@ -192,8 +192,11 @@ func newFile(fd int, name string, kind newFileKind, nonBlocking bool) *File {
 			// In addition to the behavior described above for regular files,
 			// on Darwin, kqueue does not work properly with fifos:
 			// closing the last writer does not cause a kqueue event
-			// for any readers. See issue #24164.
-			if (runtime.GOOS == "darwin" || runtime.GOOS == "ios") && typ == syscall.S_IFIFO {
+			// for any readers. See issue #24164. A fifo opened for
+			// both reading and writing is itself a writer, so its
+			// reads never reach that end of file and it stays in the
+			// poller. A cosmo binary on macOS reports GOOS darwin.
+			if (runtime.GOOS == "darwin" || runtime.GOOS == "ios") && typ == syscall.S_IFIFO && !openedReadWrite(fd) {
 				pollable = false
 			}
 		}
@@ -232,6 +235,13 @@ func newFile(fd int, name string, kind newFileKind, nonBlocking bool) *File {
 
 	runtime.SetFinalizer(f.file, (*file).close)
 	return f
+}
+
+// openedReadWrite reports whether fd was opened for both reading and
+// writing.
+func openedReadWrite(fd int) bool {
+	flags, err := unix.Fcntl(fd, syscall.F_GETFL, 0)
+	return err == nil && flags&(syscall.O_WRONLY|syscall.O_RDWR) == syscall.O_RDWR
 }
 
 func sigpipe() // implemented in package runtime

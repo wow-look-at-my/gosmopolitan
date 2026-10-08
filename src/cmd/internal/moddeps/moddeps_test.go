@@ -265,12 +265,17 @@ func makeGOROOTCopy(t *testing.T) string {
 	t.Helper()
 
 	gorootCopyDir := t.TempDir()
-	err := filepath.Walk(testenv.GOROOT(t), func(src string, info os.FileInfo, err error) error {
+	err := filepath.WalkDir(testenv.GOROOT(t), func(src string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if info.IsDir() && src == filepath.Join(testenv.GOROOT(t), ".git") {
+		// WalkDir asks before it reads a directory, so the skipped .git is never listed.
+		if entry.IsDir() && src == filepath.Join(testenv.GOROOT(t), ".git") {
 			return filepath.SkipDir
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
 		}
 
 		rel, err := filepath.Rel(testenv.GOROOT(t), src)
