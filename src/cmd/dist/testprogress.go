@@ -25,18 +25,26 @@ type testProgress struct {
 	timings *testTimings
 
 	lock  sync.Mutex
-	total int
+	steps int
 	done  map[string]bool
 
 	stop chan struct{}
 	wait sync.WaitGroup
 }
 
-func newTestProgress(dst io.Writer, timings *testTimings, total int) *testProgress {
+// progressCounts is what a progress line reports.
+type progressCounts struct {
+	testsEnded   int
+	testsStarted int
+	stepsDone    int
+	steps        int
+}
+
+func newTestProgress(dst io.Writer, timings *testTimings, steps int) *testProgress {
 	return &testProgress{
 		dst:     dst,
 		timings: timings,
-		total:   total,
+		steps:   steps,
 		done:    make(map[string]bool),
 		stop:    make(chan struct{}),
 	}
@@ -73,10 +81,16 @@ func (pro *testProgress) markDone(name string) {
 	pro.done[name] = true
 }
 
-func (pro *testProgress) counts() (done, total int) {
+func (pro *testProgress) counts() progressCounts {
+	ended, started := pro.timings.testCounts()
 	pro.lock.Lock()
 	defer pro.lock.Unlock()
-	return len(pro.done), pro.total
+	return progressCounts{
+		testsEnded:   ended,
+		testsStarted: started,
+		stepsDone:    len(pro.done),
+		steps:        pro.steps,
+	}
 }
 
 func (pro *testProgress) emit() {
@@ -85,18 +99,23 @@ func (pro *testProgress) emit() {
 	if len(recent) == 0 {
 		return
 	}
-	done, total := pro.counts()
-	fmt.Fprintln(pro.dst, progressLine(done, total, recent, lineWidth()))
+	fmt.Fprintln(pro.dst, progressLine(pro.counts(), recent, lineWidth()))
 }
 
 // progressLine builds the line. It is separate from emit so a test can check
 // the text without a clock.
-func progressLine(done, total int, recent []testTiming, width int) string {
+//
+// Each test that ended counts one, subtests included, over the tests started
+// so far: a test is known only once its binary runs it, so that total grows.
+// The steps that follow are fixed at the start of the run and carry the
+// percentage, since they are what says how much is left to announce.
+func progressLine(cnt progressCounts, recent []testTiming, width int) string {
 	pct := 0
-	if total > 0 {
-		pct = done * 100 / total
+	if cnt.steps > 0 {
+		pct = cnt.stepsDone * 100 / cnt.steps
 	}
-	prefix := fmt.Sprintf("[%d/%d %d%%] ", done, total, pct)
+	prefix := fmt.Sprintf("[%d done/%d started, %d/%d steps %d%%] ",
+		cnt.testsEnded, cnt.testsStarted, cnt.stepsDone, cnt.steps, pct)
 
 	var parts []string
 	for _, tng := range recent {

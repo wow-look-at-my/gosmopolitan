@@ -22,8 +22,8 @@ type segprotRequest struct {
 // written either as -Wl,-segprot,SEG,MAX,INIT or as -segprot SEG MAX INIT.
 //
 // The Apple linkers take the flag and, for an arm64 __TEXT segment, leave the
-// protections at r-x/r-x anyway, so the linker applies what was asked for to
-// the output itself.
+// protections at r-x/r-x anyway. The linker applies what was asked for to the
+// output itself.
 func segprotRequests(flags []string) ([]segprotRequest, error) {
 	var requests []segprotRequest
 	add := func(fields []string) error {

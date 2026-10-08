@@ -63,8 +63,8 @@ func TestGCMarkStepNoCycle(t *testing.T) {
 
 // TestGCMarkStepDrivesMark checks that during a mark phase the mark step
 // performs bounded increments of real mark work, reports remaining work
-// correctly, and that repeatedly calling it drives the cycle through mark
-// termination.
+// correctly, and that repeatedly calling. It drives the cycle through
+// mark termination.
 func TestGCMarkStepDrivesMark(t *testing.T) {
 	// GOMAXPROCS is the whole process, so this test needs it to itself.
 	t.Serial()

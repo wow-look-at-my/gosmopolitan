@@ -34,10 +34,10 @@ func gcMarkStep(budgetMs float64) bool {
 
 // gcMarkStepBudgeted performs up to budgetNs nanoseconds of GC mark work,
 // following the same discipline as gcAssistAlloc1: it drains via gcDrainN
-// on the system stack with the goroutine parked in _Gwaiting so its stack
+// on the system stack. With the goroutine parked in _Gwaiting so its stack
 // remains scannable, banks the completed work as background scan credit,
-// and signals a background completion point if it finishes the last of the
-// mark work. It reports whether mark work remains.
+// and signals a background completion point. This holds if it finishes the
+// last of the mark work. It reports whether mark work remains.
 func gcMarkStepBudgeted(budgetNs int64) bool {
 	if goos.IsJs != 0 {
 		// The host is explicitly donating idle time.

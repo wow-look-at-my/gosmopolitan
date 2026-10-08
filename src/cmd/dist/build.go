@@ -1444,20 +1444,24 @@ func toolenv() []string {
 }
 
 var (
-	// The toolchain is one binary: the go command links the compiler, linker,
-	// assembler, cgo, cover, vet, fix and preprofile, and bin/go is where it
-	// installs. linkedTools names the pkg/tool entries that point at it.
+	// The toolchain is one binary: the go command links every tool, and
+	// bin/go is where it installs. linkedTools names the pkg/tool entries
+	// that point at it. No tool is built after make.bash.
 	toolchain = []string{"cmd/go/main"}
 
 	// Keep in sync with binExes in cmd/distpack/pack.go.
 	binExesIncludedInDistpack = []string{"cmd/go/main", "cmd/gofmt"}
 
-	// Keep in sync with the filter in cmd/distpack/pack.go.
-	linkedTools = []string{"asm", "cgo", "compile", "covdata", "cover", "embedstd", "fix", "link", "preprofile", "vet"}
+	// Keep in sync with the filter in cmd/distpack/pack.go and the table in
+	// cmd/go/internal/selftool/tools.go.
+	linkedTools = []string{"addr2line", "asm", "buildid", "cgo", "compile", "covdata", "cover", "embedstd", "fix", "link", "nm", "objdump", "pack", "pprof", "preprofile", "test2json", "trace", "vet"}
 
-	// Only the binaries distpack ships are installed. The tools are packages
-	// of bin/go now, so there is nothing more to install for them.
-	toolsToInstall = binExesIncludedInDistpack
+	// The binaries distpack ships are installed, and dist and distpack
+	// beside the linked tools: run.bash, the stamp and the archive step run
+	// them from the source tree, and distpack leaves both out of the
+	// archive. The other tools are packages of bin/go, so there is nothing
+	// more to install for them.
+	toolsToInstall = append(binExesIncludedInDistpack, "cmd/dist", "cmd/distpack")
 )
 
 // linkTools points every pkg/tool/<host>/<name> that bin/go links at bin/go,

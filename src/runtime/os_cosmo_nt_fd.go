@@ -10,10 +10,11 @@
 // syscall emulation opens.
 //
 // ntFDLock guards slot claim, release, lookup and state updates, and nothing
-// allocates while it is held. A lookup returns a COPY, so an operation racing
-// a concurrent close of the same fd sees either the handle - the close wins
-// the CloseHandle and the operation fails as on Linux - or EBADF. That is the
-// use-after-close semantics unix code already lives with.
+// allocates while it is held. A lookup returns a COPY. Consider an operation
+// racing a concurrent close of the same fd. That operation sees either the
+// handle - the close wins the CloseHandle and the operation fails as on Linux
+// - or EBADF. That is the use-after-close semantics unix code already lives
+// with.
 
 package runtime
 

@@ -10,9 +10,9 @@ import (
 	"testing"
 )
 
-// sigPairs must match runtime/sigxlat_cosmo_test.go: the single
-// authoritative Linux<->Apple correspondence, from upstream
-// defs_linux_arm64.go and defs_darwin_arm64.go.
+// sigPairs must match runtime/sigxlat_cosmo_test.go: the authoritative
+// Linux<->Apple correspondence, from upstream defs_linux_arm64.go and
+// defs_darwin_arm64.go.
 var sigPairs = map[uintptr]uintptr{ // linux -> apple
 	1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6,
 	7:  10, // BUS

@@ -75,10 +75,10 @@ func darwinEpollTrap(trap uintptr) bool {
 }
 
 // darwinEpollSyscall serves an epoll syscall on a macOS host. The pointer
-// arguments may point into the caller's stack, and the emulation can grow
-// that stack, so they are turned into pointers here, in a nosplit function,
-// before anything can move them. A timeout in milliseconds stays an integer:
-// a small integer in a pointer is an invalid pointer to the stack copier.
+// arguments may point into the caller's stack. The emulation can grow that
+// stack. They are turned into pointers here, in a nosplit function, before
+// anything can move them. A timeout in milliseconds stays an integer: a
+// small integer in a pointer is an invalid pointer to the stack copier.
 //
 //go:nosplit
 func darwinEpollSyscall(trap, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2 uintptr, err Errno) {
@@ -380,7 +380,7 @@ func epollWait(epfd int, events *EpollEvent, maxevents int, timeout int64) (uint
 }
 
 // prune drops every registration whose descriptor no longer refers to the
-// file registered, and reports EBADF when there was none to drop: then
+// file registered, and reports EBADF when there was none to drop. Then
 // the bad descriptor is the instance's own.
 func (ep *epollInstance) prune(epfd int) Errno {
 	if id, _, e := epollIDOf(epfd); e != 0 || id != ep.id {

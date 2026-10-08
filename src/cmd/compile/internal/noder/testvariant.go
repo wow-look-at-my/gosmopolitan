@@ -56,7 +56,7 @@ func readDefIndices(path string) (map[obj.DefKey]int32, int, error) {
 
 // dumpExportData writes the export data and records its fingerprint. Under
 // -testvariant the fingerprint is the replaced package's: every package
-// compiled against that one recorded it, and the linker checks it against the
+// compiled against that one recorded it. The linker checks it against the
 // object it loads.
 func dumpExportData(pw *pkgbits.PkgEncoder, out io.Writer) {
 	if base.Flag.TestVariant == "" {
