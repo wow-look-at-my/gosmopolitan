@@ -5,83 +5,84 @@
 package runtime_test
 
 import (
+	"errors"
 	"runtime"
-	"sync"
 	"testing"
+	"time"
 )
 
-type response struct {
-}
-
-type myError struct {
-}
-
-func (myError) Error() string { return "" }
-
-type async struct {
-	resp *response
-	err  error
-}
-
-// sendRequests sends count fresh requests on ch, through a select when
-// useSelect is set. Done is never ready, so every select sends.
-func sendRequests(ch chan<- *async, done <-chan struct{}, useSelect bool, count int) {
-	for range count {
-		if useSelect {
-			select {
-			case ch <- &async{resp: nil, err: myError{}}:
-			case <-done:
-			}
-			continue
-		}
-		ch <- &async{resp: nil, err: myError{}}
-	}
-}
+// A send on an unbuffered channel to a parked receiver copies the value
+// straight onto the receiver's stack, which the GC may already have
+// scanned. During a concurrent mark that copy must go through the write
+// barrier, or the only reference to the value sits where the GC will not
+// look again and the value is freed while still in use (go.dev/issue/11643,
+// where select's send path skipped it). These tests send during a mark
+// phase and check that the value reached the write barrier buffer.
 
 func TestChanSendSelectBarrier(t *testing.T) {
-	t.Parallel()
-	testChanSendBarrier(true)
+	testChanSendBarrier(t, true)
 }
 
 func TestChanSendBarrier(t *testing.T) {
-	t.Parallel()
-	testChanSendBarrier(false)
+	testChanSendBarrier(t, false)
 }
 
-func testChanSendBarrier(useSelect bool) {
-	var wg sync.WaitGroup
-	outer := 100
-	inner := 100000
-	if testing.Short() || runtime.GOARCH == "wasm" {
-		outer = 10
-		inner = 1000
-	}
-	// Each worker hands inner requests across one unbuffered channel. A
-	// handoff either wakes the parked receiver or takes from the parked
-	// sender, so both direct copies run with a fresh value every time.
-	for range outer {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			ch := make(chan *async)
-			done := make(chan struct{})
-			go sendRequests(ch, done, useSelect, inner)
-			var garbage []byte
-			for range inner {
-				req := <-ch
-				runtime.Gosched()
-				if _, ok := req.err.(myError); !ok {
-					panic(1)
-				}
-				garbage = makeByte()
+// chanBarrierSends is how many separate sends each test checks.
+const chanBarrierSends = 8
+
+func testChanSendBarrier(t *testing.T, useSelect bool) {
+	for range chanBarrierSends {
+		ch := make(chan *runtime.ChanBarrierValue)
+		received := make(chan *runtime.ChanBarrierValue)
+		go func() { received <- <-ch }()
+		for !runtime.ChanRecvWaiting(ch) {
+			runtime.Gosched()
+		}
+		val := &runtime.ChanBarrierValue{Err: errors.New("sent")}
+
+		if !runtime.GCMarksConcurrently() {
+			// No concurrent mark phase exists for the copy to race with.
+			ch <- val
+			if got := <-received; got != val {
+				t.Fatalf("received %p, sent %p", got, val)
 			}
-			_ = garbage
-		}()
+			continue
+		}
+
+		sent, shaded := sendDuringMark(t, ch, val, useSelect)
+		if !sent {
+			t.Fatal("no GC cycle reached its concurrent mark phase")
+		}
+		if got := <-received; got != val {
+			t.Fatalf("received %p, sent %p", got, val)
+		}
+		if !shaded {
+			t.Fatalf("a send to a parked receiver during the mark phase (select=%v) did not pass the value through the write barrier", useSelect)
+		}
 	}
-	wg.Wait()
 }
 
-//go:noinline
-func makeByte() []byte {
-	return make([]byte, 1<<10)
+// sendDuringMark runs GC cycles until the send happens inside a mark phase.
+func sendDuringMark(t *testing.T, ch chan *runtime.ChanBarrierValue, val *runtime.ChanBarrierValue, useSelect bool) (sent, shaded bool) {
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			default:
+				runtime.GC()
+			}
+		}
+	}()
+	deadline := time.Now().Add(time.Minute)
+	for time.Now().Before(deadline) {
+		if sent, shaded = runtime.ChanSendShades(ch, val, useSelect); sent {
+			return sent, shaded
+		}
+		runtime.Gosched()
+	}
+	t.Logf("gave up after %v without seeing a mark phase", time.Minute)
+	return false, false
 }
