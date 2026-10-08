@@ -41,7 +41,7 @@ var probeOkChecks = []string{
 	"seekreadat",
 	"fsmeta", "fslinks", "fsmetaunix", "volume", "sysinfo", "flock", "durable", "rusage", "ioctl",
 	"termios", "pty", "nanosleep", "sendfile",
-	"segvrecover", "sigterm", "sigusr2", "preempt", "cpuprof", "ctrlbreak", "waitsig",
+	"segvrecover", "sigterm", "sigusr2", "preempt", "cpuprof", "ctrlbreak", "proccontrol", "waitsig",
 	"all",
 }
 
