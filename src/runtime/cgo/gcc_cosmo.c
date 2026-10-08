@@ -231,3 +231,33 @@ __wrap_pthread_create(pthread_t *thread, const pthread_attr_t *attr, void *(*fn)
 	}
 	return err;
 }
+
+// libcosmo's dlopen, dlsym, dlclose and dlerror are stubs that always fail.
+void *cosmo_dlopen(const char *, int);
+void *cosmo_dlsym(void *, const char *);
+int cosmo_dlclose(void *);
+char *cosmo_dlerror(void);
+
+void *
+__wrap_dlopen(const char *path, int mode)
+{
+	return cosmo_dlopen(path, mode);
+}
+
+void *
+__wrap_dlsym(void *handle, const char *name)
+{
+	return cosmo_dlsym(handle, name);
+}
+
+int
+__wrap_dlclose(void *handle)
+{
+	return cosmo_dlclose(handle);
+}
+
+char *
+__wrap_dlerror(void)
+{
+	return cosmo_dlerror();
+}
