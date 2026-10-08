@@ -4,7 +4,6 @@
 # The child finds them by walking its own ancestors in /proc. No variable or
 # flag carries a head, so a host without /proc resolves each head again.
 
-[short] skip 'constructs local git repositories'
 [!git] skip
 
 env GIT_CONFIG_GLOBAL=$WORK${/}home${/}gopher${/}.gitconfig

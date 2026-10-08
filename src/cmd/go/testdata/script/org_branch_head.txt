@@ -9,7 +9,6 @@
 # with a url.<base>.insteadOf rewrite rather than a proxy. Nothing here reaches
 # the network.
 
-[short] skip 'constructs local git repositories'
 [!git] skip
 
 env GIT_CONFIG_GLOBAL=$WORK${/}home${/}gopher${/}.gitconfig

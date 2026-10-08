@@ -9,7 +9,6 @@
 # prove that no agent started it. So this script runs only where no agent is an
 # ancestor of the test. org_branch_head.txt covers the builds outside CI.
 
-[short] skip 'constructs local git repositories'
 [!git] skip
 [agent] skip 'a coding agent is an ancestor of this test, so the go command never makes a CI build'
 

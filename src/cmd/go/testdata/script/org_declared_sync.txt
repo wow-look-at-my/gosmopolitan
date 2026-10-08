@@ -4,7 +4,6 @@
 # indirect require line at the declared version, and go.sum lines verified
 # against the checksum database. Nothing else relaxes -mod=readonly.
 
-[short] skip 'constructs local git repositories'
 [!git] skip
 
 env GIT_CONFIG_GLOBAL=$WORK${/}home${/}gopher${/}.gitconfig

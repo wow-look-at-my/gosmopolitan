@@ -7,7 +7,6 @@
 # This needs no CI: the run name alone selects the lock. The store is named too,
 # here as a directory, so the test leaves nothing in the user cache.
 
-[short] skip 'constructs local git repositories'
 [!git] skip
 
 env GIT_CONFIG_GLOBAL=$WORK${/}home${/}gopher${/}.gitconfig
