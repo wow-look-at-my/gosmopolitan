@@ -105,7 +105,9 @@ runs:
           mkdir -p "$RUNNER_TEMP/toolchain/$(dirname "$f")" && cp "$f" "$RUNNER_TEMP/toolchain/$f"
         done
 
+    # Only the NT suite leg reads toolchain-Windows, and it is off. Its 0.5GB evicted other runs' hand-offs from the 10GB cache. waiver-expires: 2026-10-13
     - name: Hand the toolchain over
+      if: runner.os != 'Windows'
       uses: wow-look-at-my/actions@cache-upload#latest
       with:
         name: toolchain-${{ runner.os }}
@@ -159,7 +161,9 @@ runs:
         echo "target=$target" >> "$GITHUB_OUTPUT"
         ls -l "$RUNNER_TEMP/distpack"
 
+    # Only the windows publish-upload entry reads this archive, and it is off. Its 0.5GB evicted other runs' hand-offs from the 10GB cache. waiver-expires: 2026-10-13
     - name: Hand the distribution archive over
+      if: runner.os != 'Windows'
       uses: wow-look-at-my/actions@cache-upload#latest
       with:
         name: distpack-${{ steps.distpack.outputs.target }}

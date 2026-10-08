@@ -898,7 +898,7 @@ jobs:
           echo "::notice::linux:  https://dl.pazer.build/gosmopolitan?branch=$b&os=linux&arch=amd64"
           echo "::notice::darwin: https://dl.pazer.build/gosmopolitan?branch=$b&os=darwin&arch=arm64"
 
-  # A run hands off about 1.5GB, and the repository's cache holds 10GB. Concurrent runs evict each other's hand-offs unless each run drops its own when its readers finish.
+  # A run hands off about 0.5GB, 1.5GB with the NT legs on, and the repository's cache holds 10GB. Concurrent runs evict each other's hand-offs unless each run drops its own when its readers finish.
   cleanup:
     needs: [suite, cosmo-checks, test, wasm, wasm-suite, publish-upload, publish-finish]
     # A cancelled or failed run still has hand-offs to drop; without this the job is skipped and they are orphaned.
