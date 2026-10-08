@@ -4,6 +4,11 @@
 
 package atomic
 
+// panicUnaligned stays a call. A 64-bit atomic on a 32-bit port inlines into
+// the runtime's //go:nowritebarrierrec code, and an inlined panic there is a
+// call to gopanic from the runtime itself.
+//
+//go:noinline
 func panicUnaligned() {
 	panic("unaligned 64-bit atomic operation")
 }
