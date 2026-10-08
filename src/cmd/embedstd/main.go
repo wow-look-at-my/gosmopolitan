@@ -1,14 +1,13 @@
 // Copyright The Go Authors. All rights reserved. Use of this source code is
 // governed by a BSD-style license that can be found in the LICENSE file.
 
-// Embedstd writes the blob a go binary carries its standard library in:
-// the compiled archive of every standard package for cosmo/amd64,
-// cosmo/arm64, js/wasm and wasip1/wasm. The assembly headers under
-// pkg/include, and a manifest per
-// target naming each package, its imports and its build ID. The linker's
-// -apeappend flag puts the blob past an APE's load span, and
-// internal/cosmo/embedded reads it back. The go command running it, from
-// its GOROOT source tree, is the one whose archives are embedded.
+// Embedstd writes the blob a go binary carries its standard library in: the
+// compiled archive of every standard package for cosmo/amd64 and cosmo/arm64.
+// This also covers js/wasm and wasip1/wasm. The assembly headers under
+// pkg/include, and a manifest per target naming each package, its imports and
+// its build ID. The linker's -apeappend flag puts the blob past an APE's load
+// span, and internal/cosmo/embedded reads it back. The go command running it,
+// from its GOROOT source tree, is the one whose archives are embedded.
 package embedstd
 
 import (
@@ -209,7 +208,8 @@ func requireCompiler(goCmd []string, goos, goarch string) {
 }
 
 // listStd builds the standard library for a target, with cgo on or off, and
-// answers every package in dependency order, with its archive and build ID.
+// answers every package in dependency order. That listStd is with its
+// archive and build ID.
 func listStd(goCmd []string, goos, goarch string, cgo bool) []listed {
 	// -e: a handful of standard packages hold nothing but tests.
 	args := []string{"list", "-e", "-export", "-deps", "-json=ImportPath,Name,Imports,Export,BuildID,Standard,Error,DepsErrors", "std"}
