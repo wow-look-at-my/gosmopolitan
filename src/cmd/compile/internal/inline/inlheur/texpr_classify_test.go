@@ -43,7 +43,7 @@ type state struct {
 // shared local package, and Pkg.Lookup writes that package's symbol map.
 // Two of these tests running at once is a concurrent map write.
 func mkstate(t *testing.T) *state {
-	t.Serial()
+	t.Serial("every caller looks names up in the shared local package, and Pkg.Lookup writes that package symbol map")
 	return &state{
 		ntab: make(map[string]*ir.Name),
 	}

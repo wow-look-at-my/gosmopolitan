@@ -1805,6 +1805,18 @@ func (c *conn) close() {
 // not a hard-coded value.
 var rstAvoidanceDelay = 500 * time.Millisecond
 
+// rstDelay returns how long this server waits in closeWriteAndWait. A test in
+// this package raises it on its own server through testHookRSTAvoidanceDelay,
+// which is per-server: every server in the process reads the package default,
+// so a test that wrote it there would change the timing of tests that run at
+// the same time, and race with their reads.
+func (s *Server) rstDelay() time.Duration {
+	if s != nil && s.testHookRSTAvoidanceDelay > 0 {
+		return s.testHookRSTAvoidanceDelay
+	}
+	return rstAvoidanceDelay
+}
+
 type closeWriter interface {
 	CloseWrite() error
 }
@@ -1843,7 +1855,7 @@ func (c *conn) closeWriteAndWait() {
 	//
 	// Instead, we declare that we are “reasonably certain” that we received the
 	// ACK if maxRSTAvoidanceDelay has elapsed.
-	time.Sleep(rstAvoidanceDelay)
+	time.Sleep(c.server.rstDelay())
 }
 
 // validNextProto reports whether the proto is a valid ALPN protocol name.
@@ -3185,6 +3197,16 @@ type Server struct {
 	h3            *http3ServerHandler
 
 	listenerGroup sync.WaitGroup
+
+	// testHookServe runs at the top of Serve, with the unwrapped listener. A
+	// test in this package sets it on the one server it started, so a server
+	// another test starts at the same time never reaches it. Set it before
+	// Serve and leave it alone after.
+	testHookServe func(*Server, net.Listener)
+
+	// testHookRSTAvoidanceDelay overrides rstAvoidanceDelay for this server.
+	// Set it before the server takes a connection.
+	testHookRSTAvoidanceDelay time.Duration
 }
 
 // Close immediately closes all active net.Listeners and any
@@ -3462,8 +3484,6 @@ func (s *Server) ListenAndServe() error {
 	return s.Serve(ln)
 }
 
-var testHookServerServe func(*Server, net.Listener) // used if non-nil
-
 // shouldConfigureHTTP2ForServe reports whether Server.Serve should configure
 // automatic HTTP/2. (which sets up the s.TLSNextProto map)
 func (s *Server) shouldConfigureHTTP2ForServe() bool {
@@ -3519,7 +3539,7 @@ func (s *Server) Serve(l net.Listener) error {
 		return nil
 	}
 
-	if fn := testHookServerServe; fn != nil {
+	if fn := s.testHookServe; fn != nil {
 		fn(s, l) // call hook with unwrapped listener
 	}
 

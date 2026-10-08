@@ -276,6 +276,42 @@ jobs:
           & "$env:RUNNER_TEMP\dats.exe" -v --no-sandbox test dats/host
           exit $LASTEXITCODE
 
+      # run.bat reports a bare "exit status 2" per package; one binary run by hand says why.
+      - name: A cosmo test binary runs on this host
+        if: matrix.build-os == 'windows-latest'
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          export PATH="$PWD/bin:$PATH"
+          echo "GOOS=$(GOOS=cosmo go env GOOS) GOHOSTOS=$(go env GOHOSTOS) GOARCH=$(GOOS=cosmo go env GOARCH)"
+          # fizzbuzz boots here and is fat; a test binary is thin, so build it both ways.
+          for fat in 1 0; do
+            GOCOSMOFAT=$fat GOOS=cosmo go build -o "${{ runner.temp }}/fb$fat.com" testdata/fizzbuzz/fizzbuzz.go
+            rc=0
+            "${{ runner.temp }}/fb$fat.com" 10 5 || rc=$?
+            echo "fizzbuzz GOCOSMOFAT=$fat exit=$rc"
+          done
+          # The boot prints its milestones under -tags cosmontdebug, so a binary that dies before it can say anything still says how far it got. It exits 139 there, a fault rather than a throw.
+          GOOS=cosmo go build -tags cosmontdebug -o "${{ runner.temp }}/fbtrace.com" testdata/fizzbuzz/fizzbuzz.go
+          rc=0
+          out="$("${{ runner.temp }}/fbtrace.com" 10 5 2>&1)" || rc=$?
+          echo "fizzbuzz -tags cosmontdebug exit=$rc output=[$out]"
+          # A child that loses its arguments ignores -test.run and forks forever; archive/tar is where that shows.
+          GOOS=cosmo go build -o "${{ runner.temp }}/argvecho.com" ./testdata/argvecho/main.go
+          rc=0
+          "${{ runner.temp }}/argvecho.com" || rc=$?
+          echo "argvecho exit=$rc"
+          GOOS=cosmo go test -c -o "${{ runner.temp }}/strings.test" strings
+          ls -l "${{ runner.temp }}/strings.test"
+          # Three shapes: no arguments, a listing that never runs a test, and one test.
+          for args in "" "-test.list=." "-test.run=TestLastIndexByte -test.v"; do
+            rc=0
+            "${{ runner.temp }}/strings.test" $args > "${{ runner.temp }}/out.txt" 2>&1 || rc=$?
+            echo "strings.test [$args] exit=$rc output:"
+            cat "${{ runner.temp }}/out.txt"
+          done
+          exit $rc
+
       # The runner's forwarder at 192.168.64.1 answers an NXDOMAIN query late or never, which net's TestLookupNoSuchHost reads as a timeout. Public resolvers answer it at once, and the last dig proves the system resolver now does too.
       - name: A resolver that answers NXDOMAIN (darwin)
         if: runner.os == 'macOS'
