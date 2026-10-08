@@ -97,13 +97,13 @@ func TestGODEBUG(ld *modload.Loader, pkg *Package) string {
 // TestGroupMain builds ONE main package holding the tests of several
 // packages.
 //
-// The go command still starts the binary once per package and says which with
-// -test.unit, so every per-package result, output and cache entry stays what
-// it was. What the packages share is the compile of the generated main and
-// the link. A binary per package pays both over and over, and a wasm runtime
-// pays a whole module compile for each.
+// The go command still starts the binary once per package. The go command
+// says which with -test.unit, so every per-package result, output and cache
+// entry stays what it was. What the packages share is the compile of the
+// generated main and the link. A binary per package pays both over and over,
+// and a wasm runtime pays a whole module compile for each.
 //
-// A member's test variant keeps the import path of the package it tests, so a
+// A member's test variant keeps the import path of the package it tests. A
 // group can only hold packages that do not reach each other. Packages at one
 // path cannot sit in one link. The plain copy of B that another member's
 // tests import is exactly such a second copy.
@@ -136,8 +136,8 @@ func unitDigest(unit testUnit, cover *TestCover) (string, error) {
 }
 
 // realiasFuncs rewrites each function's import name as if its package were the
-// only one in the binary, so a digest does not move when a package's position
-// in the group moves.
+// only one in the binary. A digest does not move when a package's position in
+// the group moves.
 func realiasFuncs(funcs []testFunc, alias, xalias string) []testFunc {
 	out := make([]testFunc, len(funcs))
 	copy(out, funcs)
@@ -354,8 +354,8 @@ func TestGroupMain(ld *modload.Loader, ctx context.Context, opts PackageOpts, me
 }
 
 // GroupMembers partitions packages into the binaries their tests share: one
-// per PGO profile and per value of the GODEBUG settings a program reads only
-// as it starts. A profile is compiled into every package a binary links, the
+// per PGO profile and per value of the GODEBUG settings a program reads only.
+// As it starts. A profile is compiled into every package a binary links, the
 // runtime included. A binary applies the rest of a package's default GODEBUG
 // when it is started for that package. Every package still runs, and every one
 // still reports on its own.
@@ -377,7 +377,7 @@ func GroupMembers(members []TestGroupMember) [][]TestGroupMember {
 
 // attachProfile compiles every package in testMain's binary with the PGO
 // profile its members share, the way a main package's own dependencies are.
-// A package only the tests import was loaded without one, so it gets a copy
+// A package only the tests import was loaded without one. It gets a copy
 // that carries the profile, and each importer is pointed at the copy.
 func attachProfile(testMain *Package, profile, forTest string) {
 	copies := map[*Package]*Package{}
@@ -436,8 +436,9 @@ func startupGODEBUG(godebug string) string {
 
 // shareMember prepares one package of a binary holding several packages'
 // tests. Nothing is recompiled against its test variants. The variant with
-// the package's own test files is linked in place of the package, and keeps
-// the symbol indices every other package refers to it by (-testvariant).
+// the package's own test files is linked in place of the package. The
+// variant keeps the symbol indices every other package refers to it by
+// (-testvariant).
 func shareMember(member TestGroupMember) {
 	pkg := member.Package
 	if withTests := member.WithTests; withTests != nil && withTests != pkg {

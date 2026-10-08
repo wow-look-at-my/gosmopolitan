@@ -46,8 +46,8 @@ func CosmoPlatforms() string {
 
 // cosmoPlatformArches returns the payload architectures the selection needs,
 // or nil when GOCOSMOPLATFORMS is unset. A selection the current build
-// cannot satisfy ends the build rather than quietly producing a binary for
-// a different architecture than the caller asked to run on.
+// cannot satisfy ends the build rather than quietly producing a binary for a
+// different architecture than the caller asked. To run on.
 func cosmoPlatformArches() []string {
 	set, explicit := cosmoPlatformSpec()
 	if !explicit {

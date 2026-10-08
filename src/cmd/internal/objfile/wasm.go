@@ -5,10 +5,10 @@
 // cmd/link/internal/wasm.
 //
 // A Go wasm binary has no traditional text segment or symbol table. Functions
-// live in the module's code section, and the linker gives function i the
+// live in the module's code section. The linker gives function i the
 // "address" (PC_F) funcValueOffset+i, with the runtime PC being PC_F<<16 |
-// PC_B where PC_B is an intra-function resume point counter, not a byte
-// offset (see cmd/link/internal/wasm/asm.go).
+// PC_B. This happens where PC_B is an intra-function resume point counter,
+// not a byte offset (see cmd/link/internal/wasm/asm.go).
 
 package objfile
 

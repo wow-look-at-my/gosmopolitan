@@ -101,8 +101,8 @@ func TestDecodeOverlayRejectsMalformedHeaders(test *testing.T) {
 	}
 }
 
-// A build that stops over an overlay the cache disagrees with names the file
-// that differs, so whoever reads the message knows what to look at.
+// A build that stops over an overlay the cache disagrees with names. The
+// file that differs, so whoever reads the message knows what to look at.
 func TestZipDifference(test *testing.T) {
 	cases := []struct {
 		why         string
@@ -136,7 +136,7 @@ func TestZipDifference(test *testing.T) {
 }
 
 // The overlay carries the added files from the machine that generated them to
-// every machine that reads the cache, so what it packs is what arrives.
+// every machine that reads the cache. What it packs is what arrives.
 func TestOverlayRoundTripsAddedFiles(test *testing.T) {
 	mod := module.Version{Path: "example.com/m", Version: "v1.2.3"}
 	added := []string{"gen.go", "internal/deep/table.go"}
@@ -203,7 +203,7 @@ func TestApplyOverlayRefusesNamesOutsideTheModule(test *testing.T) {
 }
 
 // The key names the module and the base zip the overlay completes. Modules, a
-// couple of versions, or base zips are different things to complete, and a key
+// couple of versions, or base zips are different things to complete. A key
 // they shared would give the fleet one of them under the other's name.
 func TestOverlayKeyNamesWhatItCompletes(test *testing.T) {
 	mod := module.Version{Path: "example.com/m", Version: "v1.2.3"}

@@ -280,7 +280,7 @@ func Recvfrom(fd int, p []byte, flags int) (n int, from Sockaddr, err error) {
 }
 
 // Sendto sends p as one datagram to the address to. Datagram sends either
-// transmit the whole payload or fail, so no byte count is reported (the
+// transmit the whole payload or fail. No byte count is reported (the
 // caller treats success as len(p), like sendto(2) on a datagram socket).
 func Sendto(fd int, p []byte, flags int, to Sockaddr) error {
 	ip, port, err := sockaddrIPAndPort(to)

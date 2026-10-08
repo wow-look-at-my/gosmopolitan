@@ -84,7 +84,7 @@ func embeddedTargetMessage() string {
 
 // targetMessage says why this build has no standard library to read. Naming a
 // target the binary does not carry is the reason nearly every time, and the
-// reader needs the targets it does carry to see that.
+// reader needs the targets it does carry. To see that.
 func targetMessage(carried []string, goos, goarch string, err error) string {
 	if len(carried) == 0 {
 		return fmt.Sprintf("go: this go command carries no standard library at all, so it cannot build %s/%s: %v",

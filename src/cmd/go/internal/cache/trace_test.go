@@ -25,7 +25,7 @@ func TestTracedIsIdentityWithoutALane(t *testing.T) {
 }
 
 // The disk cache reports its own tier, which is what lets a trace tell a hit
-// served off local disk from one fetched over the network.
+// served off local disk from one fetched. Over the network.
 func TestDiskCacheReportsItsTier(t *testing.T) {
 	c, err := cachedisk.Open(t.TempDir())
 	if err != nil {

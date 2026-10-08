@@ -57,7 +57,7 @@ func apeLoaderFor(p cosmoape.Platform) *apeLoader {
 }
 
 // newApeLoader tags a loader by the SHA-256 of the binary itself, never of
-// the blob. The tag names the cache path an unpack writes to, so it has to
+// the blob. The tag names the cache path an unpack writes to. It has to
 // change when the loader changes and stay put when only the packing does.
 func newApeLoader(name string, bin []byte, compress bool, offset int) *apeLoader {
 	if len(bin) == 0 {
@@ -90,7 +90,7 @@ func apeGzip(bin []byte, name string) []byte {
 
 // apeLoadersFor returns the loaders the selected platforms need, in header
 // order. GOCOSMOAPELD names a directory of replacements, for a toolchain
-// that has rebuilt them: a file in it whose name matches a loader's is used
+// that has rebuilt them. A file in it whose name matches a loader's is used
 // in place of the embedded copy.
 func apeLoadersFor(plat cosmoape.Set) []*apeLoader {
 	var out []*apeLoader

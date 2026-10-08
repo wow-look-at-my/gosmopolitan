@@ -279,7 +279,7 @@ func (fd *netFD) writeToInet6(p []byte, sa *syscall.SockaddrInet6) (n int, err e
 }
 
 // The msg variants need recvmsg/sendmsg with ancillary data, which the
-// WasmEdge extension does not define; on real sockets they fail with
+// WasmEdge extension does not define. On real sockets they fail with
 // ENOSYS (surfacing from ReadMsgUDP/WriteMsgUDP) while the plain
 // ReadFrom/WriteTo/Read/Write paths above cover UDP.
 

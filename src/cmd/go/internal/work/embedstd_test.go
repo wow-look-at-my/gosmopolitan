@@ -54,9 +54,9 @@ func TestEmbeddedStdLookupPartsAbsentFromArchiveless(test *testing.T) {
 
 // The shared cache certifies an entry by decoding the key's leading bytes and
 // comparing them with the object's own build-id action. A plain content hash
-// matches no action, so every embedded std archive was refused on write and
-// scored corrupt on read: runtime/coverage recompiled on every build, however
-// many builds had already compiled it.
+// matches no action, so every embedded std archive was refused on write.
+// Every embedded std archive scored corrupt on read: runtime/coverage
+// recompiled on every build, however many builds had already compiled it.
 func TestEmbeddedStdKeyLeadsWithTheArchivesOwnAction(test *testing.T) {
 	var content [cache.HashSize]byte
 	for idx := range content {
@@ -78,8 +78,8 @@ func TestEmbeddedStdKeyLeadsWithTheArchivesOwnAction(test *testing.T) {
 }
 
 // A build id the go command did not write leaves the key as the content hash
-// rather than a truncated or garbage action, so archives still never share
-// one key.
+// rather than a truncated or garbage action. Archives still never share one
+// key.
 func TestEmbeddedStdKeyKeepsContentWithoutAnAction(test *testing.T) {
 	var content [cache.HashSize]byte
 	content[0] = 0x11
