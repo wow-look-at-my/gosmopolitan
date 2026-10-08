@@ -7,8 +7,10 @@
 # This needs no CI: the run name alone selects the lock. The store is named too,
 # here as a directory, so the test leaves nothing in the user cache.
 
-[short] skip 'constructs local git repositories'
 [!git] skip
+
+# Every org repository is a local file:// clone behind an insteadOf rule.
+env TESTGOVCSREMOTE=
 
 env GIT_CONFIG_GLOBAL=$WORK${/}home${/}gopher${/}.gitconfig
 env HOME=$WORK${/}home${/}gopher
