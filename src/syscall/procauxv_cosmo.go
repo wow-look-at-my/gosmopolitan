@@ -33,7 +33,8 @@ func openProcSelfAuxv(path string, flags int) (fd int, err error, ok bool) {
 // openAuxv serves the file, with no host test of its own. Openat calls it
 // after the real open failed, which is how a host that is neither macOS nor
 // Linux gets an answer: Windows serves no /proc either, and x/sys/cpu asks
-// for this path there too, because GOOS=cosmo compiles its Linux port.
+// for this path there too. This is because GOOS=cosmo compiles its Linux
+// port.
 func openAuxv(flags int) (fd int, err error) {
 	if flags&O_ACCMODE != O_RDONLY {
 		return -1, EACCES

@@ -5,7 +5,7 @@ set -u
 case=${1:?usage: readonly-boot.sh resident|ram|container|refuse}
 ape=${2:?usage: readonly-boot.sh <case> <ape>}
 
-# A mode bit means nothing to root, so root gets the same directories as
+# A mode bit means nothing to root. Root gets the same directories as
 # read-only BIND MOUNTS instead, inside a mount namespace of its own. Either
 # way the canary below proves the write fails before anything runs.
 if [ "$(id -u)" = 0 ] && [ "${RO_BOOT_NS:-}" != 1 ]; then
@@ -40,7 +40,7 @@ ro_dir() {
 }
 
 # The loader this host needs, taken from the toolchain that carries it. This
-# is the copy docs/APE-BOOT.md tells an image to install, so the resident case
+# is the copy docs/APE-BOOT.md tells an image to install. The resident case
 # covers the documented install as well as the read-only boot.
 host_loader() {
 	case $(uname -s) in

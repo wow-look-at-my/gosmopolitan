@@ -15,7 +15,6 @@ import (
 // happens to ship /etc/ssl/cert.pem, so the scan lands there.
 
 // CERT_CONTEXT, win64. Spelled as the sum of the members rather than as a
-// total, because a total is a number nobody can check; certs_cosmo_nt_test.go
 // pins the sums against the layout crypt32 writes.
 const (
 	// CERT_CONTEXT opens with a DWORD encoding type, padded out to the pointer that follows it, then the length.

@@ -4,7 +4,7 @@
 // Disassembly of WebAssembly function bodies.
 //
 // Unlike the other architectures, wasm has no x/arch decoder, and its
-// instructions cannot be decoded statelessly: a function body starts with a
+// instructions cannot be decoded statelessly. A function body starts with a
 // vector of local declarations, control instructions nest, and symbolizing a
 // call requires the module's function index space (imports followed by the
 // code section functions). The Disasm methods therefore route wasm to the

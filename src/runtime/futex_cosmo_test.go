@@ -18,7 +18,7 @@ import (
 // running the poll loop. A sleep must never run past the caller's
 // deadline, or a timed lock2 overshoots its timeout. And a remaining
 // time under one microsecond must not round down to a zero-length
-// sleep, which would turn the wait into a spin on the CPU.
+// sleep. This would turn the wait into a spin on the CPU.
 func TestCosmoDarwinFutexDelay(t *testing.T) {
 	for _, c := range []struct {
 		name    string

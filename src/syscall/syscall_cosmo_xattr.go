@@ -9,9 +9,9 @@ import "unsafe"
 
 // Extended-attribute, file-preallocation and memory-control wrappers that the
 // linux port declares in files cosmo does not build. A package that selects a
-// source file by the _linux name suffix keeps that file under cosmo, so it
-// calls these names and does not compile without them. Each signature and
-// body matches the linux port.
+// source file by the _linux name suffix keeps that file under cosmo. It calls
+// these names and does not compile without them. Each signature and body
+// matches the linux port.
 
 func Getxattr(path string, attr string, dest []byte) (sz int, err error) {
 	var _p0 *byte

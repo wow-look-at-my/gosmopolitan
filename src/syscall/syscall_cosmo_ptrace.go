@@ -19,8 +19,8 @@ import "unsafe"
 // syscall number, so both answer ENOSYS.
 
 // The ptrace requests, options and events, named as the linux port names
-// them in zerrors_linux_amd64.go and zerrors_linux_arm64.go, which cosmo
-// does not build. Both linux tables give each name the same value.
+// them in zerrors_linux_amd64.go and zerrors_linux_arm64.go. Cosmo does
+// not build that. Both linux tables give each name the same value.
 const (
 	PTRACE_ARCH_PRCTL        = 0x1e
 	PTRACE_ATTACH            = 0x10

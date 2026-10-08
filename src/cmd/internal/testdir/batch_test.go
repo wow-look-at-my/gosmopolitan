@@ -23,13 +23,13 @@ import (
 // The run corpus is a few standalone programs, each `package main` with `func
 // main`, so they differ only in a name. This compiles them ONCE, as one
 // package each under a generated dispatcher, and each test then runs that one
-// executable with its own name as the argument. The corpus costs one build
+// executable with its own name. As the argument. The corpus costs one build
 // instead of hundreds, and on a wasm target the runtime compiles one module
 // instead of hundreds.
 
 // batchOutput answers what one test program printed. The whole corpus runs in
-// ONE process on the first call, because a process start costs about a second
-// on a wasm runtime and most of these programs do almost nothing.
+// ONE process on the first call. This is because a process start costs about
+// a second on a wasm runtime and most of these programs do almost nothing.
 func batchOutput(corpus, file string) (out []byte, batched bool, err error) {
 	exe, name, err := batchFor(corpus, file)
 	if err != nil || name == "" {
@@ -178,7 +178,7 @@ type batch struct {
 }
 
 // eligible reports whether a test file can join the batch, and the source to
-// put in it. A file carrying a build constraint is left out: the constraint
+// put in it. A file carrying a build constraint is left out. The constraint
 // decides whether the file exists at all, and a batch that loses one has a
 // package with nothing in it.
 func eligible(src string) (string, bool) {

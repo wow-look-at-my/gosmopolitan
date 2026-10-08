@@ -282,6 +282,15 @@ func (b *Builder) Do(ctx context.Context, root *Action) {
 				if !ok {
 					return
 				}
+				// An interrupt stops the pool from starting anything else,
+				// even when work is already queued: the order of the two
+				// ready cases is the scheduler's choice otherwise.
+				select {
+				case <-base.Interrupted:
+					base.SetExitStatus(1)
+					return
+				default:
+				}
 				// Receiving a value from the semaphore entitles us to take
 				// from its queue.
 				b.exec.Lock()

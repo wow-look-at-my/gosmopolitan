@@ -85,7 +85,7 @@ func (a *Action) traceArgs() map[string]any {
 
 // traceStep records one phase inside an action -- the action-ID hash, the
 // cache lookup, a compile -- as its own slice, carrying the action's
-// attribution plus whatever the phase itself has to say.
+// attribution plus. Whatever the phase itself has to say.
 func (a *Action) traceStep(name string, start time.Time, extra map[string]any) {
 	lane := a.lane()
 	if !lane.Enabled() {

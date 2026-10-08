@@ -203,8 +203,14 @@ type PinOptions struct {
 	AllowHost func(host string) bool
 	// CredentialURL attaches the GOAUTH credential for that URL instead of the one for u.
 	CredentialURL string
-	// Bearer is the whole credential when it is set. GOAUTH is not asked. net/http drops it on a redirect to another host.
+	// Bearer is the whole credential when it is set. GOAUTH is not asked.
+	// net/http keeps an Authorization header across a redirect only to the
+	// original host or a subdomain of it.
 	Bearer string
+	// BasicAuth is presented as HTTP basic authentication and takes precedence
+	// over CredentialURL. GOAUTH is not asked. Redirects keep it by the same
+	// host-or-subdomain rule as Bearer.
+	BasicAuth *url.Userinfo
 	// NoRedirect returns a redirect as the response and does not follow it.
 	NoRedirect bool
 }

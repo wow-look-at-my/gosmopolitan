@@ -85,11 +85,11 @@ func darwinUtimensat(dirfd, path, times, flags uintptr) (r1, r2, errno uintptr) 
 //
 // Things differ. Apple takes the FILE first and the SOCKET second, the
 // reverse of Linux. Apple reports the transferred count through a
-// value-result pointer instead of the return value, and it fills that
-// count in even when the call fails - a short transfer that stopped on
-// EAGAIN still moved bytes. And Apple never moves the file offset, so a
-// Linux caller that passed no offset (meaning "start where the file is
-// and advance it") needs the offset read and written back here.
+// value-result pointer instead of the return value. It fills that count
+// in even when the call fails - a short transfer that stopped on EAGAIN
+// still moved bytes. And Apple never moves the file offset, so a Linux
+// caller that passed no offset (meaning "start where the file is and
+// advance it") needs the offset read and written back here.
 //
 //go:nosplit
 func darwinSendfile(outfd, infd, offptr, count uintptr) (r1, r2, errno uintptr) {
@@ -176,7 +176,7 @@ func darwinSync() (r1, r2, errno uintptr) {
 }
 
 // darwinIoctl emulates ioctl for the requests whose argument means the same
-// on both systems: both window-size calls, where struct winsize is uint16s
+// on both systems. Both window-size calls, where struct winsize is uint16s
 // either way, and those job-control calls, whose argument is an int or
 // nothing.
 //
@@ -195,7 +195,7 @@ func darwinIoctl(fd, req, arg uintptr) (r1, r2, errno uintptr) {
 // Apple's TIOCGETA/TIOCSETA family, converting the struct in both
 // directions (termios_cosmo.go).
 //
-// A set is a read-modify-write, never a plain write: Apple's termios
+// A set is a read-modify-write, never a plain write. Apple's termios
 // carries settings a Linux caller cannot name, and writing only what the
 // caller passed would clear them. The read also fails first, with the
 // right errno, when the descriptor is not a terminal.

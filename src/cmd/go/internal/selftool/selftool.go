@@ -23,9 +23,9 @@ func Names() []string {
 }
 
 // Dispatch runs the tool that argv names and reports whether one ran. The
-// program's own base name selects a tool, which is how a pkg/tool link to
-// this binary runs, and so does "tool <name>" as the first arguments,
-// which is the command line the go command starts a linked tool with.
+// program's own base name selects a tool. This is how a pkg/tool link to
+// this binary runs, and so does "tool <name>" as the first arguments.
+// This is the command line the go command starts a linked tool with.
 func Dispatch(argv []string) (code int, ran bool) {
 	if len(argv) == 0 {
 		return 0, false
