@@ -36,7 +36,7 @@ func openCache(dir string) (Cache, error) {
 	// one exits through base.Exit without returning.
 	base.AtExit(func() {
 		cacheclient.CloseStore()
-		cacheclient.StopBroker()
+		cacheclient.Exit()
 	})
 	return cache, nil
 }
@@ -102,11 +102,11 @@ func mainModulePath() string {
 // goLogger takes the cache's diagnostics.
 type goLogger struct{}
 
-// CacheDebugEnv turns the routine success reporting back on. Anything but the empty string enables it.
-const CacheDebugEnv = "GOCACHEDEBUG"
-
 // CacheLogEnv names a file that takes the cache's notices in place of stderr.
 const CacheLogEnv = "GOCACHELOG"
+
+// PlumbingEnv lists the variables that carry one build's cache plumbing to the processes it starts.
+var PlumbingEnv = []string{CacheLogEnv, cacheclient.BrokerEnv}
 
 var (
 	cacheLogOnce sync.Once
@@ -136,10 +136,21 @@ func cacheNotice(format string, args ...any) {
 	fmt.Fprintf(cacheLogFile, stamp+format+"\n", args...)
 }
 
-func (goLogger) Infof(format string, args ...any) {
-	if os.Getenv(CacheDebugEnv) == "" {
+// MissNotices reports whether a test result the cache did not have is
+// explained.
+func MissNotices() bool {
+	return os.Getenv(CacheLogEnv) != ""
+}
+
+// MissNotice writes one line of such an explanation to the notice file.
+func MissNotice(format string, args ...any) {
+	if !MissNotices() {
 		return
 	}
+	cacheNotice(format, args...)
+}
+
+func (goLogger) Infof(format string, args ...any) {
 	cacheNotice(format, args...)
 }
 

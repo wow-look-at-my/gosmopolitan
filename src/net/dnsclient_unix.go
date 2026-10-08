@@ -15,10 +15,11 @@ package net
 import (
 	"context"
 	"errors"
-	"internal/bytealg"
 	"internal/godebug"
+	"internal/netconf"
 	"internal/strconv"
 	"internal/stringslite"
+	"internal/testlog"
 	"io"
 	"os"
 	"runtime"
@@ -298,6 +299,9 @@ func (r *Resolver) tryOneName(ctx context.Context, cfg *dnsConfig, name string, 
 	if isInvalidDomain(name) {
 		return dnsmessage.Parser{}, "", newDNSError(errNoSuchHost, name, "")
 	}
+	if cfg.path != "" {
+		testlog.Lookup("resolvservers", cfg.path, "")
+	}
 	var lastErr error
 	serverOffset := cfg.serverOffset()
 	sLen := uint32(len(cfg.servers))
@@ -381,12 +385,33 @@ func getSystemDNSConfigNamed(path string) *dnsConfig {
 func (conf *resolverConfig) init() {
 	// Set dnsConfig and lastChecked so we don't parse
 	// resolv.conf twice the first time.
-	conf.dnsConfig.Store(dnsReadConfig("/etc/resolv.conf"))
+	conf.dnsConfig.Store(readSystemDNSConfig("/etc/resolv.conf"))
 	conf.lastChecked = time.Now()
 
 	// Prepare ch so that only one update of resolverConfig may
 	// run at once.
 	conf.ch = make(chan struct{}, 1)
+}
+
+// markResolvConfRead tells a test's logger that the next op of name reads the
+// system config. A test's input is then what each consumer of the config
+// logs, not the file: a resolv.conf differs between hosts in lines a test may
+// never use. Windows reads its config from no file.
+func markResolvConfRead(op, name string) {
+	if runtime.GOOS != "windows" {
+		testlog.Parse(op, name)
+	}
+}
+
+// readSystemDNSConfig reads name as the system config, which each consumer
+// logs its use of by the config's path.
+func readSystemDNSConfig(name string) *dnsConfig {
+	markResolvConfRead("open", name)
+	conf := dnsReadConfig(name)
+	if runtime.GOOS != "windows" {
+		conf.path = name
+	}
+	return conf
 }
 
 // distantFuture is a sentinel time used for tests to signal that
@@ -447,6 +472,7 @@ func (conf *resolverConfig) tryUpdate(name string) {
 		// below) ignores the name.
 	default:
 		var mtime time.Time
+		markResolvConfRead("stat", name)
 		if fi, err := os.Stat(name); err == nil {
 			mtime = fi.ModTime()
 		}
@@ -455,7 +481,7 @@ func (conf *resolverConfig) tryUpdate(name string) {
 		}
 	}
 
-	dnsConf := dnsReadConfig(name)
+	dnsConf := readSystemDNSConfig(name)
 	conf.dnsConfig.Store(dnsConf)
 }
 
@@ -537,41 +563,10 @@ func avoidDNS(name string) bool {
 
 // nameList returns a list of names for sequential DNS queries.
 func (conf *dnsConfig) nameList(name string) []string {
-	// Check name length (see isDomainName).
-	rooted := len(name) > 0 && name[len(name)-1] == '.'
-	if len(name) > 254 || len(name) == 254 && !rooted {
-		return nil
+	if conf.path != "" {
+		testlog.Lookup("resolvnames", conf.path, name)
 	}
-
-	// If name is rooted (trailing dot), try only that name.
-	if rooted {
-		if avoidDNS(name) {
-			return nil
-		}
-		return []string{name}
-	}
-
-	hasNdots := bytealg.CountString(name, '.') >= conf.ndots
-	name += "."
-
-	// Build list of search choices.
-	names := make([]string, 0, 1+len(conf.search))
-	// If name has enough dots, try unsuffixed first.
-	if hasNdots && !avoidDNS(name) {
-		names = append(names, name)
-	}
-	// Try suffixes that are not too long (see isDomainName).
-	for _, suffix := range conf.search {
-		fqdn := name + suffix
-		if !avoidDNS(fqdn) && len(fqdn) <= 254 {
-			names = append(names, fqdn)
-		}
-	}
-	// Try unsuffixed, if not tried first above.
-	if !hasNdots && !avoidDNS(name) {
-		names = append(names, name)
-	}
-	return names
+	return netconf.NameList(name, conf.ndots, conf.search)
 }
 
 // hostLookupOrder specifies the order of LookupHost lookup strategies.

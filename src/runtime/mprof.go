@@ -1305,6 +1305,11 @@ func (p *goroutineProfileStateHolder) CompareAndSwap(old, new goroutineProfileSt
 	return (*atomic.Uint32)(p).CompareAndSwap(uint32(old), uint32(new))
 }
 
+// word is the address of the state, for waitAddrSleep and waitAddrWake.
+func (p *goroutineProfileStateHolder) word() *uint32 {
+	return (*uint32)(unsafe.Pointer(p))
+}
+
 func goroutineLeakProfileWithLabelsConcurrent(p []profilerecord.StackRecord, labels []unsafe.Pointer) (n int, ok bool) {
 	if len(p) == 0 {
 		// An empty slice is obviously too small. Return a rough
@@ -1413,7 +1418,7 @@ func goroutineProfileWithLabelsConcurrent(p []profilerecord.StackRecord, labels 
 	// call will start by adding itself to the profile (before the act of
 	// executing can cause any changes in its stack).
 	forEachGRace(func(gp1 *g) {
-		tryRecordGoroutineProfile(gp1, pcbuf, Gosched)
+		tryRecordGoroutineProfile(gp1, pcbuf)
 	})
 
 	stw = stopTheWorld(stwGoroutineProfileCleanup)
@@ -1457,13 +1462,16 @@ func tryRecordGoroutineProfileWB(gp1 *g) {
 	if getg().m.p.ptr() == nil {
 		throw("no P available, write barriers are forbidden")
 	}
-	tryRecordGoroutineProfile(gp1, nil, osyield)
+	tryRecordGoroutineProfile(gp1, nil)
 }
 
 // tryRecordGoroutineProfile ensures that gp1 has the appropriate representation
 // in the current goroutine profile: either that it should not be profiled, or
 // that a snapshot of its call stack and labels are now in the profile.
-func tryRecordGoroutineProfile(gp1 *g, pcbuf []uintptr, yield func()) {
+//
+// While another M records gp1, the caller's M sleeps until that M stores
+// goroutineProfileSatisfied.
+func tryRecordGoroutineProfile(gp1 *g, pcbuf []uintptr) {
 	if status := readgstatus(gp1); status == _Gdead || status == _Gdeadextra {
 		// Dead goroutines should not appear in the profile. Goroutines that
 		// start while profile collection is active will get goroutineProfiled
@@ -1481,8 +1489,10 @@ func tryRecordGoroutineProfile(gp1 *g, pcbuf []uintptr, yield func()) {
 		}
 		if prev == goroutineProfileInProgress {
 			// Something else is adding gp1 to the goroutine profile right now.
-			// Give that a moment to finish.
-			yield()
+			// Sleep until it finishes.
+			systemstack(func() {
+				waitAddrSleep(gp1.goroutineProfiled.word(), uint32(goroutineProfileInProgress), -1)
+			})
 			continue
 		}
 
@@ -1495,6 +1505,7 @@ func tryRecordGoroutineProfile(gp1 *g, pcbuf []uintptr, yield func()) {
 		if gp1.goroutineProfiled.CompareAndSwap(goroutineProfileAbsent, goroutineProfileInProgress) {
 			doRecordGoroutineProfile(gp1, pcbuf)
 			gp1.goroutineProfiled.Store(goroutineProfileSatisfied)
+			waitAddrWake(gp1.goroutineProfiled.word())
 		}
 		releasem(mp)
 	}

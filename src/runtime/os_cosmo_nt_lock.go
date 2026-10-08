@@ -80,7 +80,7 @@ func ntFileID(handle uintptr) (dev, ino uint64, ok bool) {
 }
 
 // ntLockRange takes or releases the NT lock on [start, end) of handle. It
-// never waits, because ntLockMu is held: F_SETLKW retries instead.
+// never waits, because ntLockMu is held: F_SETLKW sleeps in ntLockWait.
 func ntLockRange(handle uintptr, start, end int64, take, write bool) bool {
 	var over ntOverlapped
 	over.offset = uint32(start)
@@ -152,15 +152,57 @@ func ntEmuFcntlLock(fd, cmd int32, flk *ntLinuxFlock) (r1, r2, errno uintptr) {
 	}
 	for {
 		eno := ntLockSet(entry.handle, dev, ino, flk.ltype, start, end)
-		if eno != ntEAGAIN || cmd != ntFSetlkw {
+		if eno != ntEAGAIN || cmd != ntFSetlkw || flk.ltype == ntFUnlck {
 			if eno != 0 {
 				return ntFail3(eno)
 			}
 			return 0, 0, 0
 		}
-		// F_SETLKW waits for the holder, at a fixed cadence.
-		usleep(1000)
+		if eno := ntLockWait(entry.handle, dev, ino, flk.ltype == ntFWrlck, start, end); eno != 0 {
+			return ntFail3(eno)
+		}
+		// A close of fd during the wait drops the request, as on Linux.
+		if now, ok := ntFDLookup(fd); !ok || now.handle != entry.handle {
+			return ntFail3(ntEBADF)
+		}
 	}
+}
+
+// ntLockWait is F_SETLKW's sleep, outside ntLockMu. It drops this process's
+// own locks on [start, end) first, because NT holds a request against those
+// too. So a conversion that has to wait is not atomic, like flock(2)'s. It
+// then blocks in LockFileEx on a duplicate handle until no other holder
+// conflicts, and lets go at once for ntLockSet to take the range.
+func ntLockWait(handle uintptr, dev, ino uint64, write bool, start, end int64) uintptr {
+	if eno := ntLockSet(handle, dev, ino, ntFUnlck, start, end); eno != 0 {
+		return eno
+	}
+	probe, eno := ntDupHandle(handle)
+	if eno != 0 {
+		return eno
+	}
+	size := uint64(end - start)
+	flags := uintptr(0)
+	if write {
+		flags = _NT_LOCKFILE_EXCLUSIVE_LOCK
+	}
+	var over ntOverlapped
+	over.offset = uint32(start)
+	over.offsetHigh = uint32(start >> 32)
+	ret, werr := ntcallSE(ntLockFileExFn, probe, flags, 0, uintptr(uint32(size)), uintptr(uint32(size>>32)),
+		uintptr(unsafe.Pointer(&over)), 0)
+	if ret != 0 {
+		var release ntOverlapped
+		release.offset = uint32(start)
+		release.offsetHigh = uint32(start >> 32)
+		ntcallE(ntUnlockFileExFn, probe, 0, uintptr(uint32(size)), uintptr(uint32(size>>32)),
+			uintptr(unsafe.Pointer(&release)), 0, 0)
+	}
+	ntcall(ntCloseHandleFn, probe, 0, 0, 0, 0, 0)
+	if ret == 0 {
+		return ntErrno(werr)
+	}
+	return 0
 }
 
 // ntLockFind returns the record of a file, creating it when create is set.
