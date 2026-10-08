@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package main
+package nm
 
 import (
 	"bufio"
@@ -12,6 +12,7 @@ import (
 	"os"
 	"sort"
 
+	"cmd/internal/objabi"
 	"cmd/internal/objfile"
 	"cmd/internal/telemetry/counter"
 )
@@ -34,16 +35,20 @@ func usage() {
 	os.Exit(2)
 }
 
+// flagSet is nm's command line, one set of its own so nm can be linked
+// beside the other tools; Main installs it before parsing.
+var flagSet = flag.NewFlagSet("nm", flag.ExitOnError)
+
 var (
-	sortOrder = flag.String("sort", "name", "")
-	printSize = flag.Bool("size", false, "")
-	printType = flag.Bool("type", false, "")
+	sortOrder = flagSet.String("sort", "name", "")
+	printSize = flagSet.Bool("size", false, "")
+	printType = flagSet.Bool("type", false, "")
 
 	filePrefix = false
 )
 
 func init() {
-	flag.Var(nflag(0), "n", "") // alias for -sort address
+	flagSet.Var(nflag(0), "n", "") // alias for -sort address
 }
 
 type nflag int
@@ -66,7 +71,10 @@ func (nflag) String() string {
 	return "false"
 }
 
-func main() {
+// Main runs nm with args, the command line after the program name, and
+// answers its exit status.
+func Main(args []string) int {
+	objabi.Enter("nm", args, flagSet)
 	log.SetFlags(0)
 	counter.Open()
 	flag.Usage = usage
@@ -92,7 +100,7 @@ func main() {
 		nm(file)
 	}
 
-	os.Exit(exitCode)
+	return exitCode
 }
 
 var exitCode = 0

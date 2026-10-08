@@ -6,7 +6,9 @@
 package selftool
 
 import (
+	"cmd/addr2line"
 	"cmd/asm"
+	"cmd/buildid"
 	"cmd/cgo"
 	"cmd/compile"
 	"cmd/covdata"
@@ -14,14 +16,23 @@ import (
 	"cmd/embedstd"
 	"cmd/fix"
 	"cmd/link"
+	"cmd/nm"
+	"cmd/objdump"
+	"cmd/pack"
+	"cmd/pprof"
 	"cmd/preprofile"
+	"cmd/test2json"
+	"cmd/trace"
 	"cmd/vet"
 )
 
-// tools are the build tools the installed go command carries, by the name
-// the go command asks for them under.
+// tools are every tool the installed go command carries, by the name the
+// go command asks for them under. Keep in sync with linkedTools in
+// cmd/dist/build.go.
 var tools = map[string]func([]string) int{
+	"addr2line":  addr2line.Main,
 	"asm":        asm.Main,
+	"buildid":    buildid.Main,
 	"cgo":        cgo.Main,
 	"compile":    compile.Main,
 	"covdata":    covdata.Main,
@@ -29,6 +40,12 @@ var tools = map[string]func([]string) int{
 	"embedstd":   embedstd.Main,
 	"fix":        fix.Main,
 	"link":       link.Main,
+	"nm":         nm.Main,
+	"objdump":    objdump.Main,
+	"pack":       pack.Main,
+	"pprof":      pprof.Main,
 	"preprofile": preprofile.Main,
+	"test2json":  test2json.Main,
+	"trace":      trace.Main,
 	"vet":        vet.Main,
 }

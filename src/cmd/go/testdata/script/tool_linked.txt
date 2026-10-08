@@ -1,0 +1,32 @@
+# Every tool is a package of the go command. 'go tool' runs it there
+# and never builds a tool from source.
+
+go tool -n test2json
+stdout 'tool test2json$'
+! stdout 'pkg[/\\]tool[/\\]'
+
+go tool test2json
+stdout '{"Action":"start"}'
+
+go tool -n nm
+stdout 'tool nm$'
+go tool -n pprof
+stdout 'tool pprof$'
+go tool -n objdump
+stdout 'tool objdump$'
+go tool -n addr2line
+stdout 'tool addr2line$'
+go tool -n buildid
+stdout 'tool buildid$'
+go tool -n pack
+stdout 'tool pack$'
+go tool -n trace
+stdout 'tool trace$'
+
+# The go command answers a tool's path with itself.
+go tool -n compile
+stdout 'tool compile$'
+
+# A tool that is not a package of the go command and not declared in go.mod does not exist, and nothing builds it.
+! go tool nosuchtool
+stderr 'go: no such tool "nosuchtool"'

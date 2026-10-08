@@ -16,4 +16,4 @@ the file to accurately record a content hash of the file.
 This tool is only intended for use by the go command or
 other build systems.
 */
-package main
+package buildid
