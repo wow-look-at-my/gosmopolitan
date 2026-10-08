@@ -25,9 +25,10 @@ func waitFor(t *T, what string, cond func() bool) {
 // reason serialGate exists rather than a sync.RWMutex, which blocks a new
 // reader the moment a writer waits.
 //
-// The shape is the one that hung the time package: a test holds a shared hold
-// and is blocked on something only a second test can release, and that second
-// test is coming back from a subtest while a third has asked to run alone.
+// The shape is the one that hung the time package. A test holds a shared
+// hold. The test is blocked on something only a second test can release, and
+// that second test is coming back from a subtest. This happens while a third
+// has asked to run alone.
 func TestSerialGateResumeIgnoresAWaitingWriter(t *T) {
 	g := newSerialGate()
 

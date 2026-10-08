@@ -39,8 +39,9 @@ const (
 // fcntl. (The socket SOCK_CLOEXEC/SOCK_NONBLOCK flags have the same bit
 // values, so the socket layer reuses this.) It talks to Apple fcntl directly
 // - commands and values here are already Apple's - and calls the libc
-// trampoline without the darwinCall helper, whose extra frame would push its
-// deepest callers (socketpair with flags) over the nosplit limit.
+// trampoline. This holds without the darwinCall helper, whose extra frame
+// would push its deepest callers (socketpair with flags) over the nosplit
+// limit.
 //
 //go:nosplit
 func darwinApplyFdFlags(fd, flags uintptr) uintptr {
@@ -91,7 +92,7 @@ func darwinPipe2(fdsp, flags uintptr) (r1, r2, errno uintptr) {
 }
 
 // darwinDup3 emulates dup3(2) with dup2 + fcntl. The FD_CLOEXEC set is
-// not atomic with the dup; the only user between fork and exec is
+// not atomic with the dup. The only user between fork and exec is
 // single-threaded there, and Go userspace otherwise uses F_DUPFD_CLOEXEC.
 //
 //go:nosplit
@@ -136,14 +137,14 @@ func darwinKill(pid, sig uintptr) (r1, r2, errno uintptr) {
 }
 
 // darwinWait4 emulates wait4(2): option flags translate, and the SIGNAL
-// NUMBERS in the wait status are rewritten from Apple to Linux. The
-// status ENCODING is identical on both systems, so only those fields
-// change and syscall.WaitStatus decodes as the process expects.
+// NUMBERS in the wait status are rewritten from Apple to Linux. The status
+// ENCODING is identical on both systems, so only those fields change and
+// syscall.WaitStatus decodes as the process expects.
 //
-// The rusage buffer goes straight to Apple wait4 and is fixed up IN
-// PLACE. struct rusage is many bytes on both systems with every field
-// at the same offset EXCEPT tv_usec in both timevals, which Apple
-// declares int32-plus-padding where Linux has int64.
+// The rusage buffer goes straight to Apple wait4 and is fixed up IN PLACE.
+// struct rusage is many bytes on both systems with every field. This holds at
+// the same offset EXCEPT tv_usec in both timevals, which Apple declares
+// int32-plus-padding where Linux has int64.
 //
 //go:nosplit
 func darwinWait4(pid, wstatus, options, rusage uintptr) (r1, r2, errno uintptr) {

@@ -12,9 +12,9 @@
 // stays the slash: NT accepts it beside the backslash, and it is what this
 // package emits.
 //
-// The NT helpers below are path_windows.go's: a drive letter, a UNC root and
-// the device prefixes (\\.\, \\?\, \??\), each taking the host as a parameter
-// so a machine that is not NT can still test them.
+// The NT helpers below are path_windows.go's. A drive letter, a UNC root. The
+// device prefixes (\\.\, \\?\, \??\), each taking the host as a parameter so
+// a machine that is not NT can still test them.
 
 package filepathlite
 
