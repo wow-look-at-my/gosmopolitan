@@ -11,9 +11,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -26,10 +28,38 @@ const (
 
 var testRun = Run{Repository: "wow-look-at-my/consumer", ID: "4242", Attempt: "1"}
 
+// testStateEnv names the state directory a child of these tests shares with its parent. Only this test binary reads it.
+const testStateEnv = "ORGMOD_TEST_STATE_DIR"
+
+// TestMain gives this process its own state directory, so no test reads what
+// another run of these tests kept. A child started by a test shares its parent's.
+func TestMain(m *testing.M) {
+	dir := os.Getenv(testStateEnv)
+	if dir == "" {
+		made, err := os.MkdirTemp("", "orgmod-state")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		dir = made
+	}
+	StateDir = func() string { return dir }
+	if asks := os.Getenv(childAsks); asks != "" {
+		answerChild(asks)
+		os.Exit(0)
+	}
+	code := m.Run()
+	if os.Getenv(testStateEnv) == "" {
+		os.RemoveAll(dir)
+	}
+	os.Exit(code)
+}
+
 // memStore is a RunLockStore in memory. With blind set, Lookup finds nothing,
 // so every caller races to Claim.
 type memStore struct {
 	mu      sync.Mutex
+	name    string
 	locks   map[RunLockKey]string
 	blind   bool
 	fail    error
@@ -37,9 +67,13 @@ type memStore struct {
 	claims  int
 }
 
-func newMemStore() *memStore { return &memStore{locks: map[RunLockKey]string{}} }
+var memStores atomic.Int64
 
-func (s *memStore) String() string { return "mem://test" }
+func newMemStore() *memStore {
+	return &memStore{name: fmt.Sprintf("mem://test/%d", memStores.Add(1)), locks: map[RunLockKey]string{}}
+}
+
+func (s *memStore) String() string { return s.name }
 
 func (s *memStore) Lookup(ctx context.Context, key RunLockKey) (string, bool, error) {
 	s.mu.Lock()
@@ -146,8 +180,10 @@ func TestLockedVersionRacingWritersConverge(t *testing.T) {
 			t.Errorf("writer %d got %q, want the winner %q", i, got, winner)
 		}
 	}
-	if store.claims != writers {
-		t.Errorf("store saw %d claims, want %d", store.claims, writers)
+	// A writer that starts after the winner kept its lock reads that copy, and
+	// never reaches the store.
+	if store.claims < 1 || store.claims > writers {
+		t.Errorf("store saw %d claims, want between 1 and %d", store.claims, writers)
 	}
 }
 
@@ -579,5 +615,134 @@ func TestHTTPStoreRetriesTransportFailures(t *testing.T) {
 	}
 	if getHits != before+1 {
 		t.Errorf("a 403 was sent %d times; want once", getHits-before)
+	}
+}
+
+// TestLockedVersionAsksTheStoreOncePerJob pins what a job sends and prints.
+// The first command claims and prints. A later command of the same job reads
+// the kept copy: it sends nothing and prints nothing. A new job asks once again.
+func TestLockedVersionAsksTheStoreOncePerJob(t *testing.T) {
+	t.Serial()
+	var out strings.Builder
+	jobTemp := t.TempDir()
+	saveOutput, saveDir := logOutput, StateDir
+	logOutput, StateDir = &out, func() string { return jobTemp }
+	defer func() { logOutput, StateDir = saveOutput, saveDir }()
+
+	store := newMemStore()
+	var calls int
+	for range 3 {
+		got, err := LockedVersion(context.Background(), store, key("main"), resolveTo(headA, &calls))
+		if err != nil || got != headA {
+			t.Fatalf("LockedVersion = %q, %v; want %q", got, err, headA)
+		}
+	}
+	if store.lookups != 1 || store.claims != 1 || calls != 1 {
+		t.Errorf("three commands of one job sent %d lookups and %d claims and resolved %d times; want one of each", store.lookups, store.claims, calls)
+	}
+	want := "go: " + alphaPath + "@main: building " + headA + " -- the branch head, locked here for the rest of this run\n"
+	if out.String() != want {
+		t.Errorf("one job, three commands printed %q; want only the claim %q", out.String(), want)
+	}
+
+	out.Reset()
+	jobTemp = t.TempDir()
+	for range 2 {
+		got, err := LockedVersion(context.Background(), store, key("main"), resolveTo(headB, &calls))
+		if err != nil || got != headA {
+			t.Fatalf("LockedVersion in a second job = %q, %v; want the locked %q", got, err, headA)
+		}
+	}
+	if store.lookups != 2 || store.claims != 1 {
+		t.Errorf("a second job sent %d lookups and %d claims in all; want one more lookup and no claim", store.lookups, store.claims)
+	}
+	want = "go: " + alphaPath + "@main: building " + headA + " -- the version this run locked earlier\n"
+	if out.String() != want {
+		t.Errorf("a second job printed %q; want the lock once, %q", out.String(), want)
+	}
+
+	// The copy belongs to its store. A store that fails is asked, and fails.
+	failing := newMemStore()
+	failing.fail = errors.New("connection refused")
+	if _, err := LockedVersion(context.Background(), failing, key("main"), resolveTo(headA, &calls)); err == nil {
+		t.Error("a failing store succeeded on a lock another store's copy holds")
+	}
+}
+
+// childAsks names the head a child of this test binary looks up. TestMain answers it in place of running the tests.
+const childAsks = "ORGMOD_TEST_CHILD_ASKS"
+
+// askChild starts this test binary as a child process and returns the head it
+// inherits for module@branch, or "none".
+func askChild(t *testing.T, module, branch string) string {
+	t.Helper()
+	cmd := exec.Command(os.Args[0], "-test.run=^$")
+	cmd.Env = append(os.Environ(), testStateEnv+"="+StateDir(), childAsks+"="+module+"@"+branch)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("child: %v", err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// answerChild prints the head this process inherits for the module@branch
+// that childAsks names.
+func answerChild(asks string) {
+	module, branch, _ := strings.Cut(asks, "@")
+	if version, ok := InheritedHead(module, branch); ok {
+		fmt.Println(version)
+		return
+	}
+	fmt.Println("none")
+}
+
+// TestPassHeadReachesOnlyChildren pins where an inherited head comes from: a
+// live ancestor that wrote it, and nothing else.
+func TestPassHeadReachesOnlyChildren(t *testing.T) {
+	t.Serial()
+	me, procFound := self()
+	cleanup, err := PassHead(alphaPath, "main", headA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !procFound {
+		// No /proc: no process finds an ancestor, so none takes a head.
+		if cleanup != nil {
+			t.Error("PassHead kept a head with no way for a child to find this process")
+		}
+		if got := askChild(t, alphaPath, "main"); got != "none" {
+			t.Errorf("a child with no /proc inherited %q; want none", got)
+		}
+		return
+	}
+	if cleanup == nil {
+		t.Fatal("the first PassHead returned no cleanup")
+	}
+	if again, err := PassHead(alphaPath, "v1", headB); err != nil || again != nil {
+		t.Errorf("a second PassHead = %v, %v; want no second cleanup", again != nil, err)
+	}
+
+	if got := askChild(t, alphaPath, "main"); got != headA {
+		t.Errorf("a child inherited %q; want the head its parent passed, %q", got, headA)
+	}
+	if got := askChild(t, alphaPath, "v1"); got != headB {
+		t.Errorf("a child inherited %q for v1; want %q", got, headB)
+	}
+
+	// A record no live ancestor wrote is never read: one under this pid with another start time.
+	betaPath := "github.com/wow-look-at-my/beta"
+	for _, forged := range []procID{{me.pid, me.start + "0"}, {1, "0"}} {
+		store := fileStore{dir: filepath.Join(StateDir(), "heads", forged.String())}
+		if _, err := store.Claim(context.Background(), RunLockKey{Module: betaPath, Branch: "main"}, headB); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := askChild(t, betaPath, "main"); got != "none" {
+		t.Errorf("a child inherited %q from a record no ancestor wrote; want none", got)
+	}
+
+	cleanup()
+	if got := askChild(t, alphaPath, "main"); got != "none" {
+		t.Errorf("a child inherited %q after its parent removed its heads; want none", got)
 	}
 }

@@ -161,8 +161,8 @@ func TestMain(m *testing.M) {
 			intercept.EnableTestHooks(interceptors)
 		}
 
-		cmdgo.Main()
-		os.Exit(0)
+		// Run, not Main: the test binary is the go command, tools included.
+		os.Exit(cmdgo.Run(os.Args))
 	}
 	os.Setenv("CMDGO_TEST_RUN_MAIN", "true")
 
