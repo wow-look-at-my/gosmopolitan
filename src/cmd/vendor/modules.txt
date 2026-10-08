@@ -48,6 +48,7 @@ github.com/wow-look-at-my/go-containers/set
 # github.com/wow-look-at-my/go-ipc v0.0.0
 ## explicit; go 1.24.7
 github.com/wow-look-at-my/go-ipc
+github.com/wow-look-at-my/go-ipc/filelock
 # github.com/wow-look-at-my/go-mmap v0.0.0
 ## explicit; go 1.24.0
 github.com/wow-look-at-my/go-mmap
