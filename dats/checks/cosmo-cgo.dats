@@ -24,8 +24,9 @@ tests:
 			- FAIL
 
 	# A cgo package's plain dlopen, dlsym and dlclose reach cosmo_dlopen, which loads a host library.
+	# cosmo_dlopen builds its helper under ${TMPDIR:-$HOME}/.cosmo, and the sandbox has no HOME.
 	- desc: plain dlopen in cgo code loads a host library and finds a symbol in it
-	  cmd: export PATH="$PWD/bin:/opt/cosmocc/bin:$PATH"; out="$(mktemp -d)"; cd testdata/cgoprobe && GOCOSMOFAT=0 GOARCH=amd64 go build -o "$out/dlopen.com" . && "$out/dlopen.com" dlopen libm.so.6 cos
+	  cmd: export PATH="$PWD/bin:/opt/cosmocc/bin:$PATH"; out="$(mktemp -d)"; cd testdata/cgoprobe && GOCOSMOFAT=0 GOARCH=amd64 go build -o "$out/dlopen.com" . && TMPDIR="$out" "$out/dlopen.com" dlopen libm.so.6 cos
 	  timeout: 10m
 	  exit: 0
 	  outputs:
