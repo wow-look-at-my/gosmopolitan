@@ -31,10 +31,8 @@ const cpusetWords = 16
 // for the host it runs on.
 const prioProcess = 0
 
-// priorityNice is the value the priority check moves a child to. Raising a
-// nice value needs no privilege anywhere, so the check never depends on being
-// root.
-const priorityNice = 5
+// priorityNice is the value the priority check moves a child to.
+const priorityNice = 19
 
 // procControlSettle is how long a stopped child is given to finish any write
 // already in flight before its output is watched for silence.
@@ -147,9 +145,22 @@ func procControlPriority(pid int) string {
 	if err != nil {
 		return fmt.Sprintf("getpriority after set: %v", err)
 	}
-	if after == before {
-		// Either convention a host may report the value in has to show a
-		// move here: the two differ by the whole span of the check.
+	if after != before {
+		return ""
+	}
+	// The child already ran at the top of the range.
+	err = syscall.Setpriority(prioProcess, pid, priorityNice-1)
+	if errors.Is(err, syscall.EACCES) || errors.Is(err, syscall.EPERM) {
+		return ""
+	}
+	if err != nil {
+		return fmt.Sprintf("setpriority below nice %d: %v", priorityNice, err)
+	}
+	lowered, err := syscall.Getpriority(prioProcess, pid)
+	if err != nil {
+		return fmt.Sprintf("getpriority after a lower set: %v", err)
+	}
+	if lowered == after {
 		return fmt.Sprintf("the priority stayed at %d", after)
 	}
 	return ""
