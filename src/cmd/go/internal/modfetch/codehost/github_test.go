@@ -496,11 +496,51 @@ func (f *fakeGitHub) serveAPI(w http.ResponseWriter, req *http.Request, apiURL *
 			body = list("refs/heads")
 		}
 	default:
-		http.NotFound(w, req)
-		return
+		compared, found := strings.CutPrefix(apiURL.Path, "/repos/owner/repo/compare/")
+		base, head, isRange := strings.Cut(compared, "...")
+		if !found || !isRange {
+			http.NotFound(w, req)
+			return
+		}
+		body = f.compare(base, head)
+		if body == nil {
+			http.NotFound(w, req)
+			return
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(body)
+}
+
+// compare answers the REST compare of base with head for the fields that
+// githubReachable reads. It is nil when base names no commit.
+func (f *fakeGitHub) compare(base, head string) any {
+	cmd := exec.Command("git", "rev-parse", "--verify", "--end-of-options", base+"^{commit}")
+	cmd.Dir = f.dir
+	out, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+	full := strings.TrimSpace(string(out))
+	cmd = exec.Command("git", "merge-base", full, head)
+	cmd.Dir = f.dir
+	out, err = cmd.Output()
+	if err != nil {
+		return nil
+	}
+	mergeBase := strings.TrimSpace(string(out))
+	status := "diverged"
+	if mergeBase == full {
+		status = "ahead"
+	}
+	type commit struct {
+		SHA string `json:"sha"`
+	}
+	// Like github-state-mirror, it leaves out base_commit.
+	return struct {
+		Status          string `json:"status"`
+		MergeBaseCommit commit `json:"merge_base_commit"`
+	}{status, commit{mergeBase}}
 }
 
 // archivePath splits "/owner/repo/archive/<name>.<format>".
@@ -609,6 +649,60 @@ func TestGitHubRefsOverHTTP(t *testing.T) {
 				t.Errorf("asked github-state-mirror: %v, want %v\nall: %q", sawGSM, usedAPI, fake.refRequests)
 			}
 		})
+	}
+}
+
+// TestGitHubUnnamedCommit resolves the commit of a pseudo-version, which no
+// ref names, from an archive. A commit off every branch must not resolve.
+func TestGitHubUnnamedCommit(t *testing.T) {
+	source, _ := makeSourceRepo(t, sourceFiles)
+	gitIn(t, source, "commit", "-q", "--allow-empty", "-m", "unnamed")
+	unnamed := gitIn(t, source, "rev-parse", "HEAD")
+	gitIn(t, source, "commit", "-q", "--allow-empty", "-m", "head")
+	gitIn(t, source, "checkout", "-q", "-b", "rejected", unnamed)
+	gitIn(t, source, "commit", "-q", "--allow-empty", "-m", "off every branch")
+	offBranch := gitIn(t, source, "rev-parse", "HEAD")
+	gitIn(t, source, "checkout", "-q", "master")
+	gitIn(t, source, "branch", "-q", "-D", "rejected")
+
+	fake := &fakeGitHub{dir: source, redirectTo: "codeload.github.com"}
+	serveFakeGitHub(t, fake)
+	ctx := testContext(t)
+	repo := fakeGitHubRepo(t, ctx, filepath.Join(t.TempDir(), "no-such-remote.git"))
+
+	info, err := repo.Stat(ctx, unnamed[:12])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Name != unnamed || info.Version != unnamed || info.Origin.Ref != "" {
+		t.Errorf("Stat(%s) = %s, version %s at %q, want %s, version %s at no ref", unnamed[:12], info.Name, info.Version, info.Origin.Ref, unnamed, unnamed)
+	}
+	rec := new(Fetch)
+	files, err := repo.ReadFiles(WithFetch(ctx, rec), unnamed, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(files, func(file ModuleFile) bool {
+		return file.Name == "go.mod" && string(file.Data) == sourceFiles["go.mod"]
+	}) {
+		t.Errorf("ReadFiles has no go.mod %q: %v", sourceFiles["go.mod"], files)
+	}
+	if route, _, _, _ := rec.Stats(); route != "tar.gz archive" {
+		t.Errorf("download reports %q, want %q", route, "tar.gz archive")
+	}
+	if repo.gitDirReady() {
+		t.Errorf("resolving an unnamed commit made a git repository")
+	}
+
+	if info, err := repo.Stat(ctx, offBranch[:12]); err == nil {
+		t.Errorf("Stat(%s) = %s, want an error for a commit off every branch", offBranch[:12], info.Name)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	for _, request := range fake.requests {
+		if strings.Contains(request, offBranch) {
+			t.Errorf("fetched an archive of the commit off every branch: %s", request)
+		}
 	}
 }
 

@@ -16,13 +16,8 @@ set GOENV=off
 call .\env.bat
 del env.bat
 
-:: Test binaries are APEs. One boots natively through its own PE header, but
-:: NT starts a program by its extension, so cmd/go runs a cross-GOOS test
-:: binary through go_%GOOS%_%GOARCH%_exec.bat. misc\cosmo goes on PATH.
-set PATH=%CD%\..\misc\cosmo;%PATH%
-
 set GOOS=%GOHOSTOS%
 set GOARCH=%GOHOSTARCH%
 
-set GOPATH=c:\nonexist-gopath
+:: dist test sets GOPATH and PATH itself.
 ..\bin\go tool dist test %* || exit /b 1

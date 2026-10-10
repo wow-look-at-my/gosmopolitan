@@ -21,31 +21,20 @@ import (
 func FetchModule(t *testing.T, module, version string) string {
 	testenv.MustHaveExternalNetwork(t)
 
-	// The go command keeps the checksum database's tree head under GOPATH/pkg/sumdb, and run.bash sets GOPATH=/nonexist-gopath.
-	out, err := testenv.CleanCmdEnv(testenv.Command(t, testenv.GoToolPath(t), "env", "GOPATH", "GOMODCACHE")).Output()
+	// The module cache and the checksum database's tree head live under
+	// GOPATH. A test never makes a private one: that downloads the module
+	// again for every call.
+	out, err := testenv.CleanCmdEnv(testenv.Command(t, testenv.GoToolPath(t), "env", "GOPATH")).Output()
 	if err != nil {
-		t.Errorf("%s env GOPATH GOMODCACHE: %v\n%s", testenv.GoToolPath(t), err, out)
+		t.Errorf("%s env GOPATH: %v\n%s", testenv.GoToolPath(t), err, out)
 		if ee, ok := err.(*exec.ExitError); ok {
 			t.Logf("%s", ee.Stderr)
 		}
 		t.FailNow()
 	}
-	gopath, gomodcache, _ := strings.Cut(strings.TrimSpace(string(out)), "\n")
-	gomodcache = strings.TrimSpace(gomodcache)
-	if !dirExists(gopath) {
-		tmp := t.TempDir()
-		t.Setenv("GOPATH", tmp)
-		if dirExists(gomodcache) {
-			// A GOFIPS140 snapshot lives in its own GOMODCACHE. Keep it.
-			t.Setenv("GOMODCACHE", gomodcache)
-		} else {
-			t.Setenv("GOMODCACHE", filepath.Join(tmp, "pkg", "mod"))
-			// Allow t.TempDir() to clean up subdirectories.
-			t.Setenv("GOFLAGS", os.Getenv("GOFLAGS")+" -modcacherw")
-		}
-	} else if !dirExists(gomodcache) {
-		t.Setenv("GOMODCACHE", t.TempDir())
-		t.Setenv("GOFLAGS", os.Getenv("GOFLAGS")+" -modcacherw")
+	gopath := strings.TrimSpace(string(out))
+	if list := filepath.SplitList(gopath); len(list) == 0 || !dirExists(list[0]) {
+		t.Fatalf("GOPATH %q is not a directory. run.bash makes one under GOROOT/pkg.", gopath)
 	}
 
 	t.Logf("fetching %s@%s\n", module, version)

@@ -55,7 +55,25 @@ func cmdtest() {
 
 	xflagparse(-1) // any number of args
 
+	testEnv(goroot)
 	t.run()
+}
+
+// testEnv sets the environment that every test of the suite runs in. The
+// caller picks GOOS and GOARCH: the go command that starts dist always
+// reports one, so dist cannot tell a default from a choice.
+func testEnv(root string) {
+	// An empty GOPATH of its own keeps the suite off the user's packages.
+	// Every test shares its module cache, so a module downloads once per run.
+	gopath := pathf("%s/pkg/gopath", root)
+	xmkdirall(gopath)
+	os.Setenv("GOPATH", gopath)
+
+	// cmd/go runs a cross-GOOS test binary through go_<GOOS>_<GOARCH>_exec,
+	// which misc/cosmo holds for the cosmo port.
+	os.Setenv("PATH", fmt.Sprintf("%s%c%s", pathf("%s/misc/cosmo", root), os.PathListSeparator, os.Getenv("PATH")))
+
+	setTestLimits()
 }
 
 // tester executes cmdtest.
