@@ -126,6 +126,11 @@ func (re *Regexp) Copy() *Regexp {
 // that Perl, Python, and other implementations use, although this
 // package implements it without the expense of backtracking.
 // For POSIX leftmost-longest matching, see [CompilePOSIX].
+//
+// When the compiler can resolve expr, it compiles the pattern at build
+// time, and the call only copies the result.
+//
+//go:noinline
 func Compile(expr string) (*Regexp, error) {
 	return compile(expr, syntax.Perl, false)
 }
@@ -149,6 +154,11 @@ func Compile(expr string) (*Regexp, error) {
 // subexpression, then the second, and so on from left to right.
 // The POSIX rule is computationally prohibitive and not even well-defined.
 // See https://swtch.com/~rsc/regexp/regexp2.html#posix for details.
+//
+// When the compiler can resolve expr, it compiles the pattern at build
+// time, and the call only copies the result.
+//
+//go:noinline
 func CompilePOSIX(expr string) (*Regexp, error) {
 	return compile(expr, syntax.POSIX, true)
 }
@@ -306,6 +316,13 @@ func minInputLen(re *syntax.Regexp) int {
 // MustCompile is like [Compile] but panics if the expression cannot be parsed.
 // It simplifies safe initialization of global variables holding compiled regular
 // expressions.
+//
+// When the compiler can resolve str, it compiles the pattern at build time,
+// and an invalid pattern is a compile error. A pattern that it cannot
+// resolve compiles at run time, and the compiler prints a performance
+// warning.
+//
+//go:noinline
 func MustCompile(str string) *Regexp {
 	regexp, err := Compile(str)
 	if err != nil {
@@ -316,7 +333,9 @@ func MustCompile(str string) *Regexp {
 
 // MustCompilePOSIX is like [CompilePOSIX] but panics if the expression cannot be parsed.
 // It simplifies safe initialization of global variables holding compiled regular
-// expressions.
+// expressions. It is precompiled the same way as [MustCompile].
+//
+//go:noinline
 func MustCompilePOSIX(str string) *Regexp {
 	regexp, err := CompilePOSIX(str)
 	if err != nil {

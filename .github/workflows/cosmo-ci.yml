@@ -56,6 +56,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
+          lfs: true
       - uses: wow-look-at-my/actions@disable-windows-defender#latest
       - uses: wow-look-at-my/actions@secret-server#latest
       - uses: ./.github/actions/track-submodules
@@ -99,6 +100,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
+          lfs: true
       - uses: wow-look-at-my/actions@disable-windows-defender#latest
       - uses: wow-look-at-my/actions@secret-server#latest
       - uses: ./.github/actions/track-submodules
@@ -196,6 +198,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
+          lfs: true
       - uses: wow-look-at-my/actions@disable-windows-defender#latest
       - uses: wow-look-at-my/actions@secret-server#latest
       # run.bash rebuilds the cmd packages from this tree, so the suite tests the client source the build leg linked in.
@@ -219,7 +222,12 @@ jobs:
         shell: bash
         run: ./bin/go version
 
-      # Consider this image's gcc links. Those links libwinpthread as a DLL that lives in C:\mingw64\bin and nowhere else, so a binary carrying any cgo package reaches it through. PATH alone and dies at load with 0xc0000135 once a test narrows PATH or hands a child an environment without one. The loader reads the system directory whatever the environment says. A copy there is found by every binary, and the stdlib archives the suite links against were built before this step runs.
+      # The dats sandbox mounts .git read-only, so git status there cannot run the LFS clean filter on a file the restore rewrote.
+      - name: Refresh the index here, where .git is writable
+        shell: bash
+        run: git update-index -q --ignore-submodules --refresh
+
+      # Consider this image's gcc links. Those links libwinpthread as a DLL that lives in C:\mingw64\bin and nowhere else. A binary carrying any cgo package reaches it through PATH alone and dies at load with 0xc0000135 once a test narrows PATH. It hands a child an environment without one. The loader reads the system directory whatever the environment says. A copy there is found by every binary, and the stdlib archives the suite links against were built before this step runs.
       - name: Put the mingw runtime where the loader always looks (NT)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -428,6 +436,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
+          lfs: true
       - uses: wow-look-at-my/actions@secret-server#latest
       # embedded-std.dats rebuilds the go command from this tree, so the submodules carry their branch heads here too.
       - uses: ./.github/actions/track-submodules
@@ -446,6 +455,11 @@ jobs:
       - name: The restored go answers
         shell: bash
         run: ./bin/go version
+
+      # The dats sandbox mounts .git read-only, so git status there cannot run the LFS clean filter on a file the restore rewrote.
+      - name: Refresh the index here, where .git is writable
+        shell: bash
+        run: git update-index -q --ignore-submodules --refresh
 
       # An APE starts through its loader, and execve of one reaches the loader only through this entry. F pre-opens it, so the path stops mattering.
       - name: Let the kernel exec an APE directly
@@ -494,6 +508,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: true
+          lfs: true
 
       - uses: wow-look-at-my/actions@disable-windows-defender#latest
 
@@ -611,6 +626,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: true
+          lfs: true
 
       - uses: wow-look-at-my/actions@secret-server#latest
 
@@ -641,6 +657,11 @@ jobs:
       - name: The restored go answers
         shell: bash
         run: ./bin/go version
+
+      # The dats sandbox mounts .git read-only, so git status there cannot run the LFS clean filter on a file the restore rewrote.
+      - name: Refresh the index here, where .git is writable
+        shell: bash
+        run: git update-index -q --ignore-submodules --refresh
 
       # Every wasm suite: std for both ports, the object writer, the node and wasip1sock transports, wasmexport and GOWASM=threads.
       - name: The wasm dats suites
@@ -673,6 +694,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: true
+          lfs: true
 
       - uses: wow-look-at-my/actions@secret-server#latest
 
@@ -714,6 +736,11 @@ jobs:
       - name: The restored go answers
         shell: bash
         run: ./bin/go version
+
+      # The dats sandbox mounts .git read-only, so git status there cannot run the LFS clean filter on a file the restore rewrote.
+      - name: Refresh the index here, where .git is writable
+        shell: bash
+        run: git update-index -q --ignore-submodules --refresh
 
       - name: The whole test suite (dist test)
         # Actions withholds this job's log for the hour it runs, so the command streams live instead.
@@ -797,6 +824,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: true
+          lfs: true
 
       - name: Create buildhost release
         # No version input: buildhost auto-increments it. See docs/CI.md "publish jobs".
@@ -882,6 +910,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: true
+          lfs: true
 
       - name: Publish buildhost release
         uses: wow-look-at-my/buildhost/.github/actions/buildhost-publish-release@master

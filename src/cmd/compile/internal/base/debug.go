@@ -73,6 +73,7 @@ type DebugFlags struct {
 	NoRefName             int    `help:"do not include referenced symbol names in object file" concurrent:"ok"`
 	PCTab                 string `help:"print named pc-value table\nOne of: pctospadj, pctofile, pctoline, pctoinline, pctopcdata"`
 	Panic                 int    `help:"show all compiler panics"`
+	RegexpPrecompile      int    `help:"print information about regexp patterns compiled at build time\n1: each precompiled call site\n2: also each call site that compiles at run time, and why"`
 	Reshape               int    `help:"print information about expression reshaping"`
 	Shapify               int    `help:"print information about shaping recursive types"`
 	Simd                  int    `help:"print information about simd analysis and code transformation" concurrent:"ok"`
