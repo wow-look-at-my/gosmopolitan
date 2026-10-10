@@ -60,7 +60,7 @@ sendmsg/recvmsg with SCM_RIGHTS fd passing: msghdr/cmsghdr layouts differ - Linu
 
 SIGPROF CPU profiling: runtime/pprof and -test.cpuprofile deliver real samples on macOS hosts, over setitimer(ITIMER_PROF) through dlsym. The pthread parking wrappers record m.libcall* so samples inside pthread_cond_wait attribute to the Go call site. The runtimeprobe cpuprof check is mandatory here. SIGPIPE stays suppressed per-socket via SO_NOSIGPIPE, matching Go's EPIPE-error semantics.
 
-As of wave 9 the darwin netpoller is a kqueue port of upstream netpoll_kqueue.go (kqueue/kevent via dlsym). M parking is upstream os_darwin.go's pthread_mutex+pthread_cond design. The wave-9 "still missing on macOS hosts" backlog is closed - sendmsg/recvmsg and SIGPROF profiling were its last entries.
+As of wave 9 the darwin netpoller is a kqueue port of upstream netpoll_kqueue.go (kqueue/kevent via dlsym). M parking is upstream `os_darwin.go`'s `pthread_mutex`+`pthread_cond` design. The wave-9 "still missing on macOS hosts" backlog is closed - sendmsg/recvmsg and SIGPROF profiling were its last entries.
 
 A profile taken on an arm64 macOS host names its own mapping one page above the image base. `cmd/pprof -disasm` then resolves no function.
 
