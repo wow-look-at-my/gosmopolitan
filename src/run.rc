@@ -13,8 +13,9 @@ if(! test -f ../bin/go){
 GOENV=off
 eval `{../bin/go tool dist env}
 
-# An empty GOPATH of its own keeps the suite off the user's packages. Every
-# test shares its module cache, so a module downloads once per run.
-GOPATH=`{cd .. && pwd}^/pkg/gopath
-mkdir -p $GOPATH
-exec ../bin/go tool dist test -rebuild $*
+# dist test tests the host port. This fork's go defaults to GOOS=cosmo.
+GOOS=$GOHOSTOS
+GOARCH=$GOHOSTARCH
+
+# dist test sets GOPATH and PATH itself.
+exec ../bin/go tool dist test $*
