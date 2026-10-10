@@ -7,6 +7,7 @@
 
 #include <errno.h>
 #include <pthread.h>
+#include <signal.h>
 #include <string.h>
 #include "libcgo.h"
 
@@ -332,44 +333,77 @@ cosmo_find_progname(void)
 		__program_executable_name = cosmo_progname;
 }
 
+// cosmo_foreign holds the state of one call into host code.
+struct cosmo_foreign {
+	sigset_t mask;
+	uintptr_t base;
+};
+
+// cosmo_foreign_begin blocks every signal on this thread, then gives the
+// thread the host's TLS. A Go signal handler that ran on the host's TLS would
+// crash.
+static void
+cosmo_foreign_begin(struct cosmo_foreign *call)
+{
+	sigset_t all;
+
+	sigfillset(&all);
+	pthread_sigmask(SIG_BLOCK, &all, &call->mask);
+	call->base = cosmo_foreign_enter();
+}
+
+static void
+cosmo_foreign_end(struct cosmo_foreign *call)
+{
+	cosmo_foreign_leave(call->base);
+	pthread_sigmask(SIG_SETMASK, &call->mask, NULL);
+}
+
 void *
 __wrap_dlopen(const char *path, int mode)
 {
-	uintptr_t base = cosmo_foreign_enter();
+	struct cosmo_foreign call;
 	void *handle;
 
+	cosmo_foreign_begin(&call);
 	pthread_once(&cosmo_progname_once, cosmo_find_progname);
 	handle = cosmo_dlopen(path, mode);
-	cosmo_foreign_leave(base);
+	cosmo_foreign_end(&call);
 	return handle;
 }
 
 void *
 __wrap_dlsym(void *handle, const char *name)
 {
-	uintptr_t base = cosmo_foreign_enter();
-	void *sym = cosmo_dlsym(handle, name);
+	struct cosmo_foreign call;
+	void *sym;
 
-	cosmo_foreign_leave(base);
+	cosmo_foreign_begin(&call);
+	sym = cosmo_dlsym(handle, name);
+	cosmo_foreign_end(&call);
 	return sym;
 }
 
 int
 __wrap_dlclose(void *handle)
 {
-	uintptr_t base = cosmo_foreign_enter();
-	int err = cosmo_dlclose(handle);
+	struct cosmo_foreign call;
+	int err;
 
-	cosmo_foreign_leave(base);
+	cosmo_foreign_begin(&call);
+	err = cosmo_dlclose(handle);
+	cosmo_foreign_end(&call);
 	return err;
 }
 
 char *
 __wrap_dlerror(void)
 {
-	uintptr_t base = cosmo_foreign_enter();
-	char *msg = cosmo_dlerror();
+	struct cosmo_foreign call;
+	char *msg;
 
-	cosmo_foreign_leave(base);
+	cosmo_foreign_begin(&call);
+	msg = cosmo_dlerror();
+	cosmo_foreign_end(&call);
 	return msg;
 }
