@@ -79,8 +79,6 @@ func main() {
 	// "dlopen LIB SYM" also loads a host library, which needs a host that has one.
 	if len(os.Args) == 4 && os.Args[1] == "dlopen" {
 		lib, sym := C.CString(os.Args[2]), C.CString(os.Args[3])
-		got := C.probe_dlopen(lib, sym, &msg[0], C.int(len(msg)))
-		check("dlopen", got == 0, fmt.Sprint(got, " ", C.GoString(&msg[0])))
 
 		// Host code on a thread other than the first dlopen's needs the host's TLS there too.
 		done := make(chan struct{})
@@ -94,6 +92,9 @@ func main() {
 		}()
 		<-done
 		check("dlcall", called == 0 && result == 1, fmt.Sprint(called, " ", float64(result), " ", C.GoString(&callMsg[0])))
+
+		got := C.probe_dlopen(lib, sym, &msg[0], C.int(len(msg)))
+		check("dlopen", got == 0, fmt.Sprint(got, " ", C.GoString(&msg[0])))
 	}
 
 	fmt.Printf("arch %s\n", runtime.GOARCH)
