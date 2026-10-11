@@ -447,9 +447,9 @@ struct cosmo_foreign {
 	uintptr_t base;
 };
 
-// cosmo_foreign_begin blocks every signal on this thread, then gives the
-// thread the host's TLS. A Go signal handler that ran on the host's TLS would
-// crash.
+// cosmo_foreign_begin blocks every signal on this thread and saves Go's GS
+// base. cosmo_dlopen points GS at libcosmo's thread block, where Go reads no
+// g.
 static void
 cosmo_foreign_begin(struct cosmo_foreign *call)
 {
