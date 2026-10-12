@@ -7,7 +7,7 @@ package os
 
 import (
 	"internal/filepathlite"
-	"internal/itoa"
+	"internal/strconv"
 	"internal/stringslite"
 	"runtime"
 	"sync"
@@ -34,7 +34,7 @@ func executable() (string, error) {
 		// The APE loader maps the payload itself, so /proc/self/exe names the
 		// loader. It hands over the APE's own descriptor as AT_EXECFD.
 		if fd := execFD(); fd >= 0 {
-			if path, err := Readlink("/proc/self/fd/" + itoa.Itoa(fd)); err == nil {
+			if path, err := Readlink("/proc/self/fd/" + strconv.Itoa(fd)); err == nil {
 				return stringslite.TrimSuffix(path, " (deleted)"), nil
 			}
 		}
