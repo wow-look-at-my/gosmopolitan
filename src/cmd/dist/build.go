@@ -106,6 +106,13 @@ var okgoos = []string{
 	"cosmo",
 }
 
+// fileOS and fileArch are the names internal/syslist knows and dist does not
+// build. A file name suffix that names one of them still excludes the file.
+var (
+	fileOS   = append([]string{"hurd", "zos"}, okgoos...)
+	fileArch = append([]string{"amd64p32", "armbe", "arm64be", "mips64p32", "mips64p32le", "ppc", "riscv", "s390", "sparc"}, okgoarch...)
+)
+
 // xinit handles initialization of the various global state, like goroot and goarch.
 func xinit() {
 	b := os.Getenv("GOROOT")
@@ -258,7 +265,6 @@ func xinit() {
 	os.Unsetenv("GO111MODULE")
 	os.Setenv("GOENV", "off")
 	os.Unsetenv("GOFLAGS")
-	os.Setenv("GOWORK", "off")
 
 	// Create the go.mod for building toolchain2 and toolchain3. Toolchain1 and go_bootstrap are built with
 	// a separate go.mod (with a lower required go version to allow all allowed bootstrap toolchain versions)
@@ -1134,7 +1140,7 @@ func shouldbuild(file, pkg string) bool {
 		}
 		return false
 	}
-	if excluded(okgoos, goos) || excluded(okgoarch, goarch) {
+	if excluded(fileOS, goos) || excluded(fileArch, goarch) {
 		return false
 	}
 
@@ -1311,7 +1317,6 @@ func cmdenv() {
 	if goarch == "riscv64" {
 		xprintf(format, "GORISCV64", goriscv64)
 	}
-	xprintf(format, "GOWORK", "off")
 
 	if *path {
 		sep := ":"

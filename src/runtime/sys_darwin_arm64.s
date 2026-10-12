@@ -445,6 +445,21 @@ TEXT runtime·pthread_cond_signal_trampoline(SB),NOSPLIT,$0
 	BL	libc_pthread_cond_signal(SB)
 	RET
 
+TEXT runtime·ulock_wait_trampoline(SB),NOSPLIT,$0
+	MOVD	8(R0), R1	// arg 2 addr
+	MOVD	16(R0), R2	// arg 3 value
+	MOVWU	24(R0), R3	// arg 4 timeout
+	MOVWU	0(R0), R0	// arg 1 operation
+	BL	libc___ulock_wait(SB)
+	RET
+
+TEXT runtime·ulock_wake_trampoline(SB),NOSPLIT,$0
+	MOVD	8(R0), R1	// arg 2 addr
+	MOVD	16(R0), R2	// arg 3 wake value
+	MOVWU	0(R0), R0	// arg 1 operation
+	BL	libc___ulock_wake(SB)
+	RET
+
 TEXT runtime·pthread_self_trampoline(SB),NOSPLIT,$0
 	MOVD	R0, R19		// R19 is callee-save
 	BL	libc_pthread_self(SB)

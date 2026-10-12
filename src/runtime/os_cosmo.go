@@ -40,7 +40,7 @@ func futexsleep(addr *uint32, val uint32, ns int64) {
 		return
 	}
 	if isdarwin() {
-		darwinFutexsleep(addr, val, ns)
+		xnuFutexsleep(addr, val, ns)
 		return
 	}
 	if ns < 0 {
@@ -53,61 +53,33 @@ func futexsleep(addr *uint32, val uint32, ns int64) {
 	futex(unsafe.Pointer(addr), _FUTEX_WAIT_PRIVATE, val, &ts, nil, 0)
 }
 
-// darwinFutexsleep is FUTEX_WAIT built out of a timed sleep, for XNU hosts.
-// XNU has no futex, and the primitives closest to one are not in this tree's
-// syscall table. Their numbers would have to be guessed - and a wrong syscall
-// number does not fail. It calls a different syscall. A real sleep IS
-// available, so the wait polls the word with a backoff.
+const _ENOENT_xnu = 2
+
+// xnuFutexsleep is futexsleep on an XNU host. The kernel compares *addr with
+// val and sleeps until an xnuFutexwakeup on addr, the timeout, or a signal.
 //
 //go:nosplit
-func darwinFutexsleep(addr *uint32, val uint32, ns int64) {
-	const (
-		minSleepUsec = 20
-		maxSleepUsec = 5000
-	)
-	var deadline int64
-	if ns >= 0 {
-		deadline = nanotime() + ns
-	}
-	sleep := uint32(minSleepUsec)
-	for atomic.Load(addr) == val {
-		var left int64
-		if ns >= 0 {
-			left = deadline - nanotime()
-		}
-		d, expired := darwinFutexDelay(sleep, left, ns >= 0)
-		if expired {
-			return
-		}
-		usleep(d)
-		if sleep < maxSleepUsec {
-			sleep *= 2
-		}
-	}
+func xnuFutexsleep(addr *uint32, val uint32, ns int64) {
+	xnuUlockWait(_UL_COMPARE_AND_WAIT|_ULF_NO_ERRNO, addr, uint64(val), xnuUlockTimeout(ns))
 }
 
-// darwinFutexDelay decides one iteration of darwinFutexsleep's wait: how
-// long to sleep in microseconds, and whether the deadline has already
-// passed. leftNsec is the time remaining and is read only when timed.
+// xnuFutexwakeup is futexwakeup on an XNU host. ENOENT means nothing waits
+// on addr.
 //
 //go:nosplit
-func darwinFutexDelay(sleep uint32, leftNsec int64, timed bool) (usec uint32, expired bool) {
-	if !timed {
-		return sleep, false
+func xnuFutexwakeup(addr *uint32, cnt uint32) {
+	op := uint32(_UL_COMPARE_AND_WAIT | _ULF_NO_ERRNO)
+	if cnt > 1 {
+		op |= _ULF_WAKE_ALL
 	}
-	if leftNsec <= 0 {
-		return 0, true
+	ret := xnuUlockWake(op, addr, 0)
+	if ret >= 0 || ret == -_ENOENT_xnu {
+		return
 	}
-	// Never overshoot the caller's deadline, and never round a nonzero
-	// remainder down to a no-op sleep that would spin the CPU.
-	if int64(sleep)*1000 > leftNsec {
-		d := uint32(leftNsec / 1000)
-		if d == 0 {
-			d = 1
-		}
-		return d, false
-	}
-	return sleep, false
+	systemstack(func() {
+		print("futexwakeup addr=", addr, " returned ", ret, "\n")
+	})
+	*(*int32)(unsafe.Pointer(uintptr(0x1006))) = 0x1006
 }
 
 // If any procs are sleeping on addr, wake up at most cnt.
@@ -120,7 +92,7 @@ func futexwakeup(addr *uint32, cnt uint32) {
 		return
 	}
 	if isdarwin() {
-		// Nothing to signal.
+		xnuFutexwakeup(addr, cnt)
 		return
 	}
 	ret := futex(unsafe.Pointer(addr), _FUTEX_WAKE_PRIVATE, cnt, nil, nil, 0)
@@ -410,7 +382,38 @@ func minit() {
 		ntMinitThread()
 	}
 	// minitProcid is per-arch: on macOS hosts (arm64) procid must hold the FULL pthread_t for pthread_kill.
-	getg().m.procid = minitProcid()
+	atomic.Store64(&getg().m.procid, minitProcid())
+	threadStartWake()
+}
+
+// threadStart lets doAllThreadsSyscall sleep until an M it waits for sets
+// procid. While waiting is set, minit bumps seq and wakes it.
+var threadStart struct {
+	waiting uint32
+	seq     uint32
+}
+
+// threadStartWake is minit's half of threadStart. procid is stored first, so
+// a waiter that read it as zero is woken.
+//
+//go:nosplit
+func threadStartWake() {
+	if atomic.Load(&threadStart.waiting) == 0 {
+		return
+	}
+	atomic.Xadd(&threadStart.seq, 1)
+	futexwakeup(&threadStart.seq, 1)
+}
+
+// threadStartWait sleeps until mp has set procid.
+func threadStartWait(mp *m) {
+	for {
+		seq := atomic.Load(&threadStart.seq)
+		if atomic.Load64(&mp.procid) != 0 {
+			return
+		}
+		futexsleep(&threadStart.seq, seq, -1)
+	}
 }
 
 // Called from dropm and mexit to undo the effect of an minit.
@@ -585,8 +588,8 @@ func osPreemptExtEnter(mp *m) {
 		return
 	}
 	for !atomic.Cas(&mp.preemptExtLock, 0, 1) {
-		// An asynchronous preemption is in progress.
-		osyield()
+		// ntPreemptM holds the lock while it suspends this thread, and wakes the word once it has resumed it and let go.
+		ntFutexsleep(&mp.preemptExtLock, 1, -1)
 	}
 }
 
@@ -679,7 +682,7 @@ var perThreadSyscall perThreadSyscallArgs
 //go:nosplit
 func runPerThreadSyscall() {
 	gp := getg()
-	if gp.m.needPerThreadSyscall.Load() == 0 {
+	if atomic.Load(&gp.m.needPerThreadSyscall) == 0 {
 		return
 	}
 
@@ -694,7 +697,8 @@ func runPerThreadSyscall() {
 		fatal("AllThreadsSyscall6 results differ between threads; runtime corrupted")
 	}
 
-	gp.m.needPerThreadSyscall.Store(0)
+	atomic.Store(&gp.m.needPerThreadSyscall, 0)
+	futexwakeup(&gp.m.needPerThreadSyscall, 1)
 }
 
 // syscall_runtime_doAllThreadsSyscall executes a system call on every M.
@@ -742,11 +746,11 @@ func syscall_runtime_doAllThreadsSyscall(trap, a1, a2, a3, a4, a5, a6 uintptr) (
 	}
 
 	// Wait for every thread to set procid before any signal goes out.
+	atomic.Store(&threadStart.waiting, 1)
 	for mp := allm; mp != nil; mp = mp.alllink {
-		for atomic.Load64(&mp.procid) == 0 {
-			osyield()
-		}
+		threadStartWait(mp)
 	}
+	atomic.Store(&threadStart.waiting, 0)
 
 	gp := getg()
 	tid := gp.m.procid
@@ -754,16 +758,17 @@ func syscall_runtime_doAllThreadsSyscall(trap, a1, a2, a3, a4, a5, a6 uintptr) (
 		if atomic.Load64(&mp.procid) == tid {
 			continue
 		}
-		mp.needPerThreadSyscall.Store(1)
+		atomic.Store(&mp.needPerThreadSyscall, 1)
 		signalM(mp, sigPerThreadSyscall)
 	}
 
+	// runPerThreadSyscall clears each flag and wakes its word.
 	for mp := allm; mp != nil; mp = mp.alllink {
 		if mp.procid == tid {
 			continue
 		}
-		for mp.needPerThreadSyscall.Load() != 0 {
-			osyield()
+		for atomic.Load(&mp.needPerThreadSyscall) != 0 {
+			futexsleep(&mp.needPerThreadSyscall, 1, -1)
 		}
 	}
 

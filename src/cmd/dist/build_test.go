@@ -6,8 +6,31 @@ package main
 
 import (
 	"internal/platform"
+	"internal/syslist"
+	"maps"
+	"slices"
 	"testing"
 )
+
+// TestFileNamesMatchSyslist verifies that shouldbuild excludes a file by the
+// same GOOS and GOARCH suffixes go/build does.
+func TestFileNamesMatchSyslist(t *testing.T) {
+	cases := []struct {
+		name  string
+		dist  []string
+		known map[string]bool
+	}{
+		{"GOOS", fileOS, syslist.KnownOS},
+		{"GOARCH", fileArch, syslist.KnownArch},
+	}
+	for _, tc := range cases {
+		got := slices.Sorted(slices.Values(tc.dist))
+		want := slices.Sorted(maps.Keys(tc.known))
+		if !slices.Equal(got, want) {
+			t.Errorf("%s: dist matches %v; internal/syslist knows %v", tc.name, got, want)
+		}
+	}
+}
 
 // TestMustLinkExternal verifies that the mustLinkExternal helper
 // function matches internal/platform.MustLinkExternal.

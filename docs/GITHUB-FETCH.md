@@ -9,11 +9,11 @@ A github.com module download tries each source in this order. The first one that
 5. For a private repository: the archive github-state-mirror signs. See "Private repositories" below.
 6. A shallow `git fetch` of the commit, then the full history only when a command needs it.
 
-The go command never asks `https://proxy.golang.org`. `DefaultGOPROXY` is `direct`, and `newProxyRepo` refuses that host from any source, a go-import `mod` tag included.
+The go command never contacts golang.org or a host under it. `web.RefuseBannedURL` refuses each such request and redirect, and no setting turns it off. `DefaultGOPROXY` is `direct`, `DefaultGOSUMDB` is `off`, and `newProxyRepo` refuses a proxy under golang.org from any source, a go-import `mod` tag included. `cmd/go/internal/vcs` maps `golang.org/x/<name>` to `github.com/golang/<name>` and each `google.golang.org` root to its GitHub repository, so those modules take the archive route with no go-import request. `codehost.NewRepo` refuses a repository URL under golang.org before git runs.
 
 A proxy request talks only to proxy.pazer.ai. The proxy must follow GitHub's redirect itself and return the archive. A redirect that it passes back is not followed. The next source is tried.
 
-These are the `github` entry that `proxyList` puts ahead of `direct` (`src/cmd/go/internal/modfetch/proxy.go`). A failure there is final, and `direct` is not tried a second time. A module outside github.com skips the entry and goes direct to its origin. The go-import meta tag names the repository, and a repository on github.com takes the archive route again. A path under `GOPRIVATE` or `GONOPROXY` goes direct too. The archive code is `src/cmd/go/internal/modfetch/codehost/github.go`.
+These are the `github` entry that `proxyList` puts ahead of `direct` (`src/cmd/go/internal/modfetch/proxy.go`). A failure there is last, and `direct` is not tried a second time. A module outside github.com skips the entry and goes direct to its origin. The go-import meta tag names the repository, and a repository on github.com takes the archive route again. A gopkg.in path asks no meta tag: `vcs.go` maps it to its GitHub repository by gopkg.in's own rule. It takes the archive route too. gopkg.in answers a GitHub-hosted runner with a 502 frequently enough to fail a build.
 
 An archive can hash differently from the module zip: `export-ignore` and `export-subst` change it. When go.sum records an `h1:` sum the archive does not match. The commit is fetched with no history and zipped by `git archive` with those attributes off (`codehost.WithGitOnly`). The log names the archive as the failed source.
 
@@ -54,9 +54,11 @@ The route reads `tar.gz archive via github-state-mirror.pazer.io`, with `and pro
 
 A github.com repository gets no local git repository at first. The archive, the refs and the kept files all live in plain files. The bare repository is made by the first git command, which runs only on the git fallback, or for `RecentTag` history.
 
-The remote must be exactly `https://github.com/<owner>/<repo>` (with or without `.git`). Any other host, scheme, port or user name goes straight to git. github.com redirects each archive to `codeload.github.com`. `web.GetPinned` refuses a hop to any host other than those two. An API request may only reach its own host: api.github.com, github-state-mirror.pazer.io or proxy.pazer.ai. A signed archive URL must be on codeload.github.com.
+The remote must be exactly `https://github.com/<owner>/<repo>` (with or without `.git`). A gopkg.in path already names one: `cmd/go/internal/vcs` maps `gopkg.in/pkg.vN` to `github.com/go-pkg/pkg` and `gopkg.in/user/pkg.vN` to `github.com/user/pkg`, with no request to gopkg.in. Any other host, scheme, port or user name goes straight to git. github.com redirects each archive to `codeload.github.com`. `web.GetPinned` refuses a hop to any host other than those two. An API request may only reach its own host: api.github.com, github-state-mirror.pazer.io or proxy.pazer.ai.
 
-A commit that no branch or tag names never comes from an archive. The git path has the same rule, so an unmerged pull request commit cannot pose as a pseudo-version.
+A signed archive URL must be on codeload.github.com.
+
+A commit that no ref names, such as the commit of a pseudo-version, comes from the archive of that commit, `/archive/<commit>.tar.gz`. A hash prefix works: the archive names the full hash. Only a missing archive goes to git, which fetches every branch and tag.
 
 The archive is used as GitHub serves it. It omits the commit of each submodule and applies `export-ignore` and `export-subst`, so such a module hashes differently than over git.
 
