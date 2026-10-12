@@ -135,7 +135,7 @@ func TestRepoRootForImportPath(t *testing.T) {
 	ts := httptest.NewServer(http.NotFoundHandler())
 	t.Cleanup(ts.Close)
 	var interceptors []intercept.Interceptor
-	for _, d := range []string{"hub.jazz.net", "hubajazz.net", "hub2.jazz.net", "different.example.com"} {
+	for _, d := range []string{"hub.jazz.net", "hubajazz.net", "hub2.jazz.net", "different.example.com", "gopkg.in"} {
 		interceptors = append(interceptors,
 			intercept.Interceptor{Scheme: "https", FromHost: d, ToHost: ts.Listener.Addr().String()},
 			intercept.Interceptor{Scheme: "http", FromHost: d, ToHost: ts.Listener.Addr().String()},
@@ -160,7 +160,7 @@ func TestRepoRootForImportPath(t *testing.T) {
 			"github.com/user/unicode/испытание",
 			nil,
 		},
-		// gopkg.in resolves to GitHub without a request to gopkg.in.
+		// gopkg.in resolves to its GitHub repository without asking gopkg.in.
 		{
 			"gopkg.in/yaml.v3",
 			&RepoRoot{
@@ -169,10 +169,31 @@ func TestRepoRootForImportPath(t *testing.T) {
 			},
 		},
 		{
+			"gopkg.in/check.v1/internal/sub",
+			&RepoRoot{
+				VCS:  vcsGit,
+				Repo: "https://github.com/go-check/check",
+			},
+		},
+		{
 			"gopkg.in/check.v1/sub/pkg",
 			&RepoRoot{
 				VCS:  vcsGit,
 				Repo: "https://github.com/go-check/check",
+			},
+		},
+		{
+			"gopkg.in/user/pkg.v2",
+			&RepoRoot{
+				VCS:  vcsGit,
+				Repo: "https://github.com/user/pkg",
+			},
+		},
+		{
+			"gopkg.in/macaroon-bakery.v2-unstable",
+			&RepoRoot{
+				VCS:  vcsGit,
+				Repo: "https://github.com/go-macaroon-bakery/macaroon-bakery",
 			},
 		},
 		{
@@ -188,6 +209,10 @@ func TestRepoRootForImportPath(t *testing.T) {
 				VCS:  vcsGit,
 				Repo: "https://github.com/src-d/go-git",
 			},
+		},
+		{
+			"gopkg.in/yaml",
+			nil,
 		},
 		// IBM DevOps Services tests
 		{
