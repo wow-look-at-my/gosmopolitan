@@ -91,6 +91,8 @@ APE: no apeld-linux-amd64 on this host, and nowhere to unpack the embedded one: 
 
 ## What it costs the program
 
+The memfd holds only this payload's PT_LOAD ranges, at their APE offsets. The other payload and any data past the load span stay out of it. Those offsets read as a hole, which takes no memory. The runtimeprobe `loadspan` check holds that claim.
+
 On Linux `/proc/self/exe` reads `/memfd:<name>`, because the loader execs a memfd. That is the anonymous file's name, not a path. `os.Executable` recognises it and resolves `argv[0]` instead, which the loader sets to the APE's own path. A program that re-execs itself, or reads its own file, gets an openable path.
 
 Anything that reads `/proc/self/exe` directly still sees the memfd name. The same goes for `/proc/self/maps`.
