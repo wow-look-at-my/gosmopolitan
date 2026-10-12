@@ -224,6 +224,35 @@ func TestRepoRootForImportPath(t *testing.T) {
 	}
 }
 
+// A gopkg.in path resolves to its GitHub repository with no request. The
+// root stays the gopkg.in path, because that is the module path.
+func TestRepoRootGopkgIn(t *testing.T) {
+	cases := []struct {
+		path, root, repo string
+	}{
+		{"gopkg.in/yaml.v3", "gopkg.in/yaml.v3", "https://github.com/go-yaml/yaml"},
+		{"gopkg.in/check.v1", "gopkg.in/check.v1", "https://github.com/go-check/check"},
+		{"gopkg.in/yaml.v2/sub/pkg", "gopkg.in/yaml.v2", "https://github.com/go-yaml/yaml"},
+		{"gopkg.in/natefinch/lumberjack.v2", "gopkg.in/natefinch/lumberjack.v2", "https://github.com/natefinch/lumberjack"},
+		{"gopkg.in/mgo.v2-unstable", "gopkg.in/mgo.v2-unstable", "https://github.com/go-mgo/mgo"},
+	}
+	for _, tc := range cases {
+		got, err := repoRootFromVCSPaths(tc.path, web.SecureOnly, vcsPaths)
+		if err != nil {
+			t.Errorf("repoRootFromVCSPaths(%q): %v", tc.path, err)
+			continue
+		}
+		if got.VCS != vcsGit || got.Root != tc.root || got.Repo != tc.repo {
+			t.Errorf("repoRootFromVCSPaths(%q) = VCS(%s) Root(%s) Repo(%s), want VCS(git) Root(%s) Repo(%s)", tc.path, got.VCS, got.Root, got.Repo, tc.root, tc.repo)
+		}
+	}
+
+	// A path outside the rule is left to the meta tag lookup.
+	if _, err := repoRootFromVCSPaths("gopkg.in/noversion", web.SecureOnly, vcsPaths); err != errUnknownSite {
+		t.Errorf("repoRootFromVCSPaths(%q) error = %v, want errUnknownSite", "gopkg.in/noversion", err)
+	}
+}
+
 // Test that vcs.FromDir correctly inspects a given directory and returns the
 // right VCS and repo directory.
 func TestFromDir(t *testing.T) {
