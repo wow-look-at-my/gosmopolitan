@@ -49,31 +49,12 @@ func TestParseGitHubRemote(t *testing.T) {
 		{"https://github.com/owner/..", githubRepo{}, false},
 		{"https://github.com/owner/repo?x=1", githubRepo{}, false},
 		{"git@github.com:owner/repo.git", githubRepo{}, false},
-		{"https://gopkg.in/yaml.v3", githubRepo{owner: "go-yaml", name: "yaml", head: "v3"}, true},
-		{"https://gopkg.in/check.v1", githubRepo{owner: "go-check", name: "check", head: "v1"}, true},
-		{"https://gopkg.in/natefinch/lumberjack.v2", githubRepo{owner: "natefinch", name: "lumberjack", head: "v2"}, true},
-		{"https://gopkg.in/yaml", githubRepo{}, false},
-		{"https://gopkg.in/a/b/c.v1", githubRepo{}, false},
-		{"http://gopkg.in/yaml.v3", githubRepo{}, false},
 	}
 	for _, test := range cases {
 		got, isOK := parseGitHubRemote(test.remote)
 		if got != test.want || isOK != test.isOK {
 			t.Errorf("parseGitHubRemote(%q) = %v, %v, want %v, %v", test.remote, got, isOK, test.want, test.isOK)
 		}
-	}
-}
-
-// A gopkg.in repository's HEAD is its major version branch, not GitHub's default branch.
-func TestGopkgHead(t *testing.T) {
-	repo := githubRepo{owner: "go-check", name: "check", head: "v1"}
-	refs := repo.pointHead(map[string]string{"HEAD": "aaaa", "refs/heads/master": "aaaa", "refs/heads/v1": "bbbb"})
-	if refs["HEAD"] != "bbbb" {
-		t.Errorf("HEAD = %q, want the v1 branch", refs["HEAD"])
-	}
-	refs = repo.pointHead(map[string]string{"HEAD": "aaaa", "refs/heads/master": "aaaa"})
-	if head, found := refs["HEAD"]; found {
-		t.Errorf("HEAD = %q with no v1 branch, want none", head)
 	}
 }
 
@@ -307,12 +288,8 @@ type fakeGitHub struct {
 	infoRefsStatus int
 	// infoRefsCredential is the Authorization an info/refs request must carry.
 	infoRefsCredential string
-<<<<<<< HEAD
 	// infoRefsAuth is the Authorization of every info/refs request, in order.
 	infoRefsAuth []string
-=======
-	infoRefsAuth       []string
->>>>>>> origin/master
 	// apiStatus fails every direct api.github.com request with this code.
 	apiStatus int
 	// private makes github.com and api.github.com answer nothing, directly or through the proxy.

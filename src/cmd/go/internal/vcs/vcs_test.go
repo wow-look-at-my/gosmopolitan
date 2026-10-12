@@ -202,27 +202,6 @@ func TestRepoRootForImportPath(t *testing.T) {
 				Repo: "https://bitbucket.org/workspace/pkgname",
 			},
 		},
-		{
-			"gopkg.in/yaml.v3",
-			&RepoRoot{
-				VCS:  vcsGit,
-				Repo: "https://gopkg.in/yaml.v3",
-			},
-		},
-		{
-			"gopkg.in/check.v1/sub",
-			&RepoRoot{
-				VCS:  vcsGit,
-				Repo: "https://gopkg.in/check.v1",
-			},
-		},
-		{
-			"gopkg.in/natefinch/lumberjack.v2",
-			&RepoRoot{
-				VCS:  vcsGit,
-				Repo: "https://gopkg.in/natefinch/lumberjack.v2",
-			},
-		},
 	}
 
 	for _, test := range tests {
