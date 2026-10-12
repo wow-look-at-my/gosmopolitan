@@ -58,7 +58,7 @@ func TestAllDependencies(t *testing.T) {
 				// 'go list -deps' will fail when attempting to load it.
 				cmd := testenv.Command(t, goBin, "list", "-mod=vendor", "-deps", "./...")
 				cmd.Dir = m.Dir
-				cmd.Env = append(cmd.Environ(), "GO111MODULE=on", "GOWORK=off")
+				cmd.Env = append(cmd.Environ(), "GO111MODULE=on")
 				cmd.Stderr = new(strings.Builder)
 				_, err := cmd.Output()
 				if err != nil {
@@ -72,7 +72,7 @@ func TestAllDependencies(t *testing.T) {
 			// Check that the list of active modules contains only the main module.
 			cmd := testenv.Command(t, goBin, "list", "-mod=readonly", "-m", "all")
 			cmd.Dir = m.Dir
-			cmd.Env = append(cmd.Environ(), "GO111MODULE=on", "GOWORK=off")
+			cmd.Env = append(cmd.Environ(), "GO111MODULE=on")
 			cmd.Stderr = new(strings.Builder)
 			out, err := cmd.Output()
 			if err != nil {
@@ -125,27 +125,20 @@ func TestAllDependencies(t *testing.T) {
 		t.Skip("skipping because a diff command with support for --recursive and --unified flags is unavailable")
 	}
 
-	// We're going to check the standard modules for tidiness, so we need a usable
-	// GOMODCACHE. If the default directory doesn't exist, use a temporary
-	// directory instead. (That occurs under run.bash, which sets
-	// GOPATH=/nonexist-gopath.)
-	var modcacheEnv []string
+	// The tidiness checks download modules into the module cache under
+	// GOPATH. A test never makes a private one.
 	{
-		out, err := testenv.Command(t, goBin, "env", "GOMODCACHE").Output()
+		out, err := testenv.Command(t, goBin, "env", "GOPATH").Output()
 		if err != nil {
-			t.Fatalf("%s env GOMODCACHE: %v", goBin, err)
+			t.Fatalf("%s env GOPATH: %v", goBin, err)
 		}
-		modcacheOk := false
-		if gomodcache := string(bytes.TrimSpace(out)); gomodcache != "" {
-			if _, err := os.Stat(gomodcache); err == nil {
-				modcacheOk = true
-			}
+		gopath := string(bytes.TrimSpace(out))
+		list := filepath.SplitList(gopath)
+		if len(list) == 0 {
+			t.Fatalf("GOPATH is empty")
 		}
-		if !modcacheOk {
-			modcacheEnv = []string{
-				"GOMODCACHE=" + t.TempDir(),
-				"GOFLAGS=" + os.Getenv("GOFLAGS") + " -modcacherw", // Allow t.TempDir() to clean up subdirectories.
-			}
+		if info, err := os.Stat(list[0]); err != nil || !info.IsDir() {
+			t.Fatalf("GOPATH %q is not a directory. run.bash makes one under GOROOT/pkg.", gopath)
 		}
 	}
 
@@ -154,7 +147,7 @@ func TestAllDependencies(t *testing.T) {
 	bundleDir := t.TempDir()
 	r := runner{
 		Dir: filepath.Join(testenv.GOROOT(t), "src/cmd"),
-		Env: append(os.Environ(), modcacheEnv...),
+		Env: os.Environ(),
 	}
 	r.run(t, goBin, "build", "-mod=readonly", "-o", bundleDir, "golang.org/x/tools/cmd/bundle")
 
@@ -191,13 +184,12 @@ func TestAllDependencies(t *testing.T) {
 			}
 			r := runner{
 				Dir: filepath.Join(gorootCopyDir, rel),
-				Env: append(append(os.Environ(), modcacheEnv...),
+				Env: append(os.Environ(),
 					// Set GOROOT.
 					"GOROOT="+gorootCopyDir,
 					// Add GOROOTcopy/bin and bundleDir to front of PATH.
 					"PATH="+filepath.Join(gorootCopyDir, "bin")+string(filepath.ListSeparator)+
 						bundleDir+string(filepath.ListSeparator)+os.Getenv("PATH"),
-					"GOWORK=off",
 				),
 			}
 			goBinCopy := filepath.Join(gorootCopyDir, "bin", "go")
@@ -265,12 +257,17 @@ func makeGOROOTCopy(t *testing.T) string {
 	t.Helper()
 
 	gorootCopyDir := t.TempDir()
-	err := filepath.Walk(testenv.GOROOT(t), func(src string, info os.FileInfo, err error) error {
+	err := filepath.WalkDir(testenv.GOROOT(t), func(src string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if info.IsDir() && src == filepath.Join(testenv.GOROOT(t), ".git") {
+		// WalkDir asks before it reads a directory, so the skipped .git is never listed.
+		if entry.IsDir() && src == filepath.Join(testenv.GOROOT(t), ".git") {
 			return filepath.SkipDir
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
 		}
 
 		rel, err := filepath.Rel(testenv.GOROOT(t), src)
@@ -490,7 +487,7 @@ func findGorootModules(t *testing.T) []gorootModule {
 			// not its dependencies).
 			cmd := testenv.Command(t, goBin, "list", "-json", "-m")
 			cmd.Dir = dir
-			cmd.Env = append(cmd.Environ(), "GO111MODULE=on", "GOWORK=off")
+			cmd.Env = append(cmd.Environ(), "GO111MODULE=on")
 			cmd.Stderr = new(strings.Builder)
 			out, err := cmd.Output()
 			if err != nil {

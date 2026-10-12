@@ -31,6 +31,10 @@ var (
 
 	// cosmoPthreadCondTimedwaitRelative records whether cosmoPthreadCondTimedwaitFn is pthread_cond_timedwait_relative_np.
 	cosmoPthreadCondTimedwaitRelative bool
+
+	// futexwakeup on XNU.
+	cosmoUlockWaitFn uintptr
+	cosmoUlockWakeFn uintptr
 )
 
 var (
@@ -42,6 +46,8 @@ var (
 	dlsymNamePthreadCondTimedwaitRelNp = []byte("pthread_cond_timedwait_relative_np\x00")
 	dlsymNamePthreadCondTimedwait      = []byte("pthread_cond_timedwait\x00")
 	dlsymNamePthreadCondSignal         = []byte("pthread_cond_signal\x00")
+	dlsymNameUlockWait                 = []byte("__ulock_wait\x00")
+	dlsymNameUlockWake                 = []byte("__ulock_wake\x00")
 )
 
 // cosmoSemaInit resolves the pthread entry points M parking needs on
@@ -59,7 +65,31 @@ func cosmoSemaInit() {
 	if cosmoPthreadCondTimedwaitFn == 0 {
 		cosmoPthreadCondTimedwaitFn = cosmoDlsym(&dlsymNamePthreadCondTimedwait[0])
 	}
+	cosmoUlockWaitFn = cosmoDlsym(&dlsymNameUlockWait[0])
+	cosmoUlockWakeFn = cosmoDlsym(&dlsymNameUlockWake[0])
+	if cosmoUlockWaitFn == 0 || cosmoUlockWakeFn == 0 {
+		throw("cosmoSemaInit: __ulock_wait unresolved")
+	}
 }
+
+// xnuUlockWait calls libSystem's __ulock_wait. It returns -errno on failure
+// when op carries ULF_NO_ERRNO.
+//
+//go:nosplit
+//go:cgo_unsafe_args
+func xnuUlockWait(op uint32, addr *uint32, value uint64, timeout uint32) int32 {
+	return cosmoPthreadLibcCall(unsafe.Pointer(abi.FuncPCABI0(cosmo_ulock_wait_trampoline)), unsafe.Pointer(&op))
+}
+func cosmo_ulock_wait_trampoline()
+
+// xnuUlockWake calls libSystem's __ulock_wake.
+//
+//go:nosplit
+//go:cgo_unsafe_args
+func xnuUlockWake(op uint32, addr *uint32, wake uint64) int32 {
+	return cosmoPthreadLibcCall(unsafe.Pointer(abi.FuncPCABI0(cosmo_ulock_wake_trampoline)), unsafe.Pointer(&op))
+}
+func cosmo_ulock_wake_trampoline()
 
 // Wrappers around the dlsym'd pthread functions, following upstream
 // sys_darwin.go's pattern: cgo_unsafe_args makes &m the address of a

@@ -93,10 +93,6 @@ func getGCMask(t *_type) *byte {
 	return t.GCData
 }
 
-// inProgress is a byte whose address is a sentinel indicating that
-// some thread is currently building the GC bitmask for a type.
-var inProgress byte
-
 // nosplit because it is used during write barriers and must not be preempted.
 //
 //go:nosplit
@@ -113,35 +109,24 @@ func getGCMaskOnDemand(t *_type) *byte {
 		addr = add(addr, firstmoduledata.data-aixStaticDataBase)
 	}
 
-	for {
-		p := (*byte)(atomic.Loadp(addr))
-		switch p {
-		default: // Already built.
-			return p
-		case &inProgress: // Someone else is currently building it.
-			// Just wait until the builder is done.
-			// We can't block here, so spinning while having
-			// the OS thread yield is about the best we can do.
-			osyield()
-			continue
-		case nil: // Not built yet.
-			// Attempt to get exclusive access to build it.
-			if !atomic.Casp1((*unsafe.Pointer)(addr), nil, unsafe.Pointer(&inProgress)) {
-				continue
-			}
-
-			// Build gcmask for this type.
-			bytes := goarch.PtrSize * divRoundUp(t.PtrBytes/goarch.PtrSize, 8*goarch.PtrSize)
-			p = (*byte)(persistentalloc(bytes, goarch.PtrSize, &memstats.other_sys))
-			systemstack(func() {
-				buildGCMask(t, bitCursor{ptr: p, n: 0})
-			})
-
-			// Store the newly-built gcmask for future callers.
-			atomic.StorepNoWB(addr, unsafe.Pointer(p))
-			return p
-		}
+	if mask := (*byte)(atomic.Loadp(addr)); mask != nil {
+		return mask
 	}
+
+	// Not built yet. Every thread that gets here builds its own copy;
+	// the first to publish wins, and the rest use the winner's. The
+	// copies are identical, so no thread waits on another, and a loser
+	// leaves behind one persistentalloc'd mask per racing thread, once
+	// per type.
+	bytes := goarch.PtrSize * divRoundUp(t.PtrBytes/goarch.PtrSize, 8*goarch.PtrSize)
+	mask := (*byte)(persistentalloc(bytes, goarch.PtrSize, &memstats.other_sys))
+	systemstack(func() {
+		buildGCMask(t, bitCursor{ptr: mask, n: 0})
+	})
+	if atomic.Casp1((*unsafe.Pointer)(addr), nil, unsafe.Pointer(mask)) {
+		return mask
+	}
+	return (*byte)(atomic.Loadp(addr))
 }
 
 // A bitCursor is a simple cursor to memory to which we

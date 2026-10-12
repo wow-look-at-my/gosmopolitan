@@ -37,8 +37,8 @@ func TestParseGitHubRemote(t *testing.T) {
 		want   githubRepo
 		isOK   bool
 	}{
-		{"https://github.com/wow-look-at-my/slopfix", githubRepo{"wow-look-at-my", "slopfix"}, true},
-		{"https://github.com/wow-look-at-my/slopfix.git", githubRepo{"wow-look-at-my", "slopfix"}, true},
+		{"https://github.com/wow-look-at-my/slopfix", githubRepo{owner: "wow-look-at-my", name: "slopfix"}, true},
+		{"https://github.com/wow-look-at-my/slopfix.git", githubRepo{owner: "wow-look-at-my", name: "slopfix"}, true},
 		{"http://github.com/owner/repo", githubRepo{}, false},
 		{"https://github.com.evil.example/owner/repo", githubRepo{}, false},
 		{"https://evil.example/github.com/owner/repo", githubRepo{}, false},
@@ -60,7 +60,7 @@ func TestParseGitHubRemote(t *testing.T) {
 
 func TestGitHubArchiveSources(t *testing.T) {
 	const hash = "0123456789abcdef0123456789abcdef01234567"
-	repo := githubRepo{"wow-look-at-my", "slopfix"}
+	repo := githubRepo{owner: "wow-look-at-my", name: "slopfix"}
 	proxied := func(inner string) string { return "https://proxy.pazer.ai/?url=" + url.QueryEscape(inner) }
 	cases := []struct {
 		ref  string
@@ -288,7 +288,7 @@ type fakeGitHub struct {
 	infoRefsStatus int
 	// infoRefsCredential is the Authorization an info/refs request must carry.
 	infoRefsCredential string
-	// lastInfoRefsCredential is the Authorization of every info/refs request, in order.
+	// infoRefsAuth is the Authorization of every info/refs request, in order.
 	infoRefsAuth []string
 	// apiStatus fails every direct api.github.com request with this code.
 	apiStatus int
@@ -612,6 +612,52 @@ func TestGitHubRefsOverHTTP(t *testing.T) {
 	}
 }
 
+// TestGitHubUnnamedCommit resolves the commit of a pseudo-version, which no
+// ref names, from the archive of that commit and with no other request.
+func TestGitHubUnnamedCommit(t *testing.T) {
+	source, _ := makeSourceRepo(t, sourceFiles)
+	gitIn(t, source, "commit", "-q", "--allow-empty", "-m", "unnamed")
+	unnamed := gitIn(t, source, "rev-parse", "HEAD")
+	gitIn(t, source, "commit", "-q", "--allow-empty", "-m", "head")
+
+	fake := &fakeGitHub{dir: source, redirectTo: "codeload.github.com"}
+	serveFakeGitHub(t, fake)
+	ctx := testContext(t)
+	repo := fakeGitHubRepo(t, ctx, filepath.Join(t.TempDir(), "no-such-remote.git"))
+
+	info, err := repo.Stat(ctx, unnamed[:12])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Name != unnamed || info.Version != unnamed || info.Origin.Ref != "" {
+		t.Errorf("Stat(%s) = %s, version %s at %q, want %s, version %s at no ref", unnamed[:12], info.Name, info.Version, info.Origin.Ref, unnamed, unnamed)
+	}
+	rec := new(Fetch)
+	files, err := repo.ReadFiles(WithFetch(ctx, rec), unnamed, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(files, func(file ModuleFile) bool {
+		return file.Name == "go.mod" && string(file.Data) == sourceFiles["go.mod"]
+	}) {
+		t.Errorf("ReadFiles has no go.mod %q: %v", sourceFiles["go.mod"], files)
+	}
+	if route, _, _, _ := rec.Stats(); route != "tar.gz archive" {
+		t.Errorf("download reports %q, want %q", route, "tar.gz archive")
+	}
+	if repo.gitDirReady() {
+		t.Errorf("resolving an unnamed commit made a git repository")
+	}
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	for _, request := range fake.refRequests {
+		if strings.Contains(request, "api.github.com") || strings.HasPrefix(request, gsmHost) {
+			t.Errorf("resolving an unnamed commit asked the API: %s", request)
+		}
+	}
+}
+
 // TestGitHubInfoRefsSendsTheCredentialFirst covers a private repository's ref
 // advertisement. With a git credential available, the first request carries
 // it, so there is no anonymous refusal and no second round trip.
@@ -824,7 +870,7 @@ func fakeGitHubRepo(t *testing.T, ctx context.Context, dir string) *gitRepo {
 	previous := githubRemote
 	githubRemote = func(name string) (githubRepo, bool) {
 		if name == remote {
-			return githubRepo{"owner", "repo"}, true
+			return githubRepo{owner: "owner", name: "repo"}, true
 		}
 		return previous(name)
 	}

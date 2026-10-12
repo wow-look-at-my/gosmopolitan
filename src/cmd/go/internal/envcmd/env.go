@@ -212,15 +212,8 @@ func ExtraEnvVars(ld *modload.Loader) []cfg.EnvVar {
 	} else if ld.Enabled() {
 		gomod = os.DevNull
 	}
-	ld.InitWorkfile()
-	gowork := modload.WorkFilePath(ld)
-	// As a special case, if a user set off explicitly, report that in GOWORK.
-	if cfg.Getenv("GOWORK") == "off" {
-		gowork = "off"
-	}
 	return []cfg.EnvVar{
 		{Name: "GOMOD", Value: gomod},
-		{Name: "GOWORK", Value: gowork},
 	}
 }
 
@@ -628,8 +621,7 @@ func checkEnvWrite(key, val string) error {
 		"GOTELEMETRY",
 		"GOTELEMETRYDIR",
 		"GOTOOLDIR",
-		"GOVERSION",
-		"GOWORK":
+		"GOVERSION":
 		return fmt.Errorf("%s cannot be modified", key)
 	case "GOENV", "GODEBUG":
 		return fmt.Errorf("%s can only be set using the OS environment", key)

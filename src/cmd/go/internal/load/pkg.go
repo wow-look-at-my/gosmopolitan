@@ -2456,7 +2456,7 @@ func (p *Package) setBuildInfo(ctx context.Context, f *modfetch.Fetcher, autoVCS
 		if mi.Replace != nil {
 			dm.Replace = debugModFromModinfo(mi.Replace)
 		} else if mi.Version != "" && cfg.BuildMod != "vendor" {
-			dm.Sum = modfetch.Sum(ctx, module.Version{Path: mi.Path, Version: mi.Version})
+			dm.Sum = f.Sum(ctx, module.Version{Path: mi.Path, Version: mi.Version})
 		}
 		return dm
 	}
@@ -2729,6 +2729,7 @@ func (p *Package) setBuildInfo(ctx context.Context, f *modfetch.Fetcher, autoVCS
 		}
 	}
 omitVCS:
+	appendReleaseSettings(appendSetting)
 
 	p.Internal.BuildInfo = info
 }

@@ -321,7 +321,7 @@ func TestCgroupMemoryLimit(t *testing.T) {
 		mustSetMemoryMax(t, c, limit)
 
 		got := runBuiltTestProg(t, exe, "PrintMemoryLimit")
-		want := fmt.Sprintf("%d\n", limit)
+		want := fmt.Sprintf("%d\n", int64(limit))
 		if got != want {
 			t.Fatalf("output got %q want %q", got, want)
 		}

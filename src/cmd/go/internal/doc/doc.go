@@ -216,21 +216,15 @@ func do(ctx context.Context, writer io.Writer, flagSet *flag.FlagSet, args []str
 	}
 	if serveHTTP {
 		// Special case: if there are no arguments, try to go to an appropriate page
-		// depending on whether we're in a module or workspace. The pkgsite homepage
+		// depending on whether we're in a module. The pkgsite homepage
 		// is often not the most useful page.
 		if len(flagSet.Args()) == 0 {
-			mod, err := runCmd(append(os.Environ(), "GOWORK=off"), "go", "list", "-m")
+			mod, err := runCmd(nil, "go", "list", "-m")
 			if err == nil && mod != "" && mod != "command-line-arguments" {
 				// If there's a module, go to the module's doc page.
 				return doPkgsite(ctx, mod, "")
 			}
-			gowork, err := runCmd(nil, "go", "env", "GOWORK")
-			if err == nil && gowork != "" {
-				// Outside a module, but in a workspace, go to the home page
-				// with links to each of the modules' pages.
-				return doPkgsite(ctx, "", "")
-			}
-			// Outside a module or workspace, go to the documentation for the standard library.
+			// Outside a module, go to the documentation for the standard library.
 			return doPkgsite(ctx, "std", "")
 		}
 
@@ -381,7 +375,6 @@ func parseArgs(ctx context.Context, flagSet *flag.FlagSet, args []string) (pkg *
 		loader.RootMode = modload.NoRoot
 		modload.Init(loader)
 	} else if loader.WillBeEnabled() {
-		loader.InitWorkfile()
 		modload.Init(loader)
 		modload.LoadModFile(loader, context.TODO())
 	}
