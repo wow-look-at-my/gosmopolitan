@@ -355,11 +355,7 @@ func importFromModules(ld *Loader, ctx context.Context, path string, rs *Require
 					dirs = append(dirs, dir)
 					roots = append(roots, vendorDir)
 				} else {
-					subCommand := "mod"
-					if ld.inWorkspaceMode() {
-						subCommand = "work"
-					}
-					fmt.Fprintf(os.Stderr, "go: ignoring package %s which exists in the vendor directory but is missing from vendor/modules.txt. To sync the vendor directory run go %s vendor.\n", path, subCommand)
+					fmt.Fprintf(os.Stderr, "go: ignoring package %s which exists in the vendor directory but is missing from vendor/modules.txt. To sync the vendor directory run go mod vendor.\n", path)
 				}
 			}
 		}
@@ -828,7 +824,7 @@ func fetch(ld *Loader, ctx context.Context, mod module.Version) (dir string, isL
 // mustHaveSums reports whether we require that all checksums
 // needed to load or build packages are already present in the go.sum file.
 func mustHaveSums(ld *Loader) bool {
-	return ld.HasModRoot() && cfg.BuildMod == "readonly" && !ld.inWorkspaceMode()
+	return ld.HasModRoot() && cfg.BuildMod == "readonly"
 }
 
 type sumMissingError struct {
