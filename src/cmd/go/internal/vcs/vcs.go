@@ -782,9 +782,20 @@ const (
 func RepoRootForImportPath(importPath string, mod ModuleMode, security web.SecurityMode) (*RepoRoot, error) {
 	rr, err := repoRootFromVCSPaths(importPath, security, vcsPaths)
 	if err == errUnknownSite {
-		rr, err = repoRootForImportDynamic(importPath, mod, security)
-		if err != nil {
-			err = importErrorf(importPath, "unrecognized import path %q: %v", importPath, err)
+		host, _, _ := strings.Cut(importPath, "/")
+		if web.IsBannedHost(host) {
+			err = importErrorf(importPath, "no repository is known for %q, and the go command never contacts %s or a host under it", importPath, web.BannedDomain)
+		} else {
+			rr, err = repoRootForImportDynamic(importPath, mod, security)
+			if err != nil {
+				err = importErrorf(importPath, "unrecognized import path %q: %v", importPath, err)
+			}
+		}
+	}
+	// A repository on a banned host is never cloned, whichever source named it.
+	if err == nil {
+		if refuse := web.RefuseBannedRemote(rr.Repo); refuse != nil {
+			rr, err = nil, importErrorf(importPath, "%s: %v", importPath, refuse)
 		}
 	}
 
@@ -878,6 +889,10 @@ func repoRootFromVCSPaths(importPath string, security web.SecurityMode, vcsPaths
 			repoURL = match["repo"]
 		} else {
 			repo := match["repo"]
+			// A ping would contact the host, so a banned one stops here.
+			if err := web.RefuseBannedRemote("https://" + repo); err != nil {
+				return nil, importErrorf(importPath, "%s: %v", importPath, err)
+			}
 			var ok bool
 			repoURL, ok = interceptVCSTest(repo, vcs, security)
 			if !ok {
@@ -1299,6 +1314,21 @@ var vcsPaths = []*vcsPath{
 		repo:       "https://{root}",
 	},
 
+	// golang.org and google.golang.org resolve to GitHub with no request to
+	// either host. A path that golangRepo cannot map is an error.
+	{
+		pathPrefix: "golang.org",
+		regexp:     lazyregexp.New(`^(?P<root>golang\.org/(?P<reponame>x/[\w.\-]+|[\w.\-]+))(/[\w.\-]+)*$`),
+		vcs:        "git",
+		check:      golangRepo,
+	},
+	{
+		pathPrefix: "google.golang.org",
+		regexp:     lazyregexp.New(`^(?P<root>google\.golang\.org/(?P<reponame>[\w.\-]+))(/[\w.\-]+)*$`),
+		vcs:        "git",
+		check:      golangRepo,
+	},
+
 	// gopkg.in redirects to GitHub by a fixed rule, so its paths resolve
 	// with no request to gopkg.in. The empty prefix lets a path outside the
 	// rule fall through to the meta tag lookup.
@@ -1326,6 +1356,35 @@ func gopkgInRepo(match map[string]string) error {
 	}
 	match["repo"] = "https://github.com/" + owner + "/" + match["pkg"]
 	return nil
+}
+
+// golangRepos maps each golang.org and google.golang.org repository root
+// outside golang.org/x to its GitHub repository. Each entry is the repository
+// the root's go-import or go-source tag names.
+var golangRepos = map[string]string{
+	"golang.org/dl":               "github.com/golang/dl",
+	"google.golang.org/api":       "github.com/googleapis/google-api-go-client",
+	"google.golang.org/appengine": "github.com/golang/appengine",
+	"google.golang.org/cloud":     "github.com/googleapis/google-cloud-go",
+	"google.golang.org/genai":     "github.com/googleapis/go-genai",
+	"google.golang.org/genproto":  "github.com/googleapis/go-genproto",
+	"google.golang.org/grpc":      "github.com/grpc/grpc-go",
+	"google.golang.org/protobuf":  "github.com/protocolbuffers/protobuf-go",
+}
+
+// golangRepo sets the GitHub repository for a golang.org or
+// google.golang.org root. golang.org/x/name is github.com/golang/name.
+func golangRepo(match map[string]string) error {
+	root := match["root"]
+	if name, ok := strings.CutPrefix(root, "golang.org/x/"); ok {
+		match["repo"] = "https://github.com/golang/" + name
+		return nil
+	}
+	if repo := golangRepos[root]; repo != "" {
+		match["repo"] = "https://" + repo
+		return nil
+	}
+	return importErrorf(match["import"], "%s: no repository is known for %s, and the go command never contacts %s or a host under it", match["import"], root, web.BannedDomain)
 }
 
 // noVCSSuffix checks that the repository name does not

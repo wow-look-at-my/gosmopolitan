@@ -77,15 +77,32 @@ func (e *HTTPError) Unwrap() error {
 	return e.Err
 }
 
-// BannedHost is the module mirror. The go command sends no request to it, on
-// any path and after any redirect.
-const BannedHost = "proxy.golang.org"
+// BannedDomain is golang.org. The go command sends no request to it or to a
+// host under it, on any path and after any redirect. No setting changes this.
+const BannedDomain = "golang.org"
 
-func refuseBannedHost(u *url.URL) error {
-	if strings.EqualFold(u.Hostname(), BannedHost) {
-		return fmt.Errorf("refusing %s: the go command never contacts %s", u.Redacted(), BannedHost)
+// IsBannedHost reports whether host is BannedDomain or a host under it.
+func IsBannedHost(host string) bool {
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	return host == BannedDomain || strings.HasSuffix(host, "."+BannedDomain)
+}
+
+// RefuseBannedURL answers an error when u names a host that IsBannedHost refuses.
+func RefuseBannedURL(target *url.URL) error {
+	if IsBannedHost(target.Hostname()) {
+		return fmt.Errorf("refusing %s: the go command never contacts %s or a host under it", target.Redacted(), BannedDomain)
 	}
 	return nil
+}
+
+// RefuseBannedRemote is RefuseBannedURL for a repository URL in text form.
+// A remote with no readable host is refused, because its host is unknown.
+func RefuseBannedRemote(remote string) error {
+	target, err := url.Parse(remote)
+	if err != nil {
+		return fmt.Errorf("refusing %q: cannot read its host: %v", remote, err)
+	}
+	return RefuseBannedURL(target)
 }
 
 // GetBytes returns the body of the requested resource, or an error if the

@@ -39,23 +39,49 @@ func TestUserAgent(t *testing.T) {
 }
 
 func TestBannedHostRefused(t *testing.T) {
-	for _, raw := range []string{"https://proxy.golang.org/golang.org/x/sync/@v/list", "http://PROXY.golang.org:443/x"} {
+	for _, raw := range []string{
+		"https://proxy.golang.org/golang.org/x/sync/@v/list",
+		"http://PROXY.golang.org:443/x",
+		"https://golang.org/x/text?go-get=1",
+		"https://sum.golang.org/lookup/golang.org/x/text@v0.1.0",
+		"https://google.golang.org/grpc?go-get=1",
+		"https://golang.org./x",
+		"//golang.org/x/tools?go-get=1",
+	} {
 		target, err := url.Parse(raw)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := Get(DefaultSecurity, target); err == nil || !strings.Contains(err.Error(), BannedHost) {
-			t.Errorf("Get(%s) err = %v, want a refusal that names %s", raw, err, BannedHost)
+		if _, err := Get(DefaultSecurity, target); err == nil || !strings.Contains(err.Error(), BannedDomain) {
+			t.Errorf("Get(%s) err = %v, want a refusal that names %s", raw, err, BannedDomain)
 		}
 	}
 
-	server := httptest.NewServer(http.RedirectHandler("https://proxy.golang.org/golang.org/x/sync/@v/list", http.StatusFound))
-	defer server.Close()
-	start, err := url.Parse(server.URL)
-	if err != nil {
-		t.Fatal(err)
+	for _, target := range []string{"https://proxy.golang.org/x", "https://golang.org/dl/", "https://pkg.go.golang.org/"} {
+		server := httptest.NewServer(http.RedirectHandler(target, http.StatusFound))
+		start, err := url.Parse(server.URL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Get(Insecure, start); err == nil || !strings.Contains(err.Error(), BannedDomain) {
+			t.Errorf("a redirect to %s gave err = %v, want a refusal", target, err)
+		}
+		server.Close()
 	}
-	if _, err := Get(Insecure, start); err == nil || !strings.Contains(err.Error(), BannedHost) {
-		t.Errorf("a redirect to %s gave err = %v, want a refusal", BannedHost, err)
+}
+
+func TestIsBannedHost(t *testing.T) {
+	for _, host := range []string{"golang.org", "GOLANG.ORG", "golang.org.", "proxy.golang.org", "sum.golang.org", "google.golang.org", "a.b.golang.org"} {
+		if !IsBannedHost(host) {
+			t.Errorf("IsBannedHost(%q) = false, want true", host)
+		}
+	}
+	for _, host := range []string{"", "go.dev", "github.com", "notgolang.org", "golang.org.example.com", "golang.orgx", "go.googlesource.com"} {
+		if IsBannedHost(host) {
+			t.Errorf("IsBannedHost(%q) = true, want false", host)
+		}
+	}
+	if err := RefuseBannedRemote("::not a url"); err == nil {
+		t.Error("RefuseBannedRemote of an unreadable URL succeeded, want a refusal")
 	}
 }
