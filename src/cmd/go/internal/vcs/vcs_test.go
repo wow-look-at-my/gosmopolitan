@@ -27,6 +27,35 @@ func init() {
 
 // Test that RepoRootForImportPath determines the correct RepoRoot for a given importPath.
 // TODO(cmang): Add tests for SVN.
+// A gopkg.in path resolves to its GitHub repository from the static table,
+// so the fetch never asks gopkg.in anything.
+func TestGopkgInResolvesToGitHub(t *testing.T) {
+	tests := []struct {
+		path string
+		root string
+		repo string
+	}{
+		{"gopkg.in/yaml.v3", "gopkg.in/yaml.v3", "https://github.com/go-yaml/yaml"},
+		{"gopkg.in/check.v1", "gopkg.in/check.v1", "https://github.com/go-check/check"},
+		{"gopkg.in/natefinch/lumberjack.v2", "gopkg.in/natefinch/lumberjack.v2", "https://github.com/natefinch/lumberjack"},
+		{"gopkg.in/src-d/go-git.v4/plumbing", "gopkg.in/src-d/go-git.v4", "https://github.com/src-d/go-git"},
+		{"gopkg.in/mgo.v2-unstable/bson", "gopkg.in/mgo.v2-unstable", "https://github.com/go-mgo/mgo"},
+	}
+	for _, test := range tests {
+		got, err := repoRootFromVCSPaths(test.path, web.SecureOnly, vcsPaths)
+		if err != nil {
+			t.Errorf("repoRootFromVCSPaths(%q): %v", test.path, err)
+			continue
+		}
+		if got.VCS != vcsGit || got.Root != test.root || got.Repo != test.repo {
+			t.Errorf("repoRootFromVCSPaths(%q) = {%s %q %q}, want {git %q %q}", test.path, got.VCS.Cmd, got.Root, got.Repo, test.root, test.repo)
+		}
+	}
+	if _, err := repoRootFromVCSPaths("gopkg.in/noversion", web.SecureOnly, vcsPaths); err == nil {
+		t.Errorf("repoRootFromVCSPaths(%q) succeeded, want an error for a path with no .vN", "gopkg.in/noversion")
+	}
+}
+
 func TestRepoRootForImportPath(t *testing.T) {
 	// Intercept requests to external servers to avoid making external network connections from the test.
 	ts := httptest.NewServer(http.NotFoundHandler())
