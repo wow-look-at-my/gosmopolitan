@@ -119,6 +119,11 @@ func TestSumOfGitHubArchiveIsItsH1(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.Remove(record))
 	assert.Equal(t, want, fetcher.Sum(ctx, mod))
+
+	// The hash is recorded, so the next build reads it instead.
+	data, err = os.ReadFile(record)
+	require.NoError(t, err)
+	assert.Equal(t, want, string(data))
 }
 
 func TestSumOfGitZipIsItsH1(t *testing.T) {
