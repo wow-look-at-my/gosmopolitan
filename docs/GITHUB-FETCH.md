@@ -13,7 +13,7 @@ The go command never asks `https://proxy.golang.org`. `DefaultGOPROXY` is `direc
 
 A proxy request talks only to proxy.pazer.ai. The proxy must follow GitHub's redirect itself and return the archive. A redirect that it passes back is not followed. The next source is tried.
 
-These are the `github` entry that `proxyList` puts ahead of `direct` (`src/cmd/go/internal/modfetch/proxy.go`). A failure there is final, and `direct` is not tried a second time. A module outside github.com skips the entry and goes direct to its origin. The go-import meta tag names the repository, and a repository on github.com takes the archive route again. A path under `GOPRIVATE` or `GONOPROXY` goes direct too. The archive code is `src/cmd/go/internal/modfetch/codehost/github.go`.
+These are the `github` entry that `proxyList` puts ahead of `direct` (`src/cmd/go/internal/modfetch/proxy.go`). A failure there is last, and `direct` is not tried a second time. A module outside github.com skips the entry and goes direct to its origin. The go-import meta tag names the repository, and a repository on github.com takes the archive route again. A gopkg.in path asks no meta tag: `vcs.go` maps it to its GitHub repository by gopkg.in's own rule. It takes the archive route too. gopkg.in answers a GitHub-hosted runner with a 502 frequently enough to fail a build.
 
 An archive can hash differently from the module zip: `export-ignore` and `export-subst` change it. When go.sum records an `h1:` sum the archive does not match. The commit is fetched with no history and zipped by `git archive` with those attributes off (`codehost.WithGitOnly`). The log names the archive as the failed source.
 
