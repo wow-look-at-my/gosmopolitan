@@ -37,7 +37,7 @@ type apeLoader struct {
 // Loader regions of the 64K APE header.
 const (
 	apeLdLinuxAMD64Offset  = 0x2800
-	apeLdLinuxARM64Offset  = 0x2c00
+	apeLdLinuxARM64Offset  = 0x3800
 	apeLdDarwinARM64Offset = 0x8000
 )
 
