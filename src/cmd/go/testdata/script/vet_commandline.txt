@@ -1,8 +1,8 @@
 # go.dev/issue/65612
 # go vet should set the GoVersion for command line files.
 
-# The local version is above every go and go.work line here, so nothing
-# needs a newer toolchain and each assertion reads its own source.
+# The local version is above every go line here, so nothing needs a newer
+# toolchain and each assertion reads its own source.
 env TESTGO_VERSION=go1.22.5
 
 go vet -n -json example.com/m
@@ -12,9 +12,7 @@ stderr '"GoVersion": "go1.22.0"'
 go vet -n -json main.go
 stderr '"GoVersion": "go1.22.5"'
 
-# In workspace mode a package still reads its own go.mod. A command line
-# file has no module, so it reads the local go version here too: the go.work
-# line reaches vet only through a package's module.
+# The go command reads no go.work file, so its go line changes neither version.
 cp go.work.orig go.work
 go vet -n -json example.com/m
 stderr '"GoVersion": "go1.22.0'
@@ -22,7 +20,7 @@ stderr '"GoVersion": "go1.22.0'
 go vet -n -json main.go
 stderr '"GoVersion": "go1.22.5'
 
-# Without go.mod or go.work, the command line file version should use local go version .
+# Without go.mod, the command line file version should use local go version .
 env TESTGO_VERSION=go1.22.3
 rm go.mod
 rm go.work

@@ -22,7 +22,7 @@ import (
 // declare. An explicit -mod flag keeps its upstream meaning.
 func orgSyncing(ld *Loader) bool {
 	return cfg.BuildMod == "readonly" && !cfg.BuildModExplicit &&
-		ld.HasModRoot() && !ld.inWorkspaceMode() && orgResolvable()
+		ld.HasModRoot() && orgResolvable()
 }
 
 // orgDeclaredCache maps a module path to the version org modules require.
