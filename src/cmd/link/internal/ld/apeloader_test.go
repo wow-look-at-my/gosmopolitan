@@ -19,8 +19,8 @@ import (
 // reaches the host verbatim, and nothing on the host checks it, so this is
 // the only place that can.
 var apeLoaderSums = map[string]string{
-	"apeld-linux-amd64":  "a923f6cf603bf15bb4030e1d78c467e0d673f804ec0df978f6e08d6ad68d5d8c",
-	"apeld-linux-arm64":  "f389cc5fb948d81e672efeb35ce5580fd5ef07b06257b80bb5c0225e5ab21ba3",
+	"apeld-linux-amd64":  "f47089393d2cec1ae0b6fbf6443a98076f0adfdbea4c4afc30824cc88e08dad0",
+	"apeld-linux-arm64":  "e0a6b5f65fb0e07c6e2ff8ef35d2dab3fc776a0a55d263686968292563846f3a",
 	"apeld-darwin-arm64": "b67e73680faea89c0db389089939ab9bf2acc6f36a3ce90a661eb64694ed2cbc",
 }
 
