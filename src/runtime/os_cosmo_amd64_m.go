@@ -14,8 +14,8 @@ type mOS struct {
 	profileTimer      int32
 	profileTimerValid atomic.Bool
 
-	// needPerThreadSyscall indicates that a per-thread syscall is required for doAllThreadsSyscall.
-	needPerThreadSyscall atomic.Uint8
+	// needPerThreadSyscall indicates that a per-thread syscall is required for doAllThreadsSyscall. It is a futex word.
+	needPerThreadSyscall uint32
 
 	// waitsema is used as a futex for lock_futex.go
 	waitsema uint32

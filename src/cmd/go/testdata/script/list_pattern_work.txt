@@ -18,22 +18,6 @@ stdout 'example.com/n/c'
 stdout 'example.com/n/d'
 ! stdout 'unsafe'
 
-cd ../w
-go list all
-stdout 'example.com/dep'
-stdout 'example.com/m/a'
-stdout 'example.com/m/b'
-stdout 'example.com/n/c'
-stdout 'example.com/n/d'
-stdout 'unsafe'
-go list work
-! stdout 'example.com/dep'
-stdout 'example.com/m/a'
-stdout 'example.com/m/b'
-stdout 'example.com/n/c'
-stdout 'example.com/n/d'
-! stdout 'unsafe'
-
 -- m/go.mod --
 module example.com/m
 
@@ -57,23 +41,9 @@ package c
 package d
 
 import _ "unsafe"
--- w/go.work --
-go 1.24
-
-use (
-	../m
-	../n
-)
 -- dep/go.mod --
 module example.com/dep
 
 go 1.24
 -- dep/dep.go --
 package dep
--- want_w_all.txt --
-example.com/dep
-example.com/work/a
-example.com/work/b
--- want_w_all.txt --
-example.com/work/a
-example.com/work/b

@@ -27,7 +27,6 @@ cmp stdout $WORK/net-deps.txt
 # However, 'go mod' and 'go get' subcommands should report the original module
 # dependencies, not the vendored packages.
 
-env GOWORK=off
 go mod why -m golang.org/x/net
 stdout '^# golang.org/x/net\nnet\ngolang.org/x/net'
 

@@ -8,6 +8,7 @@ import (
 	. "os"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -195,7 +196,11 @@ func TestEnvironConsistency(t *testing.T) {
 
 		k := kv[:i]
 		v := kv[i+1:]
-		v2, ok := LookupEnv(k)
+		// LookupEnv is syscall.Getenv after it tells the test log the
+		// variable was read. The check reads through syscall.Getenv so the
+		// log does not name every variable of the environment: what is
+		// checked is that the two views agree, whatever the values are.
+		v2, ok := syscall.Getenv(k)
 		if !ok || v != v2 {
 			t.Errorf("Environ contains %q, but LookupEnv(%q) = %q, %t", kv, k, v2, ok)
 		}

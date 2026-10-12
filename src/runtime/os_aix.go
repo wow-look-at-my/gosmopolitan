@@ -100,6 +100,7 @@ func osinit() {
 
 	numCPUStartup = getCPUCount()
 	physPageSize = sysconf(__SC_PAGE_SIZE)
+	extraMSemaInit()
 }
 
 func getCPUCount() int32 {

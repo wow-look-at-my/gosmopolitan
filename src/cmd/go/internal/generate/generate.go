@@ -183,7 +183,6 @@ func init() {
 
 func runGenerate(ctx context.Context, cmd *base.Command, args []string) {
 	moduleLoader := modload.NewLoader()
-	moduleLoader.InitWorkfile()
 
 	if generateRunFlag != "" {
 		var err error

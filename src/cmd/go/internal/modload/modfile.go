@@ -112,9 +112,8 @@ type requireMeta struct {
 type modPruning uint8
 
 const (
-	pruned    modPruning = iota // transitive dependencies of modules at go 1.17 and higher are pruned out
-	unpruned                    // no transitive dependencies are pruned out
-	workspace                   // pruned to the union of modules in the workspace
+	pruned   modPruning = iota // transitive dependencies of modules at go 1.17 and higher are pruned out
+	unpruned                   // no transitive dependencies are pruned out
 )
 
 func (p modPruning) String() string {
@@ -123,8 +122,6 @@ func (p modPruning) String() string {
 		return "pruned"
 	case unpruned:
 		return "unpruned"
-	case workspace:
-		return "workspace"
 	default:
 		return fmt.Sprintf("%T(%d)", p, p)
 	}
@@ -367,39 +364,29 @@ func replacement(mod module.Version, replace map[module.Version]module.Version) 
 }
 
 // Replacement returns the replacement for mod, if any. If the path in the
-// module.Version is relative it's relative to the single main module outside
-// workspace mode, or the workspace's directory in workspace mode.
+// module.Version is relative it's relative to the main module.
 func Replacement(ld *Loader, mod module.Version) module.Version {
-	r, foundModRoot, _ := replacementFrom(ld, mod)
-	return canonicalizeReplacePath(ld, r, foundModRoot)
+	r, _, _ := replacementFrom(ld, mod)
+	return r
 }
 
 // replacementFrom returns the replacement for mod, if any, the modroot of the replacement if it appeared in a go.mod,
-// and the source of the replacement. The replacement is relative to the go.work or go.mod file it appears in.
+// and the source of the replacement. The replacement is relative to the go.mod file it appears in.
 func replacementFrom(ld *Loader, mod module.Version) (r module.Version, modroot string, fromFile string) {
 	if _, r, ok := replacement(mod, ld.outsideModuleReplace); ok {
 		return r, "", ""
 	}
-	foundFrom, found, foundModRoot := "", module.Version{}, ""
+	found, foundModRoot := module.Version{}, ""
 	if ld.MainModules == nil {
 		return module.Version{}, "", ""
 	} else if ld.MainModules.Contains(mod.Path) && mod.Version == "" {
-		// Don't replace the workspace version of the main module.
+		// Don't replace the main module.
 		return module.Version{}, "", ""
-	}
-	if _, r, ok := replacement(mod, ld.MainModules.WorkFileReplaceMap()); ok {
-		return r, "", ld.workFilePath
 	}
 	for _, v := range ld.MainModules.Versions() {
 		if index := ld.MainModules.Index(v); index != nil {
-			if from, r, ok := replacement(mod, index.replace); ok {
-				modRoot := ld.MainModules.ModRoot(v)
-				if foundModRoot != "" && foundFrom != from && found != r {
-					base.Errorf("conflicting replacements found for %v in workspace modules defined by %v and %v",
-						mod, modFilePath(foundModRoot), modFilePath(modRoot))
-					return found, foundModRoot, modFilePath(foundModRoot)
-				}
-				found, foundModRoot = r, modRoot
+			if _, r, ok := replacement(mod, index.replace); ok {
+				found, foundModRoot = r, ld.MainModules.ModRoot(v)
 			}
 		}
 	}
@@ -417,30 +404,7 @@ func replacementFrom(ld *Loader, mod module.Version) (r module.Version, modroot 
 }
 
 func replaceRelativeTo(ld *Loader) string {
-	if workFilePath := WorkFilePath(ld); workFilePath != "" {
-		return filepath.Dir(workFilePath)
-	}
 	return ld.MainModules.ModRoot(ld.MainModules.mustGetSingleMainModule(ld))
-}
-
-// canonicalizeReplacePath ensures that relative, on-disk, replaced module paths
-// are relative to the workspace directory (in workspace mode) or to the module's
-// directory (in module mode, as they already are).
-func canonicalizeReplacePath(ld *Loader, r module.Version, modRoot string) module.Version {
-	if filepath.IsAbs(r.Path) || r.Version != "" || modRoot == "" {
-		return r
-	}
-	workFilePath := WorkFilePath(ld)
-	if workFilePath == "" {
-		return r
-	}
-	abs := filepath.Join(modRoot, r.Path)
-	if rel, err := filepath.Rel(filepath.Dir(workFilePath), abs); err == nil {
-		return module.Version{Path: ToDirectoryPath(rel), Version: r.Version}
-	}
-	// We couldn't make the version's path relative to the workspace's path,
-	// so just return the absolute path. It's the best we can do.
-	return module.Version{Path: ToDirectoryPath(abs), Version: r.Version}
 }
 
 // resolveReplacement returns the module actually used to load the source code
@@ -658,7 +622,7 @@ type retraction struct {
 //
 // The caller must not modify the returned summary.
 func goModSummary(ld *Loader, m module.Version) (*modFileSummary, error) {
-	if m.Version == "" && !ld.inWorkspaceMode() && ld.MainModules.Contains(m.Path) {
+	if m.Version == "" && ld.MainModules.Contains(m.Path) {
 		panic("internal error: goModSummary called on a main module")
 	}
 	if gover.IsToolchain(m.Path) {
@@ -767,7 +731,7 @@ func dropExcludedRequire(summary *modFileSummary, exclude map[module.Version]boo
 // ignoring all replacements that may apply to m and excludes that may apply to
 // its dependencies.
 //
-// rawGoModSummary cannot be used on the main module outside of workspace mode.
+// rawGoModSummary cannot be used on the main module.
 // The modFileSummary can still be used for retractions and deprecations
 // even if a TooNewError is returned.
 func rawGoModSummary(ld *Loader, m module.Version) (*modFileSummary, error) {
@@ -780,33 +744,10 @@ func rawGoModSummary(ld *Loader, m module.Version) (*modFileSummary, error) {
 		}
 		return &modFileSummary{module: m}, nil
 	}
-	if m.Version == "" && !ld.inWorkspaceMode() && ld.MainModules.Contains(m.Path) {
-		// Calling rawGoModSummary implies that we are treating m as a module whose
-		// requirements aren't the roots of the module graph and can't be modified.
-		//
-		// If we are not in workspace mode, then the requirements of the main module
-		// are the roots of the module graph and we expect them to be kept consistent.
+	if m.Version == "" && ld.MainModules.Contains(m.Path) {
+		// The requirements of the main module are the roots of the module graph,
+		// and they must be kept consistent.
 		panic("internal error: rawGoModSummary called on a main module")
-	}
-	if m.Version == "" && ld.inWorkspaceMode() && m.Path == "command-line-arguments" {
-		// "go work sync" calls LoadModGraph to make sure the module graph is valid.
-		// If there are no modules in the workspace, we synthesize an empty
-		// command-line-arguments module, which rawGoModData cannot read a go.mod for.
-		return &modFileSummary{module: m}, nil
-	} else if m.Version == "" && ld.inWorkspaceMode() && ld.MainModules.Contains(m.Path) {
-		// When go get uses EnterWorkspace to check that the workspace loads properly,
-		// it will update the contents of the workspace module's modfile in memory. To use the updated
-		// contents of the modfile when doing the load, don't read from disk and instead
-		// recompute a summary using the updated contents of the modfile.
-		if mf := ld.MainModules.ModFile(m); mf != nil {
-			summary, err := summaryFromModFile(m, ld.MainModules.modFiles[m])
-			if err != nil {
-				// summaryFromModFile returns a usable summary with a
-				// TooNewError, and its callers read retractions from it.
-				return summary, err
-			}
-			return resolveOrgSummary(ld, summary)
-		}
 	}
 	return rawGoModSummaryCache.Do(m, func() (*modFileSummary, error) {
 		name, data, err := rawGoModData(ld, m)
@@ -895,7 +836,7 @@ func dropModFileSummaries() {
 // rawGoModData returns the content of the go.mod file for module m, ignoring
 // all replacements that may apply to m.
 //
-// rawGoModData cannot be used on the main module outside of workspace mode.
+// rawGoModData cannot be used on the main module.
 //
 // Unlike rawGoModSummary, rawGoModData does not cache its results in memory.
 // Use rawGoModSummary instead unless you specifically need these bytes.
@@ -903,12 +844,8 @@ func rawGoModData(ld *Loader, m module.Version) (name string, data []byte, err e
 	if m.Version == "" {
 		dir := m.Path
 		if !filepath.IsAbs(dir) {
-			if ld.inWorkspaceMode() && ld.MainModules.Contains(m.Path) {
-				dir = ld.MainModules.ModRoot(m)
-			} else {
-				// m is a replacement module with only a file path.
-				dir = filepath.Join(replaceRelativeTo(ld), dir)
-			}
+			// m is a replacement module with only a file path.
+			dir = filepath.Join(replaceRelativeTo(ld), dir)
 		}
 		name = filepath.Join(dir, "go.mod")
 		if fsys.Replaced(name) {

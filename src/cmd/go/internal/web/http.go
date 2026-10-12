@@ -33,6 +33,10 @@ import (
 
 const userAgent = "GoCommand/1 (+https://go.dev/cmd/go)"
 
+func init() {
+	interceptedHost = intercept.Intercepts
+}
+
 // impatientInsecureHTTPClient is used with GOINSECURE,
 // when we're connecting to https servers that might not be there
 // or might be using self-signed certificates.
@@ -89,7 +93,7 @@ func checkRedirect(req *http.Request, via []*http.Request) error {
 	if len(via) >= 10 {
 		return errors.New("stopped after 10 redirects")
 	}
-	if err := refuseBannedHost(req.URL); err != nil {
+	if err := RefuseBannedURL(req.URL); err != nil {
 		return err
 	}
 
@@ -137,7 +141,7 @@ func get(security SecurityMode, url *urlpkg.URL, pin *PinOptions) (*Response, er
 			fmt.Fprintf(os.Stderr, "# get %s\n", url.Redacted())
 		}
 
-		if err := refuseBannedHost(url); err != nil {
+		if err := RefuseBannedURL(url); err != nil {
 			return nil, err
 		}
 		req, err := http.NewRequest("GET", url.String(), nil)
