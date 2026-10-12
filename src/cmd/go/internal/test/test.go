@@ -3092,10 +3092,12 @@ func isRunScratch(name string) bool {
 // /proc/sys holds, stay inputs.
 func isProcessLocal(name string) bool {
 	switch name {
-	case "/proc/self", "/proc/thread-self", "/dev/fd", "/dev/stdin", "/dev/stdout", "/dev/stderr":
+	case "/proc/self", "/proc/thread-self", "/dev/fd", "/dev/stdin", "/dev/stdout", "/dev/stderr", "/dev/shm":
 		return true
 	}
-	for _, dir := range []string{"/proc/self/", "/proc/thread-self/", "/dev/fd/"} {
+	// Shared memory segments carry the PID and a random name of whichever
+	// processes run at the time.
+	for _, dir := range []string{"/proc/self/", "/proc/thread-self/", "/dev/fd/", "/dev/shm/"} {
 		if strings.HasPrefix(name, dir) {
 			return true
 		}
