@@ -78,6 +78,13 @@ func ntGFromSP(mp *m, sp uintptr) *g {
 	return nil
 }
 
+// ntPreemptExtRelease drops the mp.preemptExtLock ntPreemptM took and wakes
+// mp's thread if osPreemptExtEnter is waiting for it.
+func ntPreemptExtRelease(mp *m) {
+	atomic.Store(&mp.preemptExtLock, 0)
+	ntFutexwakeup(&mp.preemptExtLock)
+}
+
 // ntPreemptAck acknowledges a preemption attempt.
 func ntPreemptAck(mp *m) {
 	mp.preemptGen.Add(1)
@@ -112,7 +119,7 @@ func ntPreemptM(mp *m) {
 	if mp.thread == 0 {
 		// The M hasn't been minit'd yet (or was unminit'd).
 		unlock(&mp.threadLock)
-		atomic.Store(&mp.preemptExtLock, 0)
+		ntPreemptExtRelease(mp)
 		ntPreemptAck(mp)
 		return
 	}
@@ -139,7 +146,7 @@ func ntPreemptM(mp *m) {
 	if int32(uint32(ntcall(ntSuspendThreadFn, thread, 0, 0, 0, 0, 0))) == -1 {
 		unlock(&ntSuspendLock)
 		ntcall(ntCloseHandleFn, thread, 0, 0, 0, 0, 0)
-		atomic.Store(&mp.preemptExtLock, 0)
+		ntPreemptExtRelease(mp)
 		// The thread no longer exists. This shouldn't be possible, but acknowledge the request.
 		ntPreemptAck(mp)
 		return
@@ -169,6 +176,9 @@ func ntPreemptM(mp *m) {
 
 	ntcall(ntResumeThreadFn, thread, 0, 0, 0, 0, 0)
 	ntcall(ntCloseHandleFn, thread, 0, 0, 0, 0, 0)
+
+	// The thread runs again, so a wait in osPreemptExtEnter can end.
+	ntFutexwakeup(&mp.preemptExtLock)
 }
 
 // ntExit is the NT leg of runtime.exit (tail-jumped from the amd64 exit asm).

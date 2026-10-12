@@ -262,6 +262,45 @@ func TestDarwinXlatIoctl(t *testing.T) {
 	}
 }
 
+// TestSyscallTIOCRequestsAreLinuxNumbers ties the requests the syscall
+// package exports to the Linux numbers the emulation translates from. A
+// pty library (github.com/creack/pty, hinshun/vt10x) passes them to a bare
+// SYS_IOCTL.
+func TestSyscallTIOCRequestsAreLinuxNumbers(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		exported, std uintptr
+	}{
+		{"TIOCSCTTY", syscall.TIOCSCTTY, cosmo.LinuxTIOCSCTTYForTest},
+		{"TIOCGPGRP", syscall.TIOCGPGRP, cosmo.LinuxTIOCGPGRPForTest},
+		{"TIOCSPGRP", syscall.TIOCSPGRP, cosmo.LinuxTIOCSPGRPForTest},
+		{"TIOCGWINSZ", syscall.TIOCGWINSZ, cosmo.LinuxTIOCGWINSZForTest},
+		{"TIOCSWINSZ", syscall.TIOCSWINSZ, cosmo.LinuxTIOCSWINSZForTest},
+		{"TIOCNOTTY", syscall.TIOCNOTTY, cosmo.LinuxTIOCNOTTYForTest},
+	} {
+		if tc.exported != tc.std {
+			t.Errorf("syscall.%s = %#x, the emulation translates %#x", tc.name, tc.exported, tc.std)
+		}
+	}
+
+	// Linux numbers a pty by index and Apple by name, so the emulation has no request to send for these and refuses them.
+	for _, tc := range []struct {
+		name string
+		req  uintptr
+		want uintptr
+	}{
+		{"TIOCGPTN", syscall.TIOCGPTN, 0x80045430},
+		{"TIOCSPTLCK", syscall.TIOCSPTLCK, 0x40045431},
+	} {
+		if tc.req != tc.want {
+			t.Errorf("syscall.%s = %#x, want Linux's %#x", tc.name, tc.req, tc.want)
+		}
+		if got, ok := cosmo.DarwinXlatIoctl(tc.req); ok {
+			t.Errorf("%s (%#x) translated to %#x; Apple has no request for it", tc.name, tc.req, got)
+		}
+	}
+}
+
 // TestDarwinXlatTermiosIoctl pins the termios requests, from the same tables.
 func TestDarwinXlatTermiosIoctl(t *testing.T) {
 	for _, tc := range []struct {

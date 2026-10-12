@@ -249,14 +249,26 @@ func ntSCMPeerPid(fd int32, e *ntFDEntry) (pid uint32, eno uintptr) {
 	return out, 0
 }
 
+// ntSockWait blocks in WSAPoll until socket h reports events, an error or a
+// hangup. The transfer the caller retries then reports which.
+func ntSockWait(h uintptr, events int16) uintptr {
+	pfd := ntWSAPollFD{fd: h, events: events}
+	r, werr := ntcallSE(ntWSAPollFn, uintptr(unsafe.Pointer(&pfd)), 1, ^uintptr(0), 0, 0, 0, 0)
+	if int32(uint32(r)) < 0 {
+		return ntWSAToLinux(werr)
+	}
+	return 0
+}
+
 // ntSockSendVAll pushes an entire WSABUF array (total bytes) to the socket,
 // resuming after short sends. A nonblocking socket may accept only part of a
 // frame, and a partially transmitted frame MUST be completed - the receiver
 // consumes frames whole. EAGAIN with zero progress is returned to the caller
 // (clean Linux semantics, nothing consumed). EAGAIN after partial progress
-// yields and retries, which can block a nonblocking caller until the peer
-// drains - the documented cost of framing (frames are small. In practice they
-// fit the socket buffer and this loop runs once).
+// sleeps in WSAPoll until the socket is writable, which can block a
+// nonblocking caller until the peer drains. The documented cost of framing
+// (frames are small. In practice they fit the socket buffer and this loop
+// runs once).
 func ntSockSendVAll(h uintptr, bufs []ntWSABuf, total int64, wflags uintptr) (eno uintptr) {
 	var sent int64
 	var scratch []ntWSABuf
@@ -289,7 +301,9 @@ func ntSockSendVAll(h uintptr, bufs []ntWSABuf, total int64, wflags uintptr) (en
 				if sent == 0 {
 					return ntEAGAIN
 				}
-				osyield()
+				if eno := ntSockWait(h, _NT_POLLWRNORM); eno != 0 {
+					return eno
+				}
 				continue
 			}
 			return ntWSAToLinux(werr)
@@ -304,8 +318,8 @@ func ntSockSendVAll(h uintptr, bufs []ntWSABuf, total int64, wflags uintptr) (en
 
 // ntSCMRecvExact reads exactly len(p) bytes of an already-detected
 // frame. The sender emits header+records+data in one send, so
-// missing bytes are in flight: EWOULDBLOCK yields and retries. EOF or
-// SHUT_RD mid-frame is a torn frame (EBADMSG).
+// missing bytes are in flight: EWOULDBLOCK sleeps in WSAPoll until they
+// arrive. EOF or SHUT_RD mid-frame is a torn frame (EBADMSG).
 func ntSCMRecvExact(h uintptr, p []byte) uintptr {
 	got := 0
 	for got < len(p) {
@@ -315,7 +329,9 @@ func ntSCMRecvExact(h uintptr, p []byte) uintptr {
 		if ri < 0 {
 			switch werr {
 			case _NT_WSAEWOULDBLOCK:
-				osyield()
+				if eno := ntSockWait(h, _NT_POLLRDNORM); eno != 0 {
+					return eno
+				}
 				continue
 			case _NT_WSAEINTR:
 				continue
@@ -499,6 +515,33 @@ func ntSCMFail(eno uintptr) (bool, uintptr, uintptr, uintptr) {
 	return true, ^uintptr(0), 0, eno
 }
 
+// ntSCMData delivers stream bytes ntRecvmsgControl consumed as ordinary
+// recvmsg data. Bytes the caller's iovecs cannot hold would be lost, which
+// is the aliased-frame error, EBADMSG.
+func ntSCMData(msg *ntLinuxMsghdr, data []byte) (bool, uintptr, uintptr, uintptr) {
+	var iovs []ntLinuxIovec
+	if msg.iovlen > 0 {
+		iovs = unsafe.Slice(msg.iov, int(msg.iovlen))
+	}
+	room, eno := ntIovTotal(iovs)
+	if eno != 0 {
+		return ntSCMFail(eno)
+	}
+	if room < int64(len(data)) {
+		return ntSCMFail(ntEBADMSG)
+	}
+	rest := data
+	for idx := range iovs {
+		if len(rest) == 0 {
+			break
+		}
+		rest = rest[copy(unsafe.Slice(iovs[idx].base, iovs[idx].len), rest):]
+	}
+	msg.controllen = 0
+	msg.flags = 0
+	return true, uintptr(len(data)), 0, 0
+}
+
 // ntRecvmsgControl is the receive-side ancillary path, called only for a
 // caller-supplied control buffer and before the plain receive. It MSG_PEEKs
 // for the frame magic; on a match it owns the receive (handled=true), else
@@ -515,24 +558,17 @@ func ntRecvmsgControl(fd int32, e *ntFDEntry, msg *ntLinuxMsghdr, flags int32) (
 		return false, 0, 0, 0
 	}
 	var hdr8 [8]byte
-	for {
-		r, _ := ntcallSE(ntSockRecvFn, e.handle, uintptr(unsafe.Pointer(&hdr8[0])),
-			8, _NT_MSG_PEEK, 0, 0, 0)
-		ri := int32(uint32(r))
-		if ri <= 0 {
-			// Nothing readable (EAGAIN), EOF, or a socket error: the plain path reproduces the exact condition.
+	r, _ := ntcallSE(ntSockRecvFn, e.handle, uintptr(unsafe.Pointer(&hdr8[0])),
+		8, _NT_MSG_PEEK, 0, 0, 0)
+	ri := int32(uint32(r))
+	if ri <= 0 {
+		// Nothing readable (EAGAIN), EOF, or a socket error: the plain path reproduces the exact condition.
+		return false, 0, 0, 0
+	}
+	for i := 0; i < int(ri); i++ {
+		if hdr8[i] != ntSCMMagic[i] {
 			return false, 0, 0, 0
 		}
-		for i := 0; i < int(ri); i++ {
-			if hdr8[i] != ntSCMMagic[i] {
-				return false, 0, 0, 0
-			}
-		}
-		if ri == 8 {
-			break
-		}
-		// A true prefix of the magic: the sender emits the whole frame in one send.
-		osyield()
 	}
 	if flags&_NT_MSG_PEEK != 0 {
 		// A peek cannot deliver fds nondestructively; refuse rather than hand the caller raw frame bytes as data.
@@ -554,9 +590,19 @@ func ntRecvmsgControl(fd int32, e *ntFDEntry, msg *ntLinuxMsghdr, flags int32) (
 		}
 	}
 
-	// Consume the header.
+	// Consume the header. A true prefix of the magic means the rest of it is in flight.
 	var hdr [24]byte
-	if eno := ntSCMRecvExact(e.handle, hdr[:]); eno != 0 {
+	head := 0
+	if ri < 8 {
+		if eno := ntSCMRecvExact(e.handle, hdr[:8]); eno != 0 {
+			return ntSCMFail(eno)
+		}
+		if [8]byte(hdr[:8]) != ntSCMMagic {
+			return ntSCMData(msg, hdr[:8])
+		}
+		head = 8
+	}
+	if eno := ntSCMRecvExact(e.handle, hdr[head:]); eno != 0 {
 		return ntSCMFail(eno)
 	}
 	nfds := int(ntGetU32(hdr[8:]))

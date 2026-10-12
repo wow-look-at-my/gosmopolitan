@@ -692,6 +692,10 @@ type m struct {
 	lockedExt         uint32      // tracking for external LockOSThread
 	lockedInt         uint32      // tracking for internal lockOSThread
 	mWaitList         mWaitList   // list of runtime lock waiters
+	waitAddrNote      note        // sleep of waitAddrSleep
+	waitAddr          uintptr     // word this M sleeps on in waitAddrSleep, 0 once a writer unlinks it
+	waitAddrNext      muintptr    // next M in the same waitAddrTable bucket
+	sweepWait         sweepWaiter // entry on sweep.spanWaiters while in ensureSwept
 	ditEnabled        bool        // set if DIT is currently enabled on this M
 
 	mLockProfile mLockProfile // fields relating to runtime.lock contention
@@ -835,6 +839,13 @@ type p struct {
 	// only the owner P can CAS it to a valid G.
 	runnext guintptr
 
+	// runnextSeen is the runnext G a thief first found here, and
+	// runnextSeenAt the nanotime when it did. A thief leaves a runnext G
+	// to this P until it has sat for runnextStealDelay. Thieves write
+	// both without a lock; a torn pair only moves that point.
+	runnextSeen   atomic.Uintptr
+	runnextSeenAt atomic.Int64
+
 	// Available G's (status == Gdead)
 	gFree gList
 
@@ -902,7 +913,9 @@ type p struct {
 	runSafePointFn uint32 // if 1, run sched.safePointFn at next safe point
 
 	// statsSeq is a counter indicating whether this P is currently
-	// writing any stats. Its value is even when not, odd when it is.
+	// writing any stats, with a bit a waiting reader sets. Its
+	// statsSeqWriting bit is set while it is writing; see
+	// statsSeqReaderWaiting in mstats.go.
 	statsSeq atomic.Uint32
 
 	// Timer heap.
@@ -1289,6 +1302,7 @@ const (
 	waitReasonSynctestSelect                          // "select (durable)"
 	waitReasonSynctestWaitGroupWait                   // "sync.WaitGroup.Wait (durable)"
 	waitReasonCleanupWait                             // "cleanup wait"
+	waitReasonSignalDeliveryIdle                      // "signal delivery idle"
 )
 
 var waitReasonStrings = [...]string{
@@ -1339,6 +1353,7 @@ var waitReasonStrings = [...]string{
 	waitReasonSynctestSelect:        "select (durable)",
 	waitReasonSynctestWaitGroupWait: "sync.WaitGroup.Wait (durable)",
 	waitReasonCleanupWait:           "cleanup wait",
+	waitReasonSignalDeliveryIdle:    "signal delivery idle",
 }
 
 func (w waitReason) String() string {

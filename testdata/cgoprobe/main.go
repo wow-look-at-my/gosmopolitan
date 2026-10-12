@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -66,6 +67,19 @@ func main() {
 	}
 	group.Wait()
 	check("concurrent", bad.Load() == 0, fmt.Sprint(bad.Load(), " wrong"))
+
+	// Only libcosmo's failing dlerror stub names cosmo_dlopen.
+	var msg [512]C.char
+	missing := C.probe_dlopen_missing(&msg[0], C.int(len(msg)))
+	text := C.GoString(&msg[0])
+	check("dlerror", missing == 0 && text != "" && !strings.Contains(text, "cosmo_dlopen"), text)
+
+	// "dlopen LIB SYM" also loads a host library, which needs a host that has one.
+	if len(os.Args) == 4 && os.Args[1] == "dlopen" {
+		lib, sym := C.CString(os.Args[2]), C.CString(os.Args[3])
+		got := C.probe_dlopen(lib, sym, &msg[0], C.int(len(msg)))
+		check("dlopen", got == 0, fmt.Sprint(got, " ", C.GoString(&msg[0])))
+	}
 
 	fmt.Printf("arch %s\n", runtime.GOARCH)
 	if failed {

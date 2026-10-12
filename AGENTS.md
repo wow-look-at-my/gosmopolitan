@@ -268,7 +268,7 @@ The GitHub Actions workflow (`.github/workflows/cosmo-ci.yml`) builds the toolch
 
 CI builds one fat APE per platform. No GOARCH pin. The output contains cosmo amd64 and cosmo arm64 payloads, stripped by default, with apetest's `TestFatSidecarsExist` asserting the `.dbg`/`.aarch64.elf` sidecars exist on every build. The artifact ships the bare binaries, so apetest's TestDebugSidecars skips on the test runners). Structural format tests run everywhere. The full execution suite (fizzbuzz + runtimeprobe) runs on all test runners.
 
-**Every build leg runs `src/run.bash`** (`run.bat` on windows), which execs `go tool dist test`. There is no `-rebuild` and no `-a`: both existed to force `go install -a` over the whole toolchain, which threw away a correct cache on every run. That is the distribution's own all-tests entry point and the only test gate here: the stdlib and `cmd` packages, the `test/` corpus through `cmd/internal/testdir`. A plain `go test` reaches none of the last two. It replaced a set of steps that each named the tests it wanted, which made green a statement about the name lists rather than. Never reintroduce a `-run` list here: a test nobody names never runs. Upstream runs the same suite per builder. A port is a host. This fork runs it on each of the three. `dist test` reads `GO_BUILDER_NAME`. A nameless builder gets the short set. It tests the cosmo port. `run.bash` and `run.bat` export the `GOOS` and `GOARCH` that `dist env` reports. They also prepend `misc/cosmo` to PATH. The test binaries are APEs. `execve` refuses an APE without a binfmt_misc entry. cmd/go runs a cross-GOOS test binary through `go_cosmo_<arch>_exec`. Known red: cmd/go's `list_symlink_issue35941`, over the whole-repo vendor submodules.
+**Every build leg runs `src/run.bash`** (`run.bat` on windows), which execs `go tool dist test`. There is no `-rebuild` and no `-a`: both existed to force `go install -a` over the whole toolchain, which threw away a correct cache on every run. That is the distribution's own all-tests entry point and the only test gate here: the stdlib and `cmd` packages, the `test/` corpus through `cmd/internal/testdir`. A plain `go test` reaches none of the last two. It replaced a set of steps that each named the tests it wanted, which made green a statement about the name lists rather than. Never reintroduce a `-run` list here: a test nobody names never runs.
 
 **Every step dist runs names itself and what it cost.** `dist build <secs> <name>` and `dist test <secs> <name>`, one line each, on stdout. A suite's own `ok pkg 1.23s` times the RUN of a test binary, not the build of one. The binary every package's tests compile into runs no test at all. Without these lines the largest compile in a leg answers to nothing. `make.bash` gets the same line for each toolchain phase. The suite-leg summary totals them into the step summary, which is how a leg that overran its budget names what overran. `cmd/go` is its own `cmd-go.test` step, run after every other package. Its scripts each build with `-p` and fill the machine alone. Beside other packages' binaries its own deadline ran out.
 
@@ -338,6 +338,10 @@ gopls parses with the `go/*` packages of the toolchain that builds it. It must t
 ## Enum types
 
 docs/ENUM-DESIGN.md is the design. The compiler does not implement it: scoped members, backquoted tags, exhaustive switches, checked conversion. What the compiler carries is a partial front end for an earlier shape. `type T enum int` marks a named integer type. A constant of that type takes a trailing string literal as its display text. types2 declares `String() string` on the type. No body is generated, so a program declaring an enum type-checks and then fails at link.
+
+## Link-time collections
+
+docs/COLLECTIONS-DESIGN.md -- design only, not implemented: `collect var` slices the linker fills from `init()` contributions, replacing self-registration.
 
 ## Loop-aware inlining (all targets)
 
