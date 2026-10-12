@@ -2889,9 +2889,9 @@
 // When the go command downloads a module zip file or go.mod file into the
 // module cache, it computes a cryptographic hash and compares it with a known
 // value to verify the file hasn't changed since it was first downloaded. Known
-// hashes are stored in a file in the module root directory named go.sum. Hashes
-// may also be downloaded from the checksum database at sum.golang.org depending
-// on the values of GOPRIVATE and GONOSUMDB.
+// hashes are stored in a file in the module root directory named go.sum. This
+// toolchain never contacts golang.org or a host under it, so it asks no
+// checksum database.
 //
 // For details, see https://go.dev/ref/mod#authenticating.
 //
@@ -3043,10 +3043,10 @@
 //
 // # Configuration for downloading non-public code
 //
-// The go command downloads each module from its origin repository, and never
-// from the module mirror at proxy.golang.org. It validates downloaded modules
-// against the public Go checksum database at sum.golang.org. This toolchain
-// has no GOPROXY or GOSUMDB to replace either service.
+// The go command downloads each module from its origin repository. It never
+// contacts golang.org or a host under it: no module mirror, no checksum
+// database, and no go-import lookup. A golang.org/x or google.golang.org path
+// resolves to its GitHub repository. This toolchain has no GOPROXY or GOSUMDB.
 //
 // The GOPRIVATE environment variable controls which modules the go command
 // considers to be private (not available publicly) and should therefore not use
