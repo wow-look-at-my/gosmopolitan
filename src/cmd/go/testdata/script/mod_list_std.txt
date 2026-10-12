@@ -36,7 +36,6 @@ stdout ^bytes$
 # rules).
 
 cd $GOROOT/src
-env GOWORK=off
 
 go list std
 stdout ^vendor/golang.org/x/net/http2/hpack

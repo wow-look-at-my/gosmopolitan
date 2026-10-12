@@ -733,7 +733,6 @@ func runTest(ctx context.Context, cmd *base.Command, args []string) {
 	base.StartSigHandlers()
 	moduleLoader := modload.NewLoader()
 	pkgArgs, testArgs = testFlags(args)
-	moduleLoader.InitWorkfile() // The test command does custom flag processing; initialize workspaces after that.
 
 	if cfg.DebugTrace != "" {
 		var close func() error
