@@ -44,6 +44,8 @@ A child holds a `brokerCache`. It has no `DiskCache`, no key index, and no conne
 
 That leaves one writer for the directory. So the trim has a single owner. The invariant `Cache.Close` describes is then enforceable rather than hoped for.
 
+The owner holds the only connection to the store. Against a TLS endpoint that connection is HTTP/2, so the whole build costs one TLS handshake. The first request runs alone, because the transport dials a connection for each request that arrives before it learns the protocol. Every answer is read to its end before the client closes or cancels it, so an HTTP/1.1 endpoint keeps its connections too. Sessions stay in memory for one build and are never stored across go commands. Depth: `connreuse_test.go` in `cacheclient`.
+
 The environment decides the shape:
 
 - `GO_BUILDCACHE_BROKER` names a live owner's hello queue. A process that finds it set becomes a child, once the owner answers with the directory it writes into. A process that finds it unset becomes the owner. A name outlives the process that made it. So the owner's reply is what decides, not the name.
