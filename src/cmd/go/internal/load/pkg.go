@@ -2729,6 +2729,7 @@ func (p *Package) setBuildInfo(ctx context.Context, f *modfetch.Fetcher, autoVCS
 		}
 	}
 omitVCS:
+	appendReleaseSettings(appendSetting)
 
 	p.Internal.BuildInfo = info
 }
