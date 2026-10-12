@@ -30,7 +30,8 @@ func MaybeParent() {
 		panic("MaybeParent must be called after OpenCounters and MaybeChild")
 	}
 	telemetry.Start(telemetry.Config{
-		Upload:       true,
+		// No upload: an upload fetches its config module and sends reports off this machine.
+		Upload:       false,
 		TelemetryDir: os.Getenv("TEST_TELEMETRY_DIR"),
 	})
 }
@@ -42,7 +43,7 @@ func MaybeParent() {
 func MaybeChild() {
 	maybeChildCalled = true
 	telemetry.MaybeChild(telemetry.Config{
-		Upload:       true,
+		Upload:       false,
 		TelemetryDir: os.Getenv("TEST_TELEMETRY_DIR"),
 	})
 }
