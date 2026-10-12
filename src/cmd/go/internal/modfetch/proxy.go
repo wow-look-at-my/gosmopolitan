@@ -217,7 +217,7 @@ func newProxyRepo(baseURL, path string) (Repo, error) {
 		return nil, err
 	}
 	redactedBase := base.Redacted()
-	if web.IsBannedHost(base.Hostname()) {
+	if web.IsRefusedHost(base.Hostname()) {
 		return nil, fmt.Errorf("%s is not a module source for this toolchain: no host under %s is", redactedBase, bannedProxyHost)
 	}
 	switch base.Scheme {

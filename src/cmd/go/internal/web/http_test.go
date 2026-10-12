@@ -12,6 +12,8 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+
+	"cmd/go/internal/web/intercept"
 )
 
 func TestUserAgent(t *testing.T) {
@@ -67,6 +69,34 @@ func TestBannedHostRefused(t *testing.T) {
 			t.Errorf("a redirect to %s gave err = %v, want a refusal", target, err)
 		}
 		server.Close()
+	}
+}
+
+// A test interceptor sends a host to a local server, so that request reaches
+// no host under golang.org and goes through. Without it, the same URL is refused.
+func TestInterceptedHostReachesTheTestServer(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, req *http.Request) {
+		writer.Write([]byte("local"))
+	}))
+	defer server.Close()
+	target, err := url.Parse("http://vcs-test.golang.org/x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Get(Insecure, target); err == nil || !strings.Contains(err.Error(), BannedDomain) {
+		t.Fatalf("Get(%s) with no interceptor err = %v, want a refusal", target, err)
+	}
+	if err := intercept.EnableTestHooks([]intercept.Interceptor{{Scheme: "http", FromHost: "vcs-test.golang.org", ToHost: server.Listener.Addr().String()}}); err != nil {
+		t.Fatal(err)
+	}
+	defer intercept.DisableTestHooks()
+	resp, err := Get(Insecure, target)
+	if err != nil {
+		t.Fatalf("Get(%s) through the interceptor: %v", target, err)
+	}
+	resp.Body.Close()
+	if IsRefusedHost("vcs-test.golang.org") || !IsRefusedHost("proxy.golang.org") {
+		t.Error("IsRefusedHost must refuse every banned host but the intercepted one")
 	}
 }
 

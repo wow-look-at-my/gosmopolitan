@@ -783,7 +783,7 @@ func RepoRootForImportPath(importPath string, mod ModuleMode, security web.Secur
 	rr, err := repoRootFromVCSPaths(importPath, security, vcsPaths)
 	if err == errUnknownSite {
 		host, _, _ := strings.Cut(importPath, "/")
-		if web.IsBannedHost(host) {
+		if web.IsRefusedHost(host) {
 			err = importErrorf(importPath, "no repository is known for %q, and the go command never contacts %s or a host under it", importPath, web.BannedDomain)
 		} else {
 			rr, err = repoRootForImportDynamic(importPath, mod, security)

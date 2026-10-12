@@ -33,6 +33,10 @@ import (
 
 const userAgent = "GoCommand/1 (+https://go.dev/cmd/go)"
 
+func init() {
+	interceptedHost = intercept.Intercepts
+}
+
 // impatientInsecureHTTPClient is used with GOINSECURE,
 // when we're connecting to https servers that might not be there
 // or might be using self-signed certificates.

@@ -87,9 +87,19 @@ func IsBannedHost(host string) bool {
 	return host == BannedDomain || strings.HasSuffix(host, "."+BannedDomain)
 }
 
-// RefuseBannedURL answers an error when u names a host that IsBannedHost refuses.
+// interceptedHost reports whether a test interceptor sends a host to a local
+// test server. http.go sets it. The bootstrap build intercepts nothing.
+var interceptedHost = func(host string) bool { return false }
+
+// IsRefusedHost reports whether a request to host is refused: the host is
+// banned, and no test interceptor sends it to a local test server instead.
+func IsRefusedHost(host string) bool {
+	return IsBannedHost(host) && !interceptedHost(host)
+}
+
+// RefuseBannedURL answers an error when target names a host that IsRefusedHost refuses.
 func RefuseBannedURL(target *url.URL) error {
-	if IsBannedHost(target.Hostname()) {
+	if IsBannedHost(target.Hostname()) && !interceptedHost(target.Host) && !interceptedHost(target.Hostname()) {
 		return fmt.Errorf("refusing %s: the go command never contacts %s or a host under it", target.Redacted(), BannedDomain)
 	}
 	return nil
