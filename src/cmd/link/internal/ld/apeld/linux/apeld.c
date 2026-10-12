@@ -258,18 +258,22 @@ __attribute__((noreturn, used)) static void run(i64 argc, char **argv) {
 	*w++ = 0;
 
 #if defined(__x86_64__)
-	// The registers match a kernel exec: all zero. Cosmo libc's _start reads a
-	// nonzero RDI as the stack a macOS loader passed, and then runs as XNU.
+	// Cosmo libc's _start reads RDX as the program path, which is how dlopen
+	// finds the program. /proc/self/exe names this loader. It reads a nonzero
+	// RDI as the stack a macOS loader passed. A zero CL lets it detect the host.
 	register u64 rsp __asm__("r8") = (u64)sp;
 	register u64 rip __asm__("r9") = eh.entry;
-	__asm__ volatile("mov %0, %%rsp\n\txor %%eax, %%eax\n\txor %%ebx, %%ebx\n\txor %%ecx, %%ecx\n\txor %%edx, %%edx\n\t"
+	register u64 exe __asm__("r10") = (u64)path;
+	__asm__ volatile("mov %0, %%rsp\n\tmov %2, %%rdx\n\txor %%eax, %%eax\n\txor %%ebx, %%ebx\n\txor %%ecx, %%ecx\n\t"
 	                 "xor %%esi, %%esi\n\txor %%edi, %%edi\n\txor %%ebp, %%ebp\n\tjmp *%1"
-	                 : : "r"(rsp), "r"(rip) : "memory");
+	                 : : "r"(rsp), "r"(rip), "r"(exe) : "memory");
 #else
 	register u64 nsp __asm__("x9") = (u64)sp;
 	register u64 pc __asm__("x10") = eh.entry;
-	// X3 and X15 name the host and the Syslib on a macOS boot. Zero means Linux.
-	__asm__ volatile("mov sp, %0\n\tmov x0, xzr\n\tmov x2, xzr\n\tmov x3, xzr\n\tmov x15, xzr\n\tbr %1" : : "r"(nsp), "r"(pc) : "memory");
+	register u64 exe __asm__("x11") = (u64)path;
+	// X2 is the program path. X3 and X15 name the host and the Syslib on a
+	// macOS boot, and zero means Linux.
+	__asm__ volatile("mov sp, %0\n\tmov x0, xzr\n\tmov x2, %2\n\tmov x3, xzr\n\tmov x15, xzr\n\tbr %1" : : "r"(nsp), "r"(pc), "r"(exe) : "memory");
 #endif
 	__builtin_unreachable();
 }
