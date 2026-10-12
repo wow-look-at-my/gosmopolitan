@@ -57,6 +57,35 @@ func TestRepoRootForImportPath(t *testing.T) {
 			"github.com/user/unicode/испытание",
 			nil,
 		},
+		// gopkg.in resolves to GitHub without a request to gopkg.in.
+		{
+			"gopkg.in/yaml.v3",
+			&RepoRoot{
+				VCS:  vcsGit,
+				Repo: "https://github.com/go-yaml/yaml",
+			},
+		},
+		{
+			"gopkg.in/check.v1/sub/pkg",
+			&RepoRoot{
+				VCS:  vcsGit,
+				Repo: "https://github.com/go-check/check",
+			},
+		},
+		{
+			"gopkg.in/natefinch/lumberjack.v2",
+			&RepoRoot{
+				VCS:  vcsGit,
+				Repo: "https://github.com/natefinch/lumberjack",
+			},
+		},
+		{
+			"gopkg.in/src-d/go-git.v4",
+			&RepoRoot{
+				VCS:  vcsGit,
+				Repo: "https://github.com/src-d/go-git",
+			},
+		},
 		// IBM DevOps Services tests
 		{
 			"hub.jazz.net/git/user1/pkgname",
@@ -221,6 +250,47 @@ func TestRepoRootForImportPath(t *testing.T) {
 		if got.VCS.Name != want.VCS.Name || got.Repo != want.Repo {
 			t.Errorf("RepoRootForImportPath(%q) = VCS(%s) Repo(%s), want VCS(%s) Repo(%s)", test.path, got.VCS, got.Repo, want.VCS, want.Repo)
 		}
+	}
+}
+
+// A gopkg.in root is the gopkg.in path, not the GitHub path, so module paths
+// and go.sum lines stay as every go.mod already writes them.
+func TestGopkgInRoot(t *testing.T) {
+	got, err := RepoRootForImportPath("gopkg.in/yaml.v3/internal/sub", IgnoreMod, web.SecureOnly)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Root != "gopkg.in/yaml.v3" || got.Repo != "https://github.com/go-yaml/yaml" {
+		t.Errorf("Root %q Repo %q, want gopkg.in/yaml.v3 and https://github.com/go-yaml/yaml", got.Root, got.Repo)
+	}
+}
+
+// A gopkg.in path resolves to its GitHub repository with no request. The
+// root stays the gopkg.in path, because that is the module path.
+func TestRepoRootGopkgIn(t *testing.T) {
+	cases := []struct {
+		path, root, repo string
+	}{
+		{"gopkg.in/yaml.v3", "gopkg.in/yaml.v3", "https://github.com/go-yaml/yaml"},
+		{"gopkg.in/check.v1", "gopkg.in/check.v1", "https://github.com/go-check/check"},
+		{"gopkg.in/yaml.v2/sub/pkg", "gopkg.in/yaml.v2", "https://github.com/go-yaml/yaml"},
+		{"gopkg.in/natefinch/lumberjack.v2", "gopkg.in/natefinch/lumberjack.v2", "https://github.com/natefinch/lumberjack"},
+		{"gopkg.in/mgo.v2-unstable", "gopkg.in/mgo.v2-unstable", "https://github.com/go-mgo/mgo"},
+	}
+	for _, tc := range cases {
+		got, err := repoRootFromVCSPaths(tc.path, web.SecureOnly, vcsPaths)
+		if err != nil {
+			t.Errorf("repoRootFromVCSPaths(%q): %v", tc.path, err)
+			continue
+		}
+		if got.VCS != vcsGit || got.Root != tc.root || got.Repo != tc.repo {
+			t.Errorf("repoRootFromVCSPaths(%q) = VCS(%s) Root(%s) Repo(%s), want VCS(git) Root(%s) Repo(%s)", tc.path, got.VCS, got.Root, got.Repo, tc.root, tc.repo)
+		}
+	}
+
+	// A path outside the rule is left to the meta tag lookup.
+	if _, err := repoRootFromVCSPaths("gopkg.in/noversion", web.SecureOnly, vcsPaths); err != errUnknownSite {
+		t.Errorf("repoRootFromVCSPaths(%q) error = %v, want errUnknownSite", "gopkg.in/noversion", err)
 	}
 }
 

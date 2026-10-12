@@ -1182,6 +1182,11 @@ func runTest(ctx context.Context, cmd *base.Command, args []string) {
 		}
 	}
 
+	// An interrupt can arrive while every result so far came from the cache and
+	// no test binary has started. The handlers go in before any of that, so the
+	// interrupt stops the build and the command exits with a status rather than
+	// dying of the signal.
+	base.StartSigHandlers()
 	b.Do(ctx, root)
 }
 

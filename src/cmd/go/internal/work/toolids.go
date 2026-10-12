@@ -66,7 +66,9 @@ func linkedToolIDs(root *Action) string {
 }
 
 // packageContentIDs answers the content ID of top and of every package
-// reachable from it in the action graph, by import path.
+// reachable from it in the action graph, by import path. It reads the action
+// graph, because go build leaves Package.Deps empty. Only go list fills that
+// field.
 func packageContentIDs(top *Action) map[string]string {
 	ids := map[string]string{}
 	seen := map[*Action]bool{}
@@ -76,7 +78,7 @@ func packageContentIDs(top *Action) map[string]string {
 			return
 		}
 		seen[act] = true
-		if isBuiltPackage(act) {
+		if isBuiltPackage(act) || (act.Mode == "embedded std" && act.Package != nil && act.buildID != "") {
 			ids[act.Package.ImportPath] = contentID(act.buildID)
 		}
 		for _, dep := range act.Deps {

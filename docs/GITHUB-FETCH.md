@@ -54,9 +54,11 @@ The route reads `tar.gz archive via github-state-mirror.pazer.io`, with `and pro
 
 A github.com repository gets no local git repository at first. The archive, the refs and the kept files all live in plain files. The bare repository is made by the first git command, which runs only on the git fallback, or for `RecentTag` history.
 
-The remote must be exactly `https://github.com/<owner>/<repo>` (with or without `.git`). Any other host, scheme, port or user name goes straight to git. github.com redirects each archive to `codeload.github.com`. `web.GetPinned` refuses a hop to any host other than those two. An API request may only reach its own host: api.github.com, github-state-mirror.pazer.io or proxy.pazer.ai. A signed archive URL must be on codeload.github.com.
+The remote must be exactly `https://github.com/<owner>/<repo>` (with or without `.git`). A gopkg.in path already names one: `cmd/go/internal/vcs` maps `gopkg.in/pkg.vN` to `github.com/go-pkg/pkg` and `gopkg.in/user/pkg.vN` to `github.com/user/pkg`, with no request to gopkg.in. Any other host, scheme, port or user name goes straight to git. github.com redirects each archive to `codeload.github.com`. `web.GetPinned` refuses a hop to any host other than those two. An API request may only reach its own host: api.github.com, github-state-mirror.pazer.io or proxy.pazer.ai.
 
-A commit that no branch or tag names never comes from an archive. The git path has the same rule, so an unmerged pull request commit cannot pose as a pseudo-version.
+A signed archive URL must be on codeload.github.com.
+
+A commit that no ref names, such as the commit of a pseudo-version, comes from the archive of that commit, `/archive/<commit>.tar.gz`. A hash prefix works: the archive names the full hash. Only a missing archive goes to git, which fetches every branch and tag.
 
 The archive is used as GitHub serves it. It omits the commit of each submodule and applies `export-ignore` and `export-subst`, so such a module hashes differently than over git.
 
