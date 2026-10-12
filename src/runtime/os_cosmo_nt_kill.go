@@ -40,6 +40,13 @@ func ntEmuKill(pid, sig int32) (r1, r2, errno uintptr) {
 	if sig == 0 {
 		return 0, 0, 0 // existence probe
 	}
+	switch sig {
+	case _SIGSTOP, _SIGTSTP, _SIGTTIN, _SIGTTOU:
+		// A stop signal stops the process; it does not end it.
+		return ntEmuSuspendProcess(h)
+	case _SIGCONT:
+		return ntEmuResumeProcess(h)
+	}
 	// Terminate the child with the fork's encoded signal status; chunk B's wait4 decodes it into "killed by signal sig".
 	ntcall(ntTerminateProcessFn, h, _NT_SIGDEATH_BASE|uintptr(uint32(sig)), 0, 0, 0, 0)
 	return 0, 0, 0

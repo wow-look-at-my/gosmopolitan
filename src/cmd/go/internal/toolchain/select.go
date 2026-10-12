@@ -118,11 +118,10 @@ func Select() {
 		return
 	}
 
-	// As a special case, let "go env GOMOD" and "go env GOWORK" be handled by
-	// the local toolchain. Users expect to be able to look up GOMOD and GOWORK
-	// since the go.mod and go.work file need to be determined to determine
-	// the minimum toolchain. See issue #61455.
-	if len(os.Args) == 3 && os.Args[1] == "env" && (os.Args[2] == "GOMOD" || os.Args[2] == "GOWORK") {
+	// As a special case, let "go env GOMOD" be handled by the local toolchain.
+	// Users expect to be able to look up GOMOD since the go.mod file needs to
+	// be determined to determine the minimum toolchain. See issue #61455.
+	if len(os.Args) == 3 && os.Args[1] == "env" && os.Args[2] == "GOMOD" {
 		return
 	}
 
@@ -521,20 +520,11 @@ func raceSafeCopy(old, new string) error {
 	return f.Close()
 }
 
-// modGoToolchain finds the enclosing go.work or go.mod file
+// modGoToolchain finds the enclosing go.mod file
 // and returns the go version and toolchain lines from the file.
 // The toolchain line overrides the version line
 func modGoToolchain(ld *modload.Loader) (file, goVers, toolchain string) {
-	wd := base.UncachedCwd()
-	file = ld.FindGoWork(wd)
-	// $GOWORK can be set to a file that does not yet exist, if we are running 'go work init'.
-	// Do not try to load the file in that case
-	if _, err := os.Stat(file); err != nil {
-		file = ""
-	}
-	if file == "" {
-		file = modload.FindGoMod(wd)
-	}
+	file = modload.FindGoMod(base.UncachedCwd())
 	if file == "" {
 		return "", "", ""
 	}

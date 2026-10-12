@@ -415,6 +415,8 @@ The available conditions are:
 	platform always requires external linking
 [pielinkext]
 	platform requires external linking for PIE
+[procfs]
+	this host serves /proc, so a go command finds the heads its ancestors resolved
 [race]
 	GOOS/GOARCH supports -race
 [root]

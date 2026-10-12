@@ -539,11 +539,7 @@ func matchLocalDirs(ld *Loader, ctx context.Context, modRoots []string, m *searc
 		modRoot := findModuleRoot(absDir)
 		if !slices.Contains(modRoots, modRoot) && search.InDir(absDir, cfg.GOROOTsrc) == "" && pathInModuleCache(ld, ctx, absDir, rs) == "" {
 			m.Dirs = []string{}
-			scope := "main module or its selected dependencies"
-			if ld.inWorkspaceMode() {
-				scope = "modules listed in go.work or their selected dependencies"
-			}
-			m.AddError(fmt.Errorf("directory prefix %s does not contain %s", base.ShortPath(absDir), scope))
+			m.AddError(fmt.Errorf("directory prefix %s does not contain main module or its selected dependencies", base.ShortPath(absDir)))
 			return
 		}
 	}
@@ -675,12 +671,6 @@ func resolveLocalPackage(ld *Loader, ctx context.Context, dir string, rs *Requir
 		dirstr := fmt.Sprintf("directory %s", base.ShortPath(absDir))
 		if dirstr == "directory ." {
 			dirstr = "current directory"
-		}
-		if ld.inWorkspaceMode() {
-			if mr := findModuleRoot(absDir); mr != "" {
-				return "", fmt.Errorf("%s is contained in a module that is not one of the workspace modules listed in go.work. You can add the module to the workspace using:\n\tgo work use %s", dirstr, base.ShortPath(mr))
-			}
-			return "", fmt.Errorf("%s outside modules listed in go.work or their selected dependencies", dirstr)
 		}
 		return "", fmt.Errorf("%s outside main module or its selected dependencies", dirstr)
 	}
@@ -1107,13 +1097,11 @@ func loadFromRoots(ld *Loader, ctx context.Context, params loaderParams) *packag
 	updateGoVersion := func() {
 		goVersion := pld.goVersion(ld)
 
-		if pld.requirements.pruning != workspace {
-			var err error
-			pld.requirements, err = convertPruning(ld, ctx, pld.requirements, pruningForGoVersion(goVersion))
-			if err != nil {
-				pld.error(err)
-				pld.exitIfErrors(ctx)
-			}
+		var err error
+		pld.requirements, err = convertPruning(ld, ctx, pld.requirements, pruningForGoVersion(goVersion))
+		if err != nil {
+			pld.error(err)
+			pld.exitIfErrors(ctx)
 		}
 
 		// If the module's Go version omits go.sum entries for go.mod files for test
@@ -1401,31 +1389,7 @@ func (pld *packageLoader) updateRequirements(ld *Loader, ctx context.Context) (c
 				continue
 			}
 
-			if ld.inWorkspaceMode() {
-				// In workspace mode / workspace pruning mode, the roots are the main modules
-				// rather than the main module's direct dependencies. The check below on the selected
-				// roots does not apply.
-				if cfg.BuildMod == "vendor" {
-					// In workspace vendor mode, we don't need to load the requirements of the workspace
-					// modules' dependencies so the check below doesn't work. But that's okay, because
-					// checking whether modules are required directly for the purposes of pruning is
-					// less important in vendor mode: if we were able to load the package, we have
-					// everything we need  to build the package, and dependencies' tests are pruned out
-					// of the vendor directory anyway.
-					continue
-				}
-				if mg, err := rs.Graph(ld, ctx); err != nil {
-					return false, err
-				} else if _, ok := mg.RequiredBy(dep.mod); !ok {
-					// dep.mod is not an explicit dependency, but needs to be.
-					// See comment on error returned below.
-					pkg.err = &DirectImportFromImplicitDependencyError{
-						ImporterPath: pkg.path,
-						ImportedPath: dep.path,
-						Module:       dep.mod,
-					}
-				}
-			} else if pkg.err == nil && cfg.BuildMod != "mod" {
+			if pkg.err == nil && cfg.BuildMod != "mod" {
 				if v, ok := rs.rootSelected(ld, dep.mod.Path); !ok || v != dep.mod.Version {
 					// dep.mod is not an explicit dependency, but needs to be.
 					// Because we are not in "mod" mode, we will not be able to update it.
