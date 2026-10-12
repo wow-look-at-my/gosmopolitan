@@ -1,0 +1,48 @@
+# Runs of one test binary that differ only in their environment read
+# different files. Each keeps its result: running one does not cost the other
+# its hit.
+
+env GOCACHE=$WORK/gocache
+env WHICH=a
+go test -run=TestReadsWhich .
+stdout '^ok\s+m\s+[0-9.]+s$'
+env WHICH=b
+go test -run=TestReadsWhich .
+stdout '^ok\s+m\s+[0-9.]+s$'
+
+env WHICH=a
+go test -run=TestReadsWhich .
+stdout '^ok\s+m\s+\(cached\)$'
+env WHICH=b
+go test -run=TestReadsWhich .
+stdout '^ok\s+m\s+\(cached\)$'
+
+# A changed file is still a miss.
+cp changed.txt a.txt
+env WHICH=a
+go test -run=TestReadsWhich .
+stdout '^ok\s+m\s+[0-9.]+s$'
+
+-- go.mod --
+module m
+
+go 1.27
+-- a.txt --
+variant a
+-- b.txt --
+variant b
+-- changed.txt --
+variant a, edited
+-- m_test.go --
+package m
+
+import (
+	"os"
+	"testing"
+)
+
+func TestReadsWhich(t *testing.T) {
+	if _, err := os.ReadFile(os.Getenv("WHICH") + ".txt"); err != nil {
+		t.Fatal(err)
+	}
+}

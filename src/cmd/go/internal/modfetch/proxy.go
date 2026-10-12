@@ -196,9 +196,9 @@ func TryProxies(f func(proxy string) error) error {
 	return bestErr
 }
 
-// bannedProxyHost is refused as a module proxy wherever its URL comes from,
-// a go-import "mod" tag included.
-const bannedProxyHost = web.BannedHost
+// bannedProxyHost and every host under it are refused as a module proxy
+// wherever the URL comes from, a go-import "mod" tag included.
+const bannedProxyHost = web.BannedDomain
 
 type proxyRepo struct {
 	url          *url.URL // The combined module proxy URL joined with the module path.
@@ -217,8 +217,8 @@ func newProxyRepo(baseURL, path string) (Repo, error) {
 		return nil, err
 	}
 	redactedBase := base.Redacted()
-	if base.Host == bannedProxyHost {
-		return nil, fmt.Errorf("%s is not a module source for this toolchain", bannedProxyHost)
+	if web.IsRefusedHost(base.Hostname()) {
+		return nil, fmt.Errorf("%s is not a module source for this toolchain: no host under %s is", redactedBase, bannedProxyHost)
 	}
 	switch base.Scheme {
 	case "http", "https":
