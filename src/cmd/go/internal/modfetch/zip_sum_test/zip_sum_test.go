@@ -131,7 +131,7 @@ func TestZipSums(t *testing.T) {
 				return
 			}
 
-			sum := modfetch.Sum(ctx, test.m)
+			sum := fetcher.Sum(ctx, test.m)
 			if sum != test.wantSum {
 				if *updateTestData {
 					t.Logf("%s: updating content sum to %s", test.m, sum)

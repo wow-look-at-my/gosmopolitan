@@ -1,6 +1,7 @@
 env GOOS=android GOARCH=amd64 CGO_ENABLED=0
 
-! go build -o $devnull cmd/buildid
+# Every cmd tool is a package of the go command, so the program here is a main of its own.
+! go build -o $devnull ./prog
 stderr 'android/amd64 requires external \(cgo\) linking, but cgo is not enabled'
 ! stderr 'cannot find runtime/cgo'
 
@@ -10,10 +11,19 @@ stderr '# os\nandroid/amd64 requires external \(cgo\) linking, but cgo is not en
 
 env GOOS=ios GOARCH=arm64 CGO_ENABLED=0
 
-! go build -o $devnull cmd/buildid
+! go build -o $devnull ./prog
 stderr 'ios/arm64 requires external \(cgo\) linking, but cgo is not enabled'
 ! stderr 'cannot find runtime/cgo'
 
 ! go test -c -o $devnull os
 stderr '# os\nios/arm64 requires external \(cgo\) linking, but cgo is not enabled'
 ! stderr 'cannot find runtime/cgo'
+
+-- go.mod --
+module example.com/prog
+
+go 1.21
+-- prog/main.go --
+package main
+
+func main() {}

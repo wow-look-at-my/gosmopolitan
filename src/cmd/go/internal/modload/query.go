@@ -1041,7 +1041,7 @@ type PackageNotInModuleError struct {
 
 func (e *PackageNotInModuleError) Error() string {
 	if len(e.MainModules) > 0 {
-		prefix := "workspace modules do"
+		prefix := "main modules do"
 		if len(e.MainModules) == 1 {
 			prefix = fmt.Sprintf("main module (%s) does", e.MainModules[0])
 		}

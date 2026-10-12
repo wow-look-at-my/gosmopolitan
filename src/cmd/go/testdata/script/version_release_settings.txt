@@ -1,0 +1,29 @@
+# The release number and its commit reach every binary's build info, with no declaration in the program.
+env GOSMOPOLITAN_RELEASE=412
+env GOSMOPOLITAN_RELEASE_REVISION=660ecca3f00d8e1b2c3d4e5f60718293a4b5c6d7
+go build
+go version -m m$GOEXE
+stdout '^\tbuild\trelease=412$'
+stdout '^\tbuild\trelease\.revision=660ecca3f00d8e1b2c3d4e5f60718293a4b5c6d7$'
+
+# A new number relinks: the cached binary must not keep the old one.
+env GOSMOPOLITAN_RELEASE=413
+go build
+go version -m m$GOEXE
+stdout '^\tbuild\trelease=413$'
+
+# With neither set, the build info names no release.
+env GOSMOPOLITAN_RELEASE=
+env GOSMOPOLITAN_RELEASE_REVISION=
+go build
+go version -m m$GOEXE
+! stdout 'release'
+
+-- go.mod --
+module example.com/m
+
+go 1.27
+-- main.go --
+package main
+
+func main() {}

@@ -45,7 +45,6 @@ func init() {
 
 func runVerify(ctx context.Context, cmd *base.Command, args []string) {
 	moduleLoader := modload.NewLoader()
-	moduleLoader.InitWorkfile()
 
 	if len(args) != 0 {
 		// NOTE(rsc): Could take a module pattern.

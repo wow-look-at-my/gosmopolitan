@@ -263,6 +263,22 @@ TEXT runtime·usleep1(SB),NOSPLIT,$0-4
 	CSYSCALL()
 	RET
 
+// Runs on OS stack, called from runtime·extraMSemaSleep.
+TEXT runtime·sem_wait1(SB),NOSPLIT,$0-12
+	MOVD	sem+0(FP), R3
+	MOVD	$libc_sem_wait(SB), R12
+	CSYSCALL()
+	MOVW	R3, ret+8(FP)
+	RET
+
+// Runs on OS stack, called from runtime·extraMSemaWake.
+TEXT runtime·sem_post1(SB),NOSPLIT,$0-12
+	MOVD	sem+0(FP), R3
+	MOVD	$libc_sem_post(SB), R12
+	CSYSCALL()
+	MOVW	R3, ret+8(FP)
+	RET
+
 // Runs on OS stack, called from runtime·exit.
 TEXT runtime·exit1(SB),NOSPLIT,$0-4
 	MOVW	code+0(FP), R3

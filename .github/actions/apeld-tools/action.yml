@@ -3,50 +3,72 @@ description: "Installs zig 0.16.0, ld64.lld and llvm-strip from LLVM 18.1.8, eac
 runs:
   using: composite
   steps:
-    # The LLVM tools go in a directory of their own, so the clang and ld beside them stay off PATH.
-    - name: Install zig and LLVM (linux)
+    # Ubuntu ships LLVM 18.1.3. apt.llvm.org carries 18.1.8, the release every host can install.
+    - name: Name the LLVM 18 apt source (linux)
       if: runner.os == 'Linux'
       shell: bash
-      env:
-        ZIG_VERSION: 0.16.0
-        ZIG_SHA256: 70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
       run: |
         set -euo pipefail
-        # Ubuntu ships LLVM 18.1.3. apt.llvm.org carries 18.1.8, the release every host can install.
         codename="$(. /etc/os-release && echo "$VERSION_CODENAME")"
-        curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc >/dev/null
+        sudo cp "$GITHUB_ACTION_PATH/apt.llvm.org.asc" /etc/apt/trusted.gpg.d/apt.llvm.org.asc
         echo "deb http://apt.llvm.org/${codename}/ llvm-toolchain-${codename}-18 main" | sudo tee /etc/apt/sources.list.d/llvm-18.list >/dev/null
-        sudo apt-get update -qq
-        sudo apt-get install -y -qq lld-18 llvm-18
-        curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" -o "$RUNNER_TEMP/zig.tar.xz"
-        echo "${ZIG_SHA256}  $RUNNER_TEMP/zig.tar.xz" | sha256sum -c -
-        tar -xf "$RUNNER_TEMP/zig.tar.xz" -C "$RUNNER_TEMP"
+
+    # A cache hit restores the packages' files and asks neither apt nor apt.llvm.org.
+    - name: Install LLVM 18 (linux)
+      if: runner.os == 'Linux'
+      uses: wow-look-at-my/actions@cached-apt#latest
+      with:
+        packages: lld-18 llvm-18
+
+    - name: Install zig (linux)
+      if: runner.os == 'Linux'
+      uses: wow-look-at-my/actions@cached-run#latest
+      with:
+        save-on: any
+        paths: ${{ runner.temp }}/zig-x86_64-linux-0.16.0
+        run: |
+          curl -fsSL "https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz" -o "$RUNNER_TEMP/zig.tar.xz"
+          echo "70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00  $RUNNER_TEMP/zig.tar.xz" | sha256sum -c -
+          tar -xf "$RUNNER_TEMP/zig.tar.xz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/zig-x86_64-linux-0.16.0" >> "$GITHUB_PATH"
+
+    # The LLVM tools go in a directory of their own, so the clang and ld beside them stay off PATH.
+    - name: Put ld64.lld and llvm-strip on PATH (linux)
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        set -euo pipefail
         tools="$RUNNER_TEMP/apeld-tools"
         mkdir -p "$tools"
         ln -s /usr/lib/llvm-18/bin/ld64.lld /usr/lib/llvm-18/bin/llvm-strip "$tools/"
         echo "$tools" >> "$GITHUB_PATH"
-        echo "$RUNNER_TEMP/zig-x86_64-linux-${ZIG_VERSION}" >> "$GITHUB_PATH"
 
-    - name: Install zig and LLVM (darwin)
+    - name: Install zig (darwin)
+      if: runner.os == 'macOS'
+      uses: wow-look-at-my/actions@cached-run#latest
+      with:
+        save-on: any
+        paths: ${{ runner.temp }}/zig-aarch64-macos-0.16.0
+        run: |
+          curl -fsSL "https://ziglang.org/download/0.16.0/zig-aarch64-macos-0.16.0.tar.xz" -o "$RUNNER_TEMP/zig.tar.xz"
+          echo "b23d70deaa879b5c2d486ed3316f7eaa53e84acf6fc9cc747de152450d401489  $RUNNER_TEMP/zig.tar.xz" | shasum -a 256 -c -
+          tar -xf "$RUNNER_TEMP/zig.tar.xz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/zig-aarch64-macos-0.16.0" >> "$GITHUB_PATH"
+
+    - name: Install LLVM 18 (darwin)
       if: runner.os == 'macOS'
       shell: bash
       env:
-        ZIG_VERSION: 0.16.0
-        ZIG_SHA256: b23d70deaa879b5c2d486ed3316f7eaa53e84acf6fc9cc747de152450d401489
         HOMEBREW_NO_AUTO_UPDATE: 1
         HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: 1
       run: |
         set -euo pipefail
         brew install llvm@18
         llvm="$(brew --prefix llvm@18)/bin"
-        curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-aarch64-macos-${ZIG_VERSION}.tar.xz" -o "$RUNNER_TEMP/zig.tar.xz"
-        echo "${ZIG_SHA256}  $RUNNER_TEMP/zig.tar.xz" | shasum -a 256 -c -
-        tar -xf "$RUNNER_TEMP/zig.tar.xz" -C "$RUNNER_TEMP"
         tools="$RUNNER_TEMP/apeld-tools"
         mkdir -p "$tools"
         ln -s "$llvm/ld64.lld" "$llvm/llvm-strip" "$tools/"
         echo "$tools" >> "$GITHUB_PATH"
-        echo "$RUNNER_TEMP/zig-aarch64-macos-${ZIG_VERSION}" >> "$GITHUB_PATH"
 
     - name: Install zig and LLVM (NT)
       if: runner.os == 'Windows'

@@ -249,7 +249,6 @@ var trace struct {
 	cpuLogRead  [2]*profBuf
 	signalLock  atomic.Uint32              // protects use of the following member, only usable in signal handlers
 	cpuLogWrite [2]atomic.Pointer[profBuf] // copy of cpuLogRead for use in signal handlers, set without signalLock
-	cpuSleep    *wakeableSleep
 	cpuLogDone  <-chan struct{}
 	cpuBuf      [2]*traceBuf
 
@@ -290,6 +289,20 @@ var trace struct {
 
 	// Number of goroutines in syscall exiting slow path.
 	exitingSyscall atomic.Int32
+
+	// exitingWait is where StartTrace sleeps until exitingSyscall drains.
+	// traceExitedSyscall wakes it.
+	exitingWait signalNote
+
+	// flushWait is where traceAdvance sleeps until an M it must flush
+	// leaves its write critical section. The M wakes it when it clears its
+	// write flag (traceWriterDone), which traceCPUSample does from a
+	// signal handler.
+	flushWait signalNote
+
+	// cpuLostContended counts the CPU samples traceCPUSample dropped
+	// because another handler held signalLock.
+	cpuLostContended atomic.Uint32
 
 	// seqGC is the sequence counter for GC begin/end.
 	//
@@ -415,10 +428,18 @@ func StartTrace() error {
 	// well as trace.enabled being set to true.
 	//
 	// The critical section on each goroutine here is going to be quite short, so the likelihood
-	// that we observe a zero value is high.
-	for trace.exitingSyscall.Load() != 0 {
-		osyield()
-	}
+	// that we observe a zero value is high. When it is not zero, sleep until the goroutine
+	// that brings it to zero wakes us (traceExitedSyscall).
+	systemstack(func() {
+		for {
+			trace.exitingWait.arm()
+			if trace.exitingSyscall.Load() == 0 {
+				trace.exitingWait.disarm()
+				return
+			}
+			trace.exitingWait.sleep()
+		}
+	})
 
 	// Record some initial pieces of information.
 	//
@@ -678,6 +699,10 @@ func traceAdvance(stopTrace bool) {
 		detectedDeadlock := false
 
 		for mToFlush != nil {
+			// Announce the wait before looking at any write flag: an M that
+			// clears its flag after this pass saw it set then finds the
+			// announcement and wakes us.
+			trace.flushWait.arm()
 			prev := &mToFlush
 			for mp := *prev; mp != nil; {
 				if mp.trace.writing.Load() {
@@ -704,9 +729,12 @@ func traceAdvance(stopTrace bool) {
 				mp.trace.link = nil
 				mp = *prev
 			}
-			// Yield only if we're going to be going around the loop again.
+			// Sleep only if we're going to be going around the loop again,
+			// until one of the Ms still writing clears its write flag.
 			if mToFlush != nil {
-				osyield()
+				trace.flushWait.sleep()
+			} else {
+				trace.flushWait.disarm()
 			}
 
 			if debugDeadlock {
@@ -744,8 +772,12 @@ func traceAdvance(stopTrace bool) {
 	}
 	statusWriter.flush().end()
 
-	// Read everything out of the last gen's CPU profile buffer.
+	// Read everything out of the last gen's CPU profile buffer. Then wake
+	// the CPU logger if it sleeps on that buffer, to move on to the new
+	// generation's; a logger about to sleep there finds the extra flag set
+	// and does not.
 	traceReadCPU(gen)
+	trace.cpuLogRead[gen%2].wakeupExtra()
 
 	// Flush CPU samples, stacks, and strings for the last generation. This is safe,
 	// because we're now certain no M is writing to the last generation.
