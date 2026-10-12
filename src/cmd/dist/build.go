@@ -265,8 +265,6 @@ func xinit() {
 	os.Unsetenv("GO111MODULE")
 	os.Setenv("GOENV", "off")
 	os.Unsetenv("GOFLAGS")
-	// The bootstrap toolchain is a stock go command, which reads go.work.
-	os.Setenv("GOWORK", "off")
 
 	// Create the go.mod for building toolchain2 and toolchain3. Toolchain1 and go_bootstrap are built with
 	// a separate go.mod (with a lower required go version to allow all allowed bootstrap toolchain versions)
