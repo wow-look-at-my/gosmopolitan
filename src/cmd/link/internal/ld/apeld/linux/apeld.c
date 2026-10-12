@@ -29,7 +29,8 @@ static inline i64 sc6(i64 n, i64 a, i64 b, i64 c, i64 d, i64 e, i64 f) {
 }
 enum { SYS_write = 1, SYS_pread = 17, SYS_pwrite = 18, SYS_mmap = 9,
 	SYS_sendfile = 40, SYS_exit = 60, SYS_openat = 257, SYS_unlinkat = 263,
-	SYS_prctl = 157, SYS_memfd_create = 319, SYS_execveat = 322 };
+	SYS_prctl = 157, SYS_memfd_create = 319, SYS_execveat = 322,
+	SYS_close = 3, SYS_fcntl = 72 };
 #elif defined(__aarch64__)
 #define EM_HOST 183
 static inline i64 sc6(i64 n, i64 a, i64 b, i64 c, i64 d, i64 e, i64 f) {
@@ -48,7 +49,8 @@ static inline i64 sc6(i64 n, i64 a, i64 b, i64 c, i64 d, i64 e, i64 f) {
 }
 enum { SYS_write = 64, SYS_pread = 67, SYS_pwrite = 68, SYS_mmap = 222,
 	SYS_sendfile = 71, SYS_exit = 93, SYS_openat = 56, SYS_unlinkat = 35,
-	SYS_prctl = 167, SYS_memfd_create = 279, SYS_execveat = 281 };
+	SYS_prctl = 167, SYS_memfd_create = 279, SYS_execveat = 281,
+	SYS_close = 57, SYS_fcntl = 25 };
 #else
 #error "unsupported arch"
 #endif
@@ -66,6 +68,7 @@ enum {
 	O_RDONLY = 0,
 	O_CLOEXEC = 02000000,
 	MFD_CLOEXEC = 1,
+	F_DUPFD_CLOEXEC = 1030,
 	PAYLOAD_ALIGN = 0x10000,
 	PROT_READ = 1, PROT_WRITE = 2, PROT_EXEC = 4,
 	MAP_PRIVATE = 2, MAP_FIXED = 0x10, MAP_ANONYMOUS = 0x20,
@@ -137,6 +140,12 @@ __attribute__((noreturn, used)) static void run(i64 argc, char **argv) {
 	// The descriptor stays open: AT_EXECFD hands it to the payload.
 	i64 fd = sc4(SYS_openat, AT_FDCWD, path, O_RDONLY | O_CLOEXEC, 0);
 	if (fd < 0) die("cannot open program");
+	if (fd < 3) {
+		i64 high = sc3(SYS_fcntl, fd, F_DUPFD_CLOEXEC, 3);
+		if (high < 0) die("cannot move the program descriptor");
+		sc1(SYS_close, fd);
+		fd = high;
+	}
 
 	// Find the payload for this arch on a 64K boundary.
 	struct {
@@ -173,6 +182,12 @@ __attribute__((noreturn, used)) static void run(i64 argc, char **argv) {
 
 	// Map each PT_LOAD from the file, then zero what lies past its file bytes.
 	u64 phdrva = 0;
+	// Without PT_PHDR the headers lie in the PT_LOAD that holds their file
+	// offset. libc finds PT_TLS through AT_PHDR, so it must name them.
+	u64 phfile = off + eh.phoff;
+	for (u32 i = 0; i < eh.phnum; i++)
+		if (ph[i].type == PT_LOAD && phfile >= ph[i].offset && phfile < ph[i].offset + ph[i].filesz)
+			phdrva = ph[i].vaddr + (phfile - ph[i].offset);
 	for (u32 i = 0; i < eh.phnum; i++) {
 		phdr *p = &ph[i];
 		if (p->type == PT_PHDR) phdrva = p->vaddr;
@@ -234,9 +249,13 @@ __attribute__((noreturn, used)) static void run(i64 argc, char **argv) {
 	*w++ = 0;
 
 #if defined(__x86_64__)
-	register u64 rsp __asm__("rdi") = (u64)sp;
-	register u64 rip __asm__("rsi") = eh.entry;
-	__asm__ volatile("mov %0, %%rsp\n\txor %%edx, %%edx\n\txor %%ecx, %%ecx\n\tjmp *%1" : : "r"(rsp), "r"(rip) : "memory");
+	// The registers match a kernel exec: all zero. Cosmo libc's _start reads a
+	// nonzero RDI as the stack a macOS loader passed, and then runs as XNU.
+	register u64 rsp __asm__("r8") = (u64)sp;
+	register u64 rip __asm__("r9") = eh.entry;
+	__asm__ volatile("mov %0, %%rsp\n\txor %%eax, %%eax\n\txor %%ebx, %%ebx\n\txor %%ecx, %%ecx\n\txor %%edx, %%edx\n\t"
+	                 "xor %%esi, %%esi\n\txor %%edi, %%edi\n\txor %%ebp, %%ebp\n\tjmp *%1"
+	                 : : "r"(rsp), "r"(rip) : "memory");
 #else
 	register u64 nsp __asm__("x9") = (u64)sp;
 	register u64 pc __asm__("x10") = eh.entry;
