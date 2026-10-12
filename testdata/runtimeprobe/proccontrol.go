@@ -86,18 +86,19 @@ func checkProcControl() {
 	}
 	pid := child.Process.Pid
 
+	// The stop check runs first.
+	if why := procControlStop(pid, ticks); why != "" {
+		fail(name, "%s", why)
+		return
+	}
+	notes = append(notes, "a stopped process stopped and resumed")
+
 	priority, why := procControlPriority(pid)
 	if why != "" {
 		fail(name, "%s", why)
 		return
 	}
 	notes = append(notes, priority)
-
-	if why := procControlStop(pid, ticks); why != "" {
-		fail(name, "%s", why)
-		return
-	}
-	notes = append(notes, "a stopped process stopped and resumed")
 
 	ok(name, strings.Join(notes, "; "))
 }
