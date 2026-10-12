@@ -754,7 +754,22 @@ type consistentHeapStats struct {
 	// stats are usually updated when a P is available, contention on
 	// this lock should be minimal.
 	noPLock mutex
+
+	// readerWake is where read sleeps while a P's writer is inside
+	// acquire/release. That writer's release wakes it.
+	readerWake note
 }
+
+// A P's statsSeq counts acquire and release calls in steps of
+// statsSeqWriting, so its statsSeqWriting bit is set exactly while a
+// writer on that P is between acquire and release. Bit 0 is
+// statsSeqReaderWaiting: read sets it on a P whose writer it must wait
+// for, and that writer's release clears it and wakes read. Stepping by
+// two keeps the counter's wraparound out of bit 0.
+const (
+	statsSeqReaderWaiting = 1
+	statsSeqWriting       = 2
+)
 
 // acquire returns a heapStatsDelta to be updated. In effect,
 // it acquires the shard for writing. release must be called
@@ -775,9 +790,9 @@ type consistentHeapStats struct {
 //go:nosplit
 func (m *consistentHeapStats) acquire() *heapStatsDelta {
 	if pp := getg().m.p.ptr(); pp != nil {
-		seq := pp.statsSeq.Add(1)
-		if seq%2 == 0 {
-			// Should have been incremented to odd.
+		seq := pp.statsSeq.Add(statsSeqWriting)
+		if seq&statsSeqWriting == 0 {
+			// Should have entered the writing state.
 			print("runtime: seq=", seq, "\n")
 			throw("bad sequence number")
 		}
@@ -804,14 +819,66 @@ func (m *consistentHeapStats) acquire() *heapStatsDelta {
 //go:nosplit
 func (m *consistentHeapStats) release() {
 	if pp := getg().m.p.ptr(); pp != nil {
-		seq := pp.statsSeq.Add(1)
-		if seq%2 != 0 {
-			// Should have been incremented to even.
+		seq := pp.statsSeq.Add(statsSeqWriting)
+		if seq&statsSeqWriting != 0 {
+			// Should have left the writing state.
 			print("runtime: seq=", seq, "\n")
 			throw("bad sequence number")
 		}
+		if seq&statsSeqReaderWaiting != 0 {
+			m.wakeReader(pp)
+		}
 	} else {
 		unlock(&m.noPLock)
+	}
+}
+
+// wakeReader clears proc's statsSeqReaderWaiting bit and wakes the
+// reader sleeping on it. Clearing the bit claims the wakeup, so a
+// release nested in this call's own stack growth and this call wake the
+// reader once between them.
+func (stats *consistentHeapStats) wakeReader(proc *p) {
+	for {
+		seq := proc.statsSeq.Load()
+		if seq&statsSeqReaderWaiting == 0 {
+			return
+		}
+		if proc.statsSeq.CompareAndSwap(seq, seq&^statsSeqReaderWaiting) {
+			notewakeup(&stats.readerWake)
+			return
+		}
+	}
+}
+
+// writerWaitDeadlocks reports whether waiting for proc's writer could
+// never end. On a single-threaded runtime a write section runs without
+// preemption, so a section still open is held by the reader's own
+// thread.
+func (stats *consistentHeapStats) writerWaitDeadlocks(proc *p) bool {
+	return singleThreadedRuntime && proc.statsSeq.Load()&statsSeqWriting != 0
+}
+
+// waitWriter returns once proc has no writer between acquire and
+// release. While one is, read sleeps in the OS on stats.readerWake, and
+// the writer's release wakes it. A wait that could never end throws
+// instead.
+func (stats *consistentHeapStats) waitWriter(proc *p) {
+	if stats.writerWaitDeadlocks(proc) {
+		throw("consistentHeapStats.read: a write section is open on this thread, the only one")
+	}
+	for {
+		seq := proc.statsSeq.Load()
+		if seq&statsSeqWriting == 0 {
+			return
+		}
+		noteclear(&stats.readerWake)
+		if !proc.statsSeq.CompareAndSwap(seq, seq|statsSeqReaderWaiting) {
+			// The writer moved on; look again.
+			continue
+		}
+		systemstack(func() {
+			notesleep(&stats.readerWake)
+		})
 	}
 }
 
@@ -875,13 +942,11 @@ func (m *consistentHeapStats) read(out *heapStatsDelta) {
 	unlock(&m.noPLock)
 
 	for _, p := range allp {
-		// Spin until there are no more writers.
-		for p.statsSeq.Load()%2 != 0 {
-		}
+		m.waitWriter(p)
 	}
 
-	// At this point we've observed that each sequence
-	// number is even, so any future writers will observe
+	// At this point we've observed that no P is writing, so
+	// any future writers will observe
 	// the new gen value. That means it's safe to read from
 	// the other deltas in the stats buffer.
 

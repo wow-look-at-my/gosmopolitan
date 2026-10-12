@@ -146,27 +146,14 @@ func checkVendorConsistency(ld *Loader, indexes []*modFileIndex, modFiles []*mod
 	// the vendor directory is in.
 	readVendorList(VendorDir(ld))
 
-	if len(modFiles) < 1 {
-		// We should never get here if there are zero modfiles. Either
-		// we're in single module mode and there's a single module, or
-		// we're in workspace mode, and we fail earlier reporting that
-		// "no modules were found in the current workspace".
-		panic("checkVendorConsistency called with zero modfiles")
+	if len(modFiles) != 1 || len(indexes) != 1 {
+		panic(fmt.Errorf("checkVendorConsistency called with %v modfiles and %v indexes, want one of each", len(modFiles), len(indexes)))
 	}
 
-	pre114 := false
-	if !ld.inWorkspaceMode() { // workspace mode was added after Go 1.14
-		if len(indexes) != 1 {
-			panic(fmt.Errorf("not in workspace mode but number of indexes is %v, not 1", len(indexes)))
-		}
-		index := indexes[0]
-		if gover.Compare(index.goVersion, "1.14") < 0 {
-			// Go versions before 1.14 did not include enough information in
-			// vendor/modules.txt to check for consistency.
-			// If we know that we're on an earlier version, relax the consistency check.
-			pre114 = true
-		}
-	}
+	// Go versions before 1.14 did not include enough information in
+	// vendor/modules.txt to check for consistency.
+	// If we know that we're on an earlier version, relax the consistency check.
+	pre114 := gover.Compare(indexes[0].goVersion, "1.14") < 0
 
 	vendErrors := new(strings.Builder)
 	vendErrorf := func(mod module.Version, format string, args ...any) {
@@ -220,11 +207,10 @@ func checkVendorConsistency(ld *Loader, indexes []*modFileIndex, modFiles []*mod
 				continue // Don't print the same error more than once
 			}
 			seenrep[r.Old] = true
-			rNew, modRoot, replacementSource := replacementFrom(ld, r.Old)
-			rNewCanonical := canonicalizeReplacePath(ld, rNew, modRoot)
+			rNew, _, replacementSource := replacementFrom(ld, r.Old)
 			vr := vendorMeta[r.Old].Replacement
 			if vr == (module.Version{}) {
-				if rNewCanonical == (module.Version{}) {
+				if rNew == (module.Version{}) {
 					// r.Old is not actually replaced. It might be a main module.
 					// Don't return an error.
 				} else if pre114 && (r.Old.Version == "" || vendorVersion[r.Old.Path] != r.Old.Version) {
@@ -233,16 +219,13 @@ func checkVendorConsistency(ld *Loader, indexes []*modFileIndex, modFiles []*mod
 				} else {
 					vendErrorf(r.Old, "is replaced in %s, but not marked as replaced in vendor/modules.txt", base.ShortPath(replacementSource))
 				}
-			} else if vr != rNewCanonical {
+			} else if vr != rNew {
 				vendErrorf(r.Old, "is replaced by %s in %s, but marked as replaced by %s in vendor/modules.txt", describe(rNew), base.ShortPath(replacementSource), describe(vr))
 			}
 		}
 	}
 	for _, modFile := range modFiles {
 		checkReplace(modFile.Replace)
-	}
-	if ld.MainModules.workFile != nil {
-		checkReplace(ld.MainModules.workFile.Replace)
 	}
 
 	for _, mod := range vendorList {
@@ -253,21 +236,9 @@ func checkVendorConsistency(ld *Loader, indexes []*modFileIndex, modFiles []*mod
 		}
 		meta := vendorMeta[mod]
 		if meta.Explicit {
-			// in workspace mode, check that it's required by at least one of the main modules
-			var foundRequire bool
-			for _, index := range indexes {
-				if _, inGoMod := index.require[mod]; inGoMod {
-					foundRequire = true
-				}
+			if _, inGoMod := indexes[0].require[mod]; !inGoMod {
+				vendErrorf(mod, "is marked as explicit in vendor/modules.txt, but not explicitly required in go.mod")
 			}
-			if !foundRequire {
-				article := ""
-				if ld.inWorkspaceMode() {
-					article = "a "
-				}
-				vendErrorf(mod, "is marked as explicit in vendor/modules.txt, but not explicitly required in %vgo.mod", article)
-			}
-
 		}
 	}
 
@@ -275,23 +246,14 @@ func checkVendorConsistency(ld *Loader, indexes []*modFileIndex, modFiles []*mod
 		if orgmod.IsOrg(mod.Path) {
 			continue
 		}
-		r := Replacement(ld, mod)
-		replacementSource := "go.mod"
-		if ld.inWorkspaceMode() {
-			replacementSource = "the workspace"
-		}
-		if r == (module.Version{}) {
-			vendErrorf(mod, "is marked as replaced in vendor/modules.txt, but not replaced in %s", replacementSource)
+		if Replacement(ld, mod) == (module.Version{}) {
+			vendErrorf(mod, "is marked as replaced in vendor/modules.txt, but not replaced in go.mod")
 			continue
 		}
 		// If both replacements exist, we've already reported that they're different above.
 	}
 
 	if vendErrors.Len() > 0 {
-		subcmd := "mod"
-		if ld.inWorkspaceMode() {
-			subcmd = "work"
-		}
-		base.Fatalf("go: inconsistent vendoring in %s:%s\n\n\tTo ignore the vendor directory, use -mod=readonly or -mod=mod.\n\tTo sync the vendor directory, run:\n\t\tgo %s vendor", filepath.Dir(VendorDir(ld)), vendErrors, subcmd)
+		base.Fatalf("go: inconsistent vendoring in %s:%s\n\n\tTo ignore the vendor directory, use -mod=readonly or -mod=mod.\n\tTo sync the vendor directory, run:\n\t\tgo mod vendor", filepath.Dir(VendorDir(ld)), vendErrors)
 	}
 }

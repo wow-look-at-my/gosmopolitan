@@ -77,13 +77,27 @@ var wasmSleep uint32
 var wasmSchedNudge uint32
 
 // wasmSchedNudgeWake wakes every M sleeping on wasmSchedNudge (worker Ms in
-// beforeIdle's timed idle sleep).
+// beforeIdle's timed idle sleep) and every parked worker M.
 //
 //go:nosplit
 //go:nowritebarrier
 func wasmSchedNudgeWake() {
 	atomic.Xadd(&wasmSchedNudge, 1)
 	futexwakeup(&wasmSchedNudge, ^uint32(0))
+	wasmParkWakeAll()
+}
+
+// wasmParkWake is the word parked worker Ms sleep on (wasmWorkerParkNote).
+var wasmParkWake uint32
+
+// wasmParkWakeAll wakes every parked worker M, to read its note and the
+// scheduler state again.
+//
+//go:nosplit
+//go:nowritebarrier
+func wasmParkWakeAll() {
+	atomic.Xadd(&wasmParkWake, 1)
+	futexwakeup(&wasmParkWake, ^uint32(0))
 }
 
 // wasmMainWake is the main-thread wake word (phase B3).

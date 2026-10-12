@@ -44,10 +44,6 @@ import (
 // explicit entry for each module path in tryUpgrade, mustSelect, and the roots
 // of rs, unless the selected version for the module path is "none".
 func editRequirements(ld *Loader, ctx context.Context, rs *Requirements, tryUpgrade, mustSelect []module.Version) (edited *Requirements, changed bool, err error) {
-	if rs.pruning == workspace {
-		panic("editRequirements cannot edit workspace requirements")
-	}
-
 	orig := rs
 	// If we already know what go version we will end up on after the edit, and
 	// the pruning for that version is different, go ahead and apply it now.

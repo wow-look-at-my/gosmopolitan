@@ -4,19 +4,15 @@
 ! go build .
 stderr '^go: go.mod requires go >= 1.99999 \(running go 1\..+\)$'
 
-# go.mod referenced from go.work too new
+# The go command reads no go.work file: an old one does not hide a go.mod
+# that is too new, and a new one does not stop an old go.mod from building.
 cp go.work.old go.work
 ! go build .
-stderr '^go: module . listed in go.work file requires go >= 1.99999, but go.work lists go 1.10; to use go 1.99999:\n\tgo work use$'
+stderr '^go: go.mod requires go >= 1.99999 \(running go 1\..+\)$'
 
-! go work sync
-stderr '^go: cannot load module . listed in go.work file: go.mod requires go >= 1.99999 \(running go 1\..+\)$'
-
-# go.work too new
 cp go.work.new go.work
 cp go.mod.old go.mod
-! go build .
-stderr '^go: go.work requires go >= 1.99999 \(running go 1\..+\)$'
+go build .
 
 # vendor too new
 rm go.work
