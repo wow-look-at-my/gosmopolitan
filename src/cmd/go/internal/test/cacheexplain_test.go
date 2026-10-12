@@ -4,9 +4,9 @@
 package test
 
 import (
-	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -74,18 +74,27 @@ func TestInputLinesNameWhatMoved(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	was, now := inputHashes(before), inputHashes(after)
-	var moved []string
-	for name := range maps.Keys(now) {
-		if was[name] != now[name] {
-			moved = append(moved, name)
-		}
-	}
-	if len(moved) != 1 || moved[0] != "open "+moving {
-		t.Errorf("moved = %q, want only %q", moved, "open "+moving)
+	now := inputHashes(after)
+	moved := movedInputs(inputHashes(before), now)
+	if want := "input open " + moving + " changed"; len(moved) != 1 || moved[0] != want {
+		t.Errorf("moved = %q, want only %q", moved, want)
 	}
 	if _, found := now["env HOME"]; !found {
 		t.Errorf("the inputs name no HOME: %q", now)
+	}
+	if moved := movedInputs(now, now); moved == nil || len(moved) != 0 {
+		t.Errorf("movedInputs of equal inputs = %#v, want an empty list", moved)
+	}
+}
+
+// TestMovedInputsNamesNewAndGone: an input only now read is new, and one only
+// read before is gone.
+func TestMovedInputsNamesNewAndGone(t *testing.T) {
+	before := map[string]string{"env GOFIPS140": "1", "open /a": "2"}
+	after := map[string]string{"env GOFIPS140": "1", "open /b": "3"}
+	want := []string{"input open /b is new", "input open /a is gone"}
+	if moved := movedInputs(before, after); !slices.Equal(moved, want) {
+		t.Errorf("moved = %q, want %q", moved, want)
 	}
 }
 
