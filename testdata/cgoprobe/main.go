@@ -24,6 +24,8 @@ func goTriple(value C.int) C.int {
 }
 
 func main() {
+	// The first dlopen runs on this thread. The dlcall check needs another.
+	runtime.LockOSThread()
 	failed := false
 	check := func(name string, good bool, detail string) {
 		state := "ok"
@@ -77,6 +79,21 @@ func main() {
 	// "dlopen LIB SYM" also loads a host library, which needs a host that has one.
 	if len(os.Args) == 4 && os.Args[1] == "dlopen" {
 		lib, sym := C.CString(os.Args[2]), C.CString(os.Args[3])
+
+		// Host code on a thread other than the first dlopen's needs the host's TLS there too.
+		done := make(chan struct{})
+		var result C.double
+		var called C.int
+		var callMsg [512]C.char
+		go func() {
+			runtime.LockOSThread()
+			called = C.probe_dlcall(lib, sym, 0, &result, &callMsg[0], C.int(len(callMsg)))
+			close(done)
+		}()
+		<-done
+		check("dlcall", called == 0 && result == 1, fmt.Sprint(called, " ", float64(result), " ", C.GoString(&callMsg[0])))
+
+
 		got := C.probe_dlopen(lib, sym, &msg[0], C.int(len(msg)))
 		check("dlopen", got == 0, fmt.Sprint(got, " ", C.GoString(&msg[0])))
 	}

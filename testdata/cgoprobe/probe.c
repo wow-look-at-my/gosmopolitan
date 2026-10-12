@@ -80,3 +80,25 @@ int probe_dlopen(const char *lib, const char *sym, char *msg, int len) {
 	}
 	return 0;
 }
+
+// probe_dlcall opens a host library, finds a double(double) function in it
+// and calls the function through the pointer that dlsym returns.
+int probe_dlcall(const char *lib, const char *sym, double arg, double *out, char *msg, int len) {
+	void *handle = dlopen(lib, RTLD_NOW);
+	if (handle == NULL) {
+		probe_dlerror(msg, len);
+		return -1;
+	}
+	double (*fn)(double) = (double (*)(double))dlsym(handle, sym);
+	if (fn == NULL) {
+		probe_dlerror(msg, len);
+		dlclose(handle);
+		return -2;
+	}
+	*out = fn(arg);
+	if (dlclose(handle) != 0) {
+		probe_dlerror(msg, len);
+		return -3;
+	}
+	return 0;
+}

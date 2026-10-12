@@ -7,3 +7,4 @@ int probe_callback(int value);
 int probe_thread(int value);
 int probe_dlopen_missing(char *msg, int len);
 int probe_dlopen(const char *lib, const char *sym, char *msg, int len);
+int probe_dlcall(const char *lib, const char *sym, double arg, double *out, char *msg, int len);
