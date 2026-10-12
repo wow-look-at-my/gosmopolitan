@@ -7,6 +7,7 @@
 
 #include <errno.h>
 #include <pthread.h>
+#include <signal.h>
 #include <string.h>
 #include "libcgo.h"
 
@@ -102,6 +103,114 @@ cosmo_host_slots(void **slots)
 		slots[1] = __imp_LoadLibraryA;
 	}
 }
+
+// The FS base of the host libc's thread. Host code reads its TLS through %fs.
+static uintptr_t cosmo_host_fs;
+
+// x_cgo_cosmo_host_fs gives this thread the host FS base before a call into
+// host code. Go and libcosmo leave FS at `GO_HOST_LINUX` on Linux. A
+// nonzero FS is the host's, so the first one seen is recorded.
+__attribute__((visibility("hidden"))) void
+x_cgo_cosmo_host_fs(void)
+{
+	uintptr_t fs = 0;
+	uintptr_t host;
+	long ret;
+
+	if (!(__hostos & COSMO_HOST_LINUX)) {
+		return;
+	}
+	// arch_prctl(ARCH_GET_FS, &fs)
+	__asm__ volatile("syscall" : "=a"(ret) : "0"(158L), "D"(0x1003L), "S"(&fs) : "rcx", "r11", "memory", "cc");
+	if (ret != 0) {
+		fprintf(stderr, "runtime/cgo: arch_prctl(ARCH_GET_FS) failed: %ld\n", ret);
+		abort();
+	}
+	if (fs != 0) {
+		host = 0;
+		__atomic_compare_exchange_n(&cosmo_host_fs, &host, fs, 0, __ATOMIC_RELEASE, __ATOMIC_RELAXED);
+		return;
+	}
+	host = __atomic_load_n(&cosmo_host_fs, __ATOMIC_ACQUIRE);
+	if (host == 0) {
+		return;
+	}
+	// arch_prctl(ARCH_SET_FS, host)
+	__asm__ volatile("syscall" : "=a"(ret) : "0"(158L), "D"(0x1002L), "S"(host) : "rcx", "r11", "memory", "cc");
+	if (ret != 0) {
+		fprintf(stderr, "runtime/cgo: arch_prctl(ARCH_SET_FS) failed: %ld\n", ret);
+		abort();
+	}
+}
+
+// __wrap_foreign_tramp replaces libcosmo's foreign_tramp, the call that every
+// cosmo_dlopen thunk makes into host code. It takes the target in %rax, the
+// arguments as the SysV ABI places them, and up to 0x100 bytes of stack
+// arguments. It blocks signals, gives the thread the host FS base, and keeps
+// GS, which host code never reads and Go reads g through.
+__asm__(
+	".text\n"
+	".globl __wrap_foreign_tramp\n"
+	".hidden __wrap_foreign_tramp\n"
+	".type __wrap_foreign_tramp,@function\n"
+	"__wrap_foreign_tramp:\n"
+	"	push	%rbp\n"
+	"	mov	%rsp,%rbp\n"
+	"	sub	$0x200,%rsp\n"
+	"	movdqu	%xmm0,-0x10(%rbp)\n"
+	"	movdqu	%xmm1,-0x20(%rbp)\n"
+	"	movdqu	%xmm2,-0x30(%rbp)\n"
+	"	movdqu	%xmm3,-0x40(%rbp)\n"
+	"	movdqu	%xmm4,-0x50(%rbp)\n"
+	"	movdqu	%xmm5,-0x60(%rbp)\n"
+	"	movdqu	%xmm6,-0x70(%rbp)\n"
+	"	movdqu	%xmm7,-0x80(%rbp)\n"
+	"	mov	%rdi,-0x88(%rbp)\n"
+	"	mov	%rsi,-0x90(%rbp)\n"
+	"	mov	%rdx,-0x98(%rbp)\n"
+	"	mov	%rcx,-0xa0(%rbp)\n"
+	"	mov	%r8,-0xa8(%rbp)\n"
+	"	mov	%r9,-0xb0(%rbp)\n"
+	"	mov	%rax,-0xb8(%rbp)\n"
+	"	call	__sig_block\n"
+	"	mov	%rax,-0xc0(%rbp)\n"
+	"	call	x_cgo_cosmo_host_fs\n"
+	// Copy the caller's stack arguments to the bottom of this frame.
+	"	xor	%eax,%eax\n"
+	"1:	movdqu	0x10(%rbp,%rax),%xmm0\n"
+	"	movdqu	%xmm0,-0x200(%rbp,%rax)\n"
+	"	add	$0x10,%eax\n"
+	"	cmp	$0x100,%eax\n"
+	"	jne	1b\n"
+	"	movdqu	-0x10(%rbp),%xmm0\n"
+	"	movdqu	-0x20(%rbp),%xmm1\n"
+	"	movdqu	-0x30(%rbp),%xmm2\n"
+	"	movdqu	-0x40(%rbp),%xmm3\n"
+	"	movdqu	-0x50(%rbp),%xmm4\n"
+	"	movdqu	-0x60(%rbp),%xmm5\n"
+	"	movdqu	-0x70(%rbp),%xmm6\n"
+	"	movdqu	-0x80(%rbp),%xmm7\n"
+	"	mov	-0x88(%rbp),%rdi\n"
+	"	mov	-0x90(%rbp),%rsi\n"
+	"	mov	-0x98(%rbp),%rdx\n"
+	"	mov	-0xa0(%rbp),%rcx\n"
+	"	mov	-0xa8(%rbp),%r8\n"
+	"	mov	-0xb0(%rbp),%r9\n"
+	"	mov	-0xb8(%rbp),%rax\n"
+	"	call	*%rax\n"
+	"	movdqu	%xmm0,-0x10(%rbp)\n"
+	"	movdqu	%xmm1,-0x20(%rbp)\n"
+	"	mov	%rax,-0x28(%rbp)\n"
+	"	mov	%rdx,-0x30(%rbp)\n"
+	"	mov	-0xc0(%rbp),%rdi\n"
+	"	call	__sig_unblock\n"
+	"	mov	-0x28(%rbp),%rax\n"
+	"	mov	-0x30(%rbp),%rdx\n"
+	"	movdqu	-0x10(%rbp),%xmm0\n"
+	"	movdqu	-0x20(%rbp),%xmm1\n"
+	"	leave\n"
+	"	ret\n"
+	".size __wrap_foreign_tramp,.-__wrap_foreign_tramp\n");
 
 #elif defined(__aarch64__)
 
@@ -332,44 +441,77 @@ cosmo_find_progname(void)
 		__program_executable_name = cosmo_progname;
 }
 
+// cosmo_foreign holds the state of one call into host code.
+struct cosmo_foreign {
+	sigset_t mask;
+	uintptr_t base;
+};
+
+// cosmo_foreign_begin blocks every signal on this thread and saves Go's GS
+// base. cosmo_dlopen points GS at libcosmo's thread block, where Go reads no
+// g.
+static void
+cosmo_foreign_begin(struct cosmo_foreign *call)
+{
+	sigset_t all;
+
+	sigfillset(&all);
+	pthread_sigmask(SIG_BLOCK, &all, &call->mask);
+	call->base = cosmo_foreign_enter();
+}
+
+static void
+cosmo_foreign_end(struct cosmo_foreign *call)
+{
+	cosmo_foreign_leave(call->base);
+	pthread_sigmask(SIG_SETMASK, &call->mask, NULL);
+}
+
 void *
 __wrap_dlopen(const char *path, int mode)
 {
-	uintptr_t base = cosmo_foreign_enter();
+	struct cosmo_foreign call;
 	void *handle;
 
+	cosmo_foreign_begin(&call);
 	pthread_once(&cosmo_progname_once, cosmo_find_progname);
 	handle = cosmo_dlopen(path, mode);
-	cosmo_foreign_leave(base);
+	cosmo_foreign_end(&call);
 	return handle;
 }
 
 void *
 __wrap_dlsym(void *handle, const char *name)
 {
-	uintptr_t base = cosmo_foreign_enter();
-	void *sym = cosmo_dlsym(handle, name);
+	struct cosmo_foreign call;
+	void *sym;
 
-	cosmo_foreign_leave(base);
+	cosmo_foreign_begin(&call);
+	sym = cosmo_dlsym(handle, name);
+	cosmo_foreign_end(&call);
 	return sym;
 }
 
 int
 __wrap_dlclose(void *handle)
 {
-	uintptr_t base = cosmo_foreign_enter();
-	int err = cosmo_dlclose(handle);
+	struct cosmo_foreign call;
+	int err;
 
-	cosmo_foreign_leave(base);
+	cosmo_foreign_begin(&call);
+	err = cosmo_dlclose(handle);
+	cosmo_foreign_end(&call);
 	return err;
 }
 
 char *
 __wrap_dlerror(void)
 {
-	uintptr_t base = cosmo_foreign_enter();
-	char *msg = cosmo_dlerror();
+	struct cosmo_foreign call;
+	char *msg;
 
-	cosmo_foreign_leave(base);
+	cosmo_foreign_begin(&call);
+	msg = cosmo_dlerror();
+	cosmo_foreign_end(&call);
 	return msg;
 }

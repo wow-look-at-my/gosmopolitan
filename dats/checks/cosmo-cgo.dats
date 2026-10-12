@@ -33,6 +33,7 @@ tests:
 		stdout:
 			- ok dlerror
 			- ok dlopen
+			- ok dlcall
 		!stdout:
 			- FAIL
 
