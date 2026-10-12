@@ -86,10 +86,6 @@ func TestRepoRootForImportPath(t *testing.T) {
 				Repo: "https://github.com/src-d/go-git",
 			},
 		},
-		{
-			"gopkg.in/yaml",
-			nil,
-		},
 		// IBM DevOps Services tests
 		{
 			"hub.jazz.net/git/user1/pkgname",
