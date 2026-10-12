@@ -58,7 +58,7 @@ func TestAllDependencies(t *testing.T) {
 				// 'go list -deps' will fail when attempting to load it.
 				cmd := testenv.Command(t, goBin, "list", "-mod=vendor", "-deps", "./...")
 				cmd.Dir = m.Dir
-				cmd.Env = append(cmd.Environ(), "GO111MODULE=on", "GOWORK=off")
+				cmd.Env = append(cmd.Environ(), "GO111MODULE=on")
 				cmd.Stderr = new(strings.Builder)
 				_, err := cmd.Output()
 				if err != nil {
@@ -72,7 +72,7 @@ func TestAllDependencies(t *testing.T) {
 			// Check that the list of active modules contains only the main module.
 			cmd := testenv.Command(t, goBin, "list", "-mod=readonly", "-m", "all")
 			cmd.Dir = m.Dir
-			cmd.Env = append(cmd.Environ(), "GO111MODULE=on", "GOWORK=off")
+			cmd.Env = append(cmd.Environ(), "GO111MODULE=on")
 			cmd.Stderr = new(strings.Builder)
 			out, err := cmd.Output()
 			if err != nil {
@@ -190,7 +190,6 @@ func TestAllDependencies(t *testing.T) {
 					// Add GOROOTcopy/bin and bundleDir to front of PATH.
 					"PATH="+filepath.Join(gorootCopyDir, "bin")+string(filepath.ListSeparator)+
 						bundleDir+string(filepath.ListSeparator)+os.Getenv("PATH"),
-					"GOWORK=off",
 				),
 			}
 			goBinCopy := filepath.Join(gorootCopyDir, "bin", "go")
@@ -488,7 +487,7 @@ func findGorootModules(t *testing.T) []gorootModule {
 			// not its dependencies).
 			cmd := testenv.Command(t, goBin, "list", "-json", "-m")
 			cmd.Dir = dir
-			cmd.Env = append(cmd.Environ(), "GO111MODULE=on", "GOWORK=off")
+			cmd.Env = append(cmd.Environ(), "GO111MODULE=on")
 			cmd.Stderr = new(strings.Builder)
 			out, err := cmd.Output()
 			if err != nil {
