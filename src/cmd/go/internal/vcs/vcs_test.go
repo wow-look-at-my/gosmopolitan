@@ -27,12 +27,115 @@ func init() {
 
 // Test that RepoRootForImportPath determines the correct RepoRoot for a given importPath.
 // TODO(cmang): Add tests for SVN.
+// A gopkg.in path resolves to its GitHub repository from the static table,
+// so the fetch never asks gopkg.in anything.
+func TestGopkgInResolvesToGitHub(t *testing.T) {
+	tests := []struct {
+		path string
+		root string
+		repo string
+	}{
+		{"gopkg.in/yaml.v3", "gopkg.in/yaml.v3", "https://github.com/go-yaml/yaml"},
+		{"gopkg.in/check.v1", "gopkg.in/check.v1", "https://github.com/go-check/check"},
+		{"gopkg.in/natefinch/lumberjack.v2", "gopkg.in/natefinch/lumberjack.v2", "https://github.com/natefinch/lumberjack"},
+		{"gopkg.in/src-d/go-git.v4/plumbing", "gopkg.in/src-d/go-git.v4", "https://github.com/src-d/go-git"},
+		{"gopkg.in/mgo.v2-unstable/bson", "gopkg.in/mgo.v2-unstable", "https://github.com/go-mgo/mgo"},
+	}
+	for _, test := range tests {
+		got, err := repoRootFromVCSPaths(test.path, web.SecureOnly, vcsPaths)
+		if err != nil {
+			t.Errorf("repoRootFromVCSPaths(%q): %v", test.path, err)
+			continue
+		}
+		if got.VCS != vcsGit || got.Root != test.root || got.Repo != test.repo {
+			t.Errorf("repoRootFromVCSPaths(%q) = {%s %q %q}, want {git %q %q}", test.path, got.VCS.Cmd, got.Root, got.Repo, test.root, test.repo)
+		}
+	}
+	if _, err := repoRootFromVCSPaths("gopkg.in/noversion", web.SecureOnly, vcsPaths); err == nil {
+		t.Errorf("repoRootFromVCSPaths(%q) succeeded, want an error for a path with no .vN", "gopkg.in/noversion")
+	}
+}
+
+// A golang.org or google.golang.org path resolves to its GitHub repository
+// from the static table. The fetch never asks a host under golang.org.
+func TestGolangOrgResolvesToGitHub(t *testing.T) {
+	tests := []struct {
+		path string
+		root string
+		repo string
+	}{
+		{"golang.org/x/text", "golang.org/x/text", "https://github.com/golang/text"},
+		{"golang.org/x/tools/gopls", "golang.org/x/tools", "https://github.com/golang/tools"},
+		{"golang.org/x/sys/unix", "golang.org/x/sys", "https://github.com/golang/sys"},
+		{"golang.org/dl/go1.22.0", "golang.org/dl", "https://github.com/golang/dl"},
+		{"google.golang.org/protobuf/cmd/protoc-gen-go", "google.golang.org/protobuf", "https://github.com/protocolbuffers/protobuf-go"},
+		{"google.golang.org/grpc", "google.golang.org/grpc", "https://github.com/grpc/grpc-go"},
+		{"google.golang.org/grpc/cmd/protoc-gen-go-grpc", "google.golang.org/grpc", "https://github.com/grpc/grpc-go"},
+		{"google.golang.org/genproto/googleapis/api", "google.golang.org/genproto", "https://github.com/googleapis/go-genproto"},
+		{"google.golang.org/api", "google.golang.org/api", "https://github.com/googleapis/google-api-go-client"},
+		{"google.golang.org/appengine/v2", "google.golang.org/appengine", "https://github.com/golang/appengine"},
+		{"google.golang.org/genai", "google.golang.org/genai", "https://github.com/googleapis/go-genai"},
+		{"google.golang.org/cloud", "google.golang.org/cloud", "https://github.com/googleapis/google-cloud-go"},
+	}
+	for _, test := range tests {
+		got, err := RepoRootForImportPath(test.path, PreferMod, web.SecureOnly)
+		if err != nil {
+			t.Errorf("RepoRootForImportPath(%q): %v", test.path, err)
+			continue
+		}
+		if got.VCS != vcsGit || got.Root != test.root || got.Repo != test.repo || got.IsCustom {
+			t.Errorf("RepoRootForImportPath(%q) = {%s %q %q custom=%v}, want {git %q %q custom=false}", test.path, got.VCS.Cmd, got.Root, got.Repo, got.IsCustom, test.root, test.repo)
+		}
+	}
+}
+
+// A path under golang.org that the table cannot map is an error, and nothing
+// is asked of any host. TESTGONETWORK=panic turns a request into a panic.
+func TestGolangOrgUnknownPathContactsNothing(t *testing.T) {
+	intercept.EnableTestHooks(nil)
+	t.Cleanup(intercept.DisableTestHooks)
+	t.Setenv("TESTGONETWORK", "panic")
+	for _, path := range []string{
+		"golang.org/toolchain",
+		"golang.org/x",
+		"golang.org",
+		"google.golang.org/unknown",
+		"pkg.golang.org/some/path",
+		"GOLANG.ORG/x/text",
+		"go.golang.org/repo.git/sub",
+	} {
+		root, err := RepoRootForImportPath(path, PreferMod, web.SecureOnly)
+		if err == nil {
+			t.Errorf("RepoRootForImportPath(%q) = %+v, want an error", path, root)
+			continue
+		}
+		if !strings.Contains(err.Error(), "golang.org") {
+			t.Errorf("RepoRootForImportPath(%q) err = %v, want one that names golang.org", path, err)
+		}
+	}
+}
+
+// A go-import tag on another host that names a repository under golang.org
+// is refused before anything clones it.
+func TestRepoOnGolangOrgRefused(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, req *http.Request) {
+		writer.Write([]byte(`<meta name="go-import" content="vanity.example/mod git https://go.golang.org/mod">`))
+	}))
+	t.Cleanup(server.Close)
+	intercept.EnableTestHooks([]intercept.Interceptor{{Scheme: "https", FromHost: "vanity.example", ToHost: server.Listener.Addr().String(), Client: server.Client()}})
+	t.Cleanup(intercept.DisableTestHooks)
+	root, err := RepoRootForImportPath("vanity.example/mod", PreferMod, web.SecureOnly)
+	if err == nil || !strings.Contains(err.Error(), web.BannedDomain) {
+		t.Errorf("RepoRootForImportPath(vanity.example/mod) = %+v, %v, want a refusal that names %s", root, err, web.BannedDomain)
+	}
+}
+
 func TestRepoRootForImportPath(t *testing.T) {
 	// Intercept requests to external servers to avoid making external network connections from the test.
 	ts := httptest.NewServer(http.NotFoundHandler())
 	t.Cleanup(ts.Close)
 	var interceptors []intercept.Interceptor
-	for _, d := range []string{"hub.jazz.net", "hubajazz.net", "hub2.jazz.net", "different.example.com"} {
+	for _, d := range []string{"hub.jazz.net", "hubajazz.net", "hub2.jazz.net", "different.example.com", "gopkg.in"} {
 		interceptors = append(interceptors,
 			intercept.Interceptor{Scheme: "https", FromHost: d, ToHost: ts.Listener.Addr().String()},
 			intercept.Interceptor{Scheme: "http", FromHost: d, ToHost: ts.Listener.Addr().String()},
@@ -55,6 +158,60 @@ func TestRepoRootForImportPath(t *testing.T) {
 		// Unicode letters in directories are not valid.
 		{
 			"github.com/user/unicode/испытание",
+			nil,
+		},
+		// gopkg.in resolves to its GitHub repository without asking gopkg.in.
+		{
+			"gopkg.in/yaml.v3",
+			&RepoRoot{
+				VCS:  vcsGit,
+				Repo: "https://github.com/go-yaml/yaml",
+			},
+		},
+		{
+			"gopkg.in/check.v1/internal/sub",
+			&RepoRoot{
+				VCS:  vcsGit,
+				Repo: "https://github.com/go-check/check",
+			},
+		},
+		{
+			"gopkg.in/check.v1/sub/pkg",
+			&RepoRoot{
+				VCS:  vcsGit,
+				Repo: "https://github.com/go-check/check",
+			},
+		},
+		{
+			"gopkg.in/user/pkg.v2",
+			&RepoRoot{
+				VCS:  vcsGit,
+				Repo: "https://github.com/user/pkg",
+			},
+		},
+		{
+			"gopkg.in/macaroon-bakery.v2-unstable",
+			&RepoRoot{
+				VCS:  vcsGit,
+				Repo: "https://github.com/go-macaroon-bakery/macaroon-bakery",
+			},
+		},
+		{
+			"gopkg.in/natefinch/lumberjack.v2",
+			&RepoRoot{
+				VCS:  vcsGit,
+				Repo: "https://github.com/natefinch/lumberjack",
+			},
+		},
+		{
+			"gopkg.in/src-d/go-git.v4",
+			&RepoRoot{
+				VCS:  vcsGit,
+				Repo: "https://github.com/src-d/go-git",
+			},
+		},
+		{
+			"gopkg.in/yaml",
 			nil,
 		},
 		// IBM DevOps Services tests
@@ -221,6 +378,47 @@ func TestRepoRootForImportPath(t *testing.T) {
 		if got.VCS.Name != want.VCS.Name || got.Repo != want.Repo {
 			t.Errorf("RepoRootForImportPath(%q) = VCS(%s) Repo(%s), want VCS(%s) Repo(%s)", test.path, got.VCS, got.Repo, want.VCS, want.Repo)
 		}
+	}
+}
+
+// A gopkg.in root is the gopkg.in path, not the GitHub path, so module paths
+// and go.sum lines stay as every go.mod already writes them.
+func TestGopkgInRoot(t *testing.T) {
+	got, err := RepoRootForImportPath("gopkg.in/yaml.v3/internal/sub", IgnoreMod, web.SecureOnly)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Root != "gopkg.in/yaml.v3" || got.Repo != "https://github.com/go-yaml/yaml" {
+		t.Errorf("Root %q Repo %q, want gopkg.in/yaml.v3 and https://github.com/go-yaml/yaml", got.Root, got.Repo)
+	}
+}
+
+// A gopkg.in path resolves to its GitHub repository with no request. The
+// root stays the gopkg.in path, because that is the module path.
+func TestRepoRootGopkgIn(t *testing.T) {
+	cases := []struct {
+		path, root, repo string
+	}{
+		{"gopkg.in/yaml.v3", "gopkg.in/yaml.v3", "https://github.com/go-yaml/yaml"},
+		{"gopkg.in/check.v1", "gopkg.in/check.v1", "https://github.com/go-check/check"},
+		{"gopkg.in/yaml.v2/sub/pkg", "gopkg.in/yaml.v2", "https://github.com/go-yaml/yaml"},
+		{"gopkg.in/natefinch/lumberjack.v2", "gopkg.in/natefinch/lumberjack.v2", "https://github.com/natefinch/lumberjack"},
+		{"gopkg.in/mgo.v2-unstable", "gopkg.in/mgo.v2-unstable", "https://github.com/go-mgo/mgo"},
+	}
+	for _, tc := range cases {
+		got, err := repoRootFromVCSPaths(tc.path, web.SecureOnly, vcsPaths)
+		if err != nil {
+			t.Errorf("repoRootFromVCSPaths(%q): %v", tc.path, err)
+			continue
+		}
+		if got.VCS != vcsGit || got.Root != tc.root || got.Repo != tc.repo {
+			t.Errorf("repoRootFromVCSPaths(%q) = VCS(%s) Root(%s) Repo(%s), want VCS(git) Root(%s) Repo(%s)", tc.path, got.VCS, got.Root, got.Repo, tc.root, tc.repo)
+		}
+	}
+
+	// A path outside the rule is left to the meta tag lookup.
+	if _, err := repoRootFromVCSPaths("gopkg.in/noversion", web.SecureOnly, vcsPaths); err != errUnknownSite {
+		t.Errorf("repoRootFromVCSPaths(%q) error = %v, want errUnknownSite", "gopkg.in/noversion", err)
 	}
 }
 

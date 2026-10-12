@@ -7,7 +7,9 @@ package x509
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/pem"
+	"internal/testlog"
 	"sync"
 )
 
@@ -33,6 +35,27 @@ type CertPool struct {
 	// verifications, one using the roots provided by the caller, and one using
 	// the system platform verifier.
 	systemPool bool
+
+	// sources names, in order, the files and directories the system roots in
+	// this pool were read from. Each use of the pool is logged against each
+	// source, so a test's input is what it asked the sources, not the files.
+	sources []rootSource
+}
+
+// rootSource is a file or a directory the system pool loader read.
+type rootSource struct {
+	kind string // "x509file" or "x509dir"
+	path string
+}
+
+// logUse tells a test's logger that query was asked of every source of s.
+func (s *CertPool) logUse(query string) {
+	if s == nil {
+		return
+	}
+	for _, source := range s.sources {
+		testlog.Lookup(source.kind, source.path, query)
+	}
 }
 
 // lazyCert is minimal metadata about a Cert and a func to retrieve it
@@ -74,6 +97,7 @@ func (s *CertPool) len() int {
 	if s == nil {
 		return 0
 	}
+	s.logUse("all")
 	return len(s.lazyCerts)
 }
 
@@ -90,6 +114,7 @@ func (s *CertPool) Clone() *CertPool {
 		lazyCerts:  make([]lazyCert, len(s.lazyCerts)),
 		haveSum:    make(map[sum224]bool, len(s.haveSum)),
 		systemPool: s.systemPool,
+		sources:    s.sources,
 	}
 	for k, v := range s.byName {
 		indexes := make([]int, len(v))
@@ -137,6 +162,9 @@ func (s *CertPool) findPotentialParents(cert *Certificate) []potentialParent {
 	if s == nil {
 		return nil
 	}
+	if len(s.sources) > 0 {
+		s.logUse("issuer " + hex.EncodeToString(cert.RawIssuer))
+	}
 
 	// consider all candidates where cert.Issuer matches cert.Subject.
 	// when picking possible candidates the list is built in the order
@@ -177,7 +205,11 @@ func (s *CertPool) contains(cert *Certificate) bool {
 	if s == nil {
 		return false
 	}
-	return s.haveSum[sha256.Sum224(cert.Raw)]
+	sum := sha256.Sum224(cert.Raw)
+	if len(s.sources) > 0 {
+		s.logUse("contains " + hex.EncodeToString(sum[:]))
+	}
+	return s.haveSum[sum]
 }
 
 // AddCert adds a certificate to a pool.
@@ -272,6 +304,8 @@ func (s *CertPool) Equal(other *CertPool) bool {
 	if s == nil || other == nil {
 		return s == other
 	}
+	s.logUse("all")
+	other.logUse("all")
 	if s.systemPool != other.systemPool || len(s.haveSum) != len(other.haveSum) {
 		return false
 	}

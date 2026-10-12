@@ -32,8 +32,8 @@ type mOS struct {
 	profileTimerValid atomic.Bool
 
 	// needPerThreadSyscall indicates that a per-thread syscall is required
-	// for doAllThreadsSyscall.
-	needPerThreadSyscall atomic.Uint8
+	// for doAllThreadsSyscall. It is a futex word.
+	needPerThreadSyscall uint32
 
 	// This is a pointer to a chunk of memory allocated with a special
 	// mmap invocation in vgetrandomGetState().
@@ -401,7 +401,38 @@ func minit() {
 	// Cgo-created threads and the bootstrap m are missing a
 	// procid. We need this for asynchronous preemption and it's
 	// useful in debuggers.
-	getg().m.procid = uint64(gettid())
+	atomic.Store64(&getg().m.procid, uint64(gettid()))
+	threadStartWake()
+}
+
+// threadStart lets doAllThreadsSyscall sleep until an M it waits for sets
+// procid. While waiting is set, minit bumps seq and wakes it.
+var threadStart struct {
+	waiting uint32
+	seq     uint32
+}
+
+// threadStartWake is minit's half of threadStart. procid is stored first, so
+// a waiter that read it as zero is woken.
+//
+//go:nosplit
+func threadStartWake() {
+	if atomic.Load(&threadStart.waiting) == 0 {
+		return
+	}
+	atomic.Xadd(&threadStart.seq, 1)
+	futexwakeup(&threadStart.seq, 1)
+}
+
+// threadStartWait sleeps until mp has set procid.
+func threadStartWait(mp *m) {
+	for {
+		seq := atomic.Load(&threadStart.seq)
+		if atomic.Load64(&mp.procid) != 0 {
+			return
+		}
+		futexsleep(&threadStart.seq, seq, -1)
+	}
 }
 
 // Called from dropm to undo the effect of an minit.
@@ -844,12 +875,11 @@ func syscall_runtime_doAllThreadsSyscall(trap, a1, a2, a3, a4, a5, a6 uintptr) (
 	//
 	// Some system calls may not be idempotent, so we ensure each thread
 	// executes the system call exactly once.
+	atomic.Store(&threadStart.waiting, 1)
 	for mp := allm; mp != nil; mp = mp.alllink {
-		for atomic.Load64(&mp.procid) == 0 {
-			// Thread is starting.
-			osyield()
-		}
+		threadStartWait(mp)
 	}
+	atomic.Store(&threadStart.waiting, 0)
 
 	// Signal every other thread, where they will execute perThreadSyscall
 	// from the signal handler.
@@ -860,17 +890,18 @@ func syscall_runtime_doAllThreadsSyscall(trap, a1, a2, a3, a4, a5, a6 uintptr) (
 			// Our thread already performed the syscall.
 			continue
 		}
-		mp.needPerThreadSyscall.Store(1)
+		atomic.Store(&mp.needPerThreadSyscall, 1)
 		signalM(mp, sigPerThreadSyscall)
 	}
 
-	// Wait for all threads to complete.
+	// Wait for all threads to complete. runPerThreadSyscall clears each
+	// flag and wakes its word.
 	for mp := allm; mp != nil; mp = mp.alllink {
 		if mp.procid == tid {
 			continue
 		}
-		for mp.needPerThreadSyscall.Load() != 0 {
-			osyield()
+		for atomic.Load(&mp.needPerThreadSyscall) != 0 {
+			futexsleep(&mp.needPerThreadSyscall, 1, -1)
 		}
 	}
 
@@ -891,7 +922,7 @@ func syscall_runtime_doAllThreadsSyscall(trap, a1, a2, a3, a4, a5, a6 uintptr) (
 //go:nosplit
 func runPerThreadSyscall() {
 	gp := getg()
-	if gp.m.needPerThreadSyscall.Load() == 0 {
+	if atomic.Load(&gp.m.needPerThreadSyscall) == 0 {
 		return
 	}
 
@@ -907,7 +938,8 @@ func runPerThreadSyscall() {
 		fatal("AllThreadsSyscall6 results differ between threads; runtime corrupted")
 	}
 
-	gp.m.needPerThreadSyscall.Store(0)
+	atomic.Store(&gp.m.needPerThreadSyscall, 0)
+	futexwakeup(&gp.m.needPerThreadSyscall, 1)
 }
 
 const (

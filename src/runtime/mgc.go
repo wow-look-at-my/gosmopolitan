@@ -195,6 +195,8 @@ func gcinit() {
 
 	work.startSema = 1
 	work.markDoneSema = 1
+	sweep.active.doneSema = 1
+	lockInit(&sweep.spanWaiters.lock, lockRankLeafRank)
 	work.spanSPMCs.list.init(unsafe.Offsetof(spanSPMC{}.allnode))
 	lockInit(&work.sweepWaiters.lock, lockRankSweepWaiters)
 	lockInit(&work.assistQueue.lock, lockRankAssistQueue)
@@ -576,9 +578,7 @@ func GC() {
 	// First, wait for sweeping to finish. (We know there are no
 	// more spans on the sweep queue, but we may be concurrently
 	// sweeping spans, so we have to wait.)
-	for work.cycles.Load() == n+1 && !isSweepDone() {
-		Gosched()
-	}
+	sweep.active.waitDone(n + 1)
 
 	// Now we're really done with sweeping, so we can publish the
 	// stable heap profile. Only do this if we haven't already hit

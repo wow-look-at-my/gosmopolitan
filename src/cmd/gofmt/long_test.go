@@ -114,6 +114,10 @@ func genFilenames(t *testing.T, filenames chan<- string) {
 			t.Error(err)
 			return nil
 		}
+		// A repository's metadata holds no Go files, and how its packs are laid out differs between clones of one commit.
+		if d.IsDir() && d.Name() == ".git" {
+			return filepath.SkipDir
+		}
 		// don't descend into testdata directories
 		if !d.IsDir() && isGoFilename(d.Name()) && !strings.Contains(filepath.ToSlash(filename), "/testdata/") {
 			filenames <- filename

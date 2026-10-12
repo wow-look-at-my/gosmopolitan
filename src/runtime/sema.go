@@ -124,6 +124,16 @@ func internal_sync_runtime_Semrelease(addr *uint32, handoff bool, skipframes int
 	semrelease1(addr, handoff, skipframes)
 }
 
+//go:linkname exithook_semacquire internal/runtime/exithook.semacquire
+func exithook_semacquire(addr *uint32) {
+	semacquire(addr)
+}
+
+//go:linkname exithook_semrelease internal/runtime/exithook.semrelease
+func exithook_semrelease(addr *uint32) {
+	semrelease(addr)
+}
+
 func readyWithTime(s *sudog, traceskip int) {
 	if s.releasetime != 0 {
 		s.releasetime = cputicks()
