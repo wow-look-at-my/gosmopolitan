@@ -288,8 +288,7 @@ type fakeGitHub struct {
 	infoRefsStatus int
 	// infoRefsCredential is the Authorization an info/refs request must carry.
 	infoRefsCredential string
-	// lastInfoRefsCredential is the Authorization of every info/refs request, in order.
-	infoRefsAuth []string
+	infoRefsAuth       []string
 	// apiStatus fails every direct api.github.com request with this code.
 	apiStatus int
 	// private makes github.com and api.github.com answer nothing, directly or through the proxy.
