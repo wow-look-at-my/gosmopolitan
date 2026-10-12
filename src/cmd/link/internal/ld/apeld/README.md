@@ -6,7 +6,7 @@ Upstream is [wow-look-at-my/ape-research](https://github.com/wow-look-at-my/ape-
 
 | loader | how it boots the payload |
 |---|---|
-| `bin/apeld-linux-amd64`, `bin/apeld-linux-arm64` | copies the APE into a memfd, writes the payload's ELF header over offset 0, `execveat`s the memfd |
+| `bin/apeld-linux-amd64`, `bin/apeld-linux-arm64` | copies the page span the payload's program headers cover into a memfd, rebases `e_phoff` and the in-span `p_offset` values, writes the payload's ELF header over offset 0, `execveat`s the memfd |
 | `bin/apeld-darwin-arm64` | maps the arm64 ELF payload itself, builds the SysV stack and auxv, hands over a Syslib table of libSystem entry points, jumps |
 
 windows/amd64 has no loader. The APE is a valid PE and the OS maps the payload straight from the file, read-only path or not.

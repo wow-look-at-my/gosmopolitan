@@ -4,6 +4,8 @@ The kernel cannot exec an APE as it stands. The file starts with `MZqFpD='`. Tha
 
 Everywhere else the shell runs, and it hands the file to a native loader. The loader opens the APE where it lies. It finds the payload for this machine on a 64 KiB boundary. Then it boots that payload from memory. The APE is never copied and never modified.
 
+On Linux the loader builds its boot image as a memfd that covers only the span the payload's program headers describe. The rest of the file stays on disk. Data appended past the payloads is outside that span. The payload reads it through the program's own path, not through the memfd.
+
 **A zero-write start needs a loader the host already reaches.** Putting one there takes root, one time. Either root installs the loader file, or root registers the `binfmt_misc` entry. Read the rest of this page with that in mind. A read-only path starts the program only on a machine where one of those is already done.
 
 The privilege buys the machine its loader. It is not what runs the program. `memfd_create` and `execveat` need no privilege at all. Neither does the loader once it runs.
