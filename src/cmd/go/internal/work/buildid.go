@@ -299,9 +299,10 @@ func (b *Builder) toolID(name string) string {
 }
 
 // linkedHere reports whether path starts the tool called name inside this
-// executable, as "<self> tool <name>".
+// executable, as "<self> tool <name>", and the file at that path is still
+// this process's own image.
 func linkedHere(name string, path []string) bool {
-	return base.Linked(name) && slices.Equal(path, base.ToolCmd(name))
+	return base.Linked(name) && slices.Equal(path, base.ToolCmd(name)) && base.SelfUnchanged()
 }
 
 // toolWord answers the name a tool command line runs: the word after "tool"
