@@ -194,6 +194,12 @@ nocpuinfo:
 	MOVQ	$setg_gcc<>(SB), SI // arg 2: setg_gcc
 	MOVQ	$0, DX	// arg 3, 4: not used when using platform's TLS
 	MOVQ	$0, CX
+#ifdef GOOS_cosmo
+	// x_cgo_init copies the host OS from libcosmo and installs this thread's GS.
+	// On NT it fills ntiat from libcosmo's import address table.
+	MOVQ	$runtime·__hostos(SB), DX	// arg 3: &__hostos
+	MOVQ	$runtime·ntiat(SB), CX	// arg 4: &ntiat
+#endif
 #ifdef GOOS_android
 	MOVQ	$runtime·tls_g(SB), DX 	// arg 3: &tls_g
 	// arg 4: TLS base, stored in slot 0 (Android's TLS_SLOT_SELF).

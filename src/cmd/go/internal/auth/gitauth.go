@@ -14,13 +14,55 @@ import (
 	"cmd/go/internal/base"
 	"cmd/go/internal/cfg"
 	"cmd/go/internal/web/intercept"
+	"context"
 	"fmt"
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"time"
 )
+
+// gitCredentialTimeout bounds 'git credential fill'. A helper that hangs or
+// waits for a terminal must not hold up a build; the caller then falls back to
+// git itself.
+const gitCredentialTimeout = 30 * time.Second
+
+// GitBasicAuth returns the credential git's own helpers hold for rawURL, as
+// HTTP basic authentication. A caller that would otherwise run git over the
+// network can present the same credential to a plain HTTPS request instead.
+// dir is the working directory git reads its config in, and must be absolute,
+// as GOAUTH=git requires. The helper runs with no terminal and no more than
+// gitCredentialTimeout.
+func GitBasicAuth(dir, rawURL string) (*url.Userinfo, error) {
+	if dir == "" || !filepath.IsAbs(dir) {
+		return nil, fmt.Errorf("git credential needs an absolute working directory, got %q", dir)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), gitCredentialTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "credential", "fill")
+	cmd.Dir = dir
+	cmd.Stdin = strings.NewReader(fmt.Sprintf("url=%s\n", rawURL))
+	// GIT_TERMINAL_PROMPT=0 and an empty GIT_ASKPASS make a helper that has no
+	// credential fail rather than prompt on the terminal it does not have.
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=")
+	cmd.WaitDelay = gitCredentialTimeout
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("'git credential fill' failed (url=%s): %w", rawURL, err)
+	}
+	prefix, username, password := parseGitAuth(out)
+	if prefix == "" || username == "" || password == "" {
+		return nil, fmt.Errorf("'git credential fill' returned no credential for %s", rawURL)
+	}
+	if !strings.HasPrefix(rawURL, prefix) {
+		return nil, fmt.Errorf("requested a credential for %s, got one for %s", rawURL, prefix)
+	}
+	return url.UserPassword(username, password), nil
+}
 
 const maxTries = 3
 
@@ -47,7 +89,9 @@ func runGitAuth(client *http.Client, dir, url string) (string, http.Header, erro
 	cmd.Stdin = strings.NewReader(fmt.Sprintf("url=%s\n", url))
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", nil, fmt.Errorf("'git credential fill' failed (url=%s): %w\n%s", url, err, out)
+		// out may hold the credential git printed before it failed, so it is
+		// named only in the error, never echoed.
+		return "", nil, fmt.Errorf("'git credential fill' failed (url=%s): %w", url, err)
 	}
 	parsedPrefix, username, password := parseGitAuth(out)
 	if parsedPrefix == "" {

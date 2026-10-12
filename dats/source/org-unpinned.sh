@@ -1,21 +1,12 @@
 #!/bin/sh
 # org-unpinned.sh FILE... -- refuse a frozen version of an org dependency.
-#
-# 1. A submodule under github.com/wow-look-at-my names a branch to follow,
-#    which src/submodulebranch.bash hands to `git submodule update --remote`.
-# 2. A line naming an org module carries no dated version: go.mod,
-#    vendor/modules.txt and go.sum hold the placeholder `vN.0.0` for the
-#    path's major, and cmd/go resolves it to the branch head in memory.
-# 3. A step that `uses:` an org action takes a branch, never a tag or a sha.
-#
-# Exit: 0 nothing is pinned, 2 something is.
 set -eu
 
 tab=$(printf '\t')
 rc=0
 
 # placeholder reports whether a version token is the placeholder a version file
-# records for an org module: vN.0.0, for any decimal major, with no pre-release
+# records for an org module: vN.0.0, for any decimal major. With no pre-release
 # part and no pseudo-version date.
 placeholder() {
 	case $1 in
@@ -116,6 +107,11 @@ for path in "$@"; do
 				report "$(printf '%s:%d: org action pinned to %s' "$path" "$num" "$ref")"
 			fi
 			continue
+		fi
+		# A third-party module replaced by an org module keeps its own version on the left of =>.
+		left=${text%%=>*}
+		if [ "$left" != "$text" ] && [ "${left#*wow-look-at-my/}" = "$left" ]; then
+			text=${text#*=>}
 		fi
 		if version=$(pinnedVersion "$text"); then
 			report "$(printf '%s:%d: org module pinned to %s' "$path" "$num" "$version")"

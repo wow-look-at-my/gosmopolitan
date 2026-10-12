@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package main
+package pack
 
 import (
 	"bufio"
@@ -24,8 +24,7 @@ import (
 // GO_PACKTEST_IS_PACK is set, and runs the tests otherwise.
 func TestMain(m *testing.M) {
 	if os.Getenv("GO_PACKTEST_IS_PACK") != "" {
-		main()
-		os.Exit(0)
+		os.Exit(Main(os.Args[1:]))
 	}
 
 	os.Setenv("GO_PACKTEST_IS_PACK", "1") // Set for subprocesses to inherit.

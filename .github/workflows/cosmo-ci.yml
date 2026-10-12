@@ -7,35 +7,47 @@ on:
     # matches every branch and no tag, so a tag push does not re-enter this workflow.
     branches: ['**']
 
+concurrency:
+  group: gha_${{ github.repository }}_${{ github.workflow }}_${{ github.ref != 'refs/heads/master' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
 jobs:
   # Every check that reads the tree and nothing else. It waits on no build, so a violation is named within the minute.
   source-checks:
-    timeout-minutes: 10
+    timeout-minutes: ${{ github.ref == 'refs/heads/master' && 20 || 10 }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
 
     steps:
       - uses: actions/checkout@v4
-      - uses: wow-look-at-my/actions@common-checks#latest
+      - uses: wow-look-at-my/actions@no-all-builds-job#latest
+      - uses: wow-look-at-my/slopfix@master
+      - uses: wow-look-at-my/actions@no-tests-in-yaml#latest
+      - uses: wow-look-at-my/actions@push-excludes-tags#latest
+      - uses: wow-look-at-my/actions@ste-lint#latest
 
       - name: The source suites
         uses: wow-look-at-my/dats@master
         with:
           tests: dats/source
 
+      - if: failure()
+        uses: wow-look-at-my/actions@fail-fast#latest
+
   # Build Go toolchain and APE test binary on each build platform -- see docs/CI.md "build job".
   build:
     # make.bash plus the APE builds; the suite is its own job.
-    timeout-minutes: 45
+    timeout-minutes: ${{ github.ref == 'refs/heads/master' && 90 || 45 }}
     permissions:
       id-token: write
       contents: read
+      actions: write
     strategy:
       fail-fast: true
       matrix:
         build-os: [macos-latest, windows-latest]
-        # NT is the longest leg by far, so it is excluded rather than built. Drop this exclude to build it again. waiver-expires: 2026-10-13
-        exclude:
-          - build-os: windows-latest
 
     runs-on: ${{ matrix.build-os }}
 
@@ -44,8 +56,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
-      # The org's gates, and the scanner it turns off. It carries yaml-comment-block, so this file names that one no more.
-      - uses: wow-look-at-my/actions@common-checks#latest
+          lfs: true
+      - uses: wow-look-at-my/actions@disable-windows-defender#latest
       - uses: wow-look-at-my/actions@secret-server#latest
       - uses: ./.github/actions/track-submodules
 
@@ -58,9 +70,12 @@ jobs:
           go-version: '1.24'
           cache: false
 
+      # make.bat and make.bash compile the APE loaders with these.
+      - uses: ./.github/actions/apeld-tools
+
       - name: Build Go toolchain
         # A cold build, with the shared cache unreachable, takes over 8 minutes on macOS.
-        timeout-minutes: 20
+        timeout-minutes: ${{ github.ref == 'refs/heads/master' && 40 || 20 }}
         uses: wow-look-at-my/actions/multicmd@master
         with:
           unix: cd src && ./make.bash -v
@@ -70,18 +85,23 @@ jobs:
 
       - uses: ./.github/actions/build-leg
 
-  # The ubuntu build leg, its own job so cosmo-checks, wasm and wasm-suite take its toolchain the moment it exists: needs waits on a whole matrix.
+      - if: failure()
+        uses: wow-look-at-my/actions@fail-fast#latest
+
+  # The ubuntu build leg, its own job so cosmo-checks, wasm and wasm-suite take its toolchain the moment it exists: needs waits. On a whole matrix.
   build-linux:
-    timeout-minutes: 45
+    timeout-minutes: ${{ github.ref == 'refs/heads/master' && 90 || 45 }}
     permissions:
       id-token: write
       contents: read
+      actions: write
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: true
-      - uses: wow-look-at-my/actions@common-checks#latest
+          lfs: true
+      - uses: wow-look-at-my/actions@disable-windows-defender#latest
       - uses: wow-look-at-my/actions@secret-server#latest
       - uses: ./.github/actions/track-submodules
 
@@ -94,8 +114,11 @@ jobs:
           go-version: '1.24'
           cache: false
 
+      # make.bash compiles the APE loaders with these.
+      - uses: ./.github/actions/apeld-tools
+
       - name: Build Go toolchain
-        timeout-minutes: 20
+        timeout-minutes: ${{ github.ref == 'refs/heads/master' && 40 || 20 }}
         shell: bash
         run: cd src && ./make.bash -v
         env:
@@ -103,16 +126,19 @@ jobs:
 
       - uses: ./.github/actions/build-leg
 
+      - if: failure()
+        uses: wow-look-at-my/actions@fail-fast#latest
+
   # The whole suite per host, one leg each; nothing downstream of a build waits on it.
   suite:
-    timeout-minutes: 300
+    timeout-minutes: ${{ github.ref == 'refs/heads/master' && 600 || 300 }}
     needs: [build, build-linux]
     permissions:
       id-token: write
       contents: read
+      actions: write
     strategy:
-      # Every leg runs to the end and reports. One host's red says nothing about the other five, and a suite exists to name everything that is broken at once.
-      fail-fast: false
+      fail-fast: true
       matrix:
         # NT is off: it is the longest leg by far. Put windows-latest back to run it again. waiver-expires: 2026-10-13
         suite-os: [ubuntu-latest, macos-latest]
@@ -134,7 +160,7 @@ jobs:
         shell: pwsh
         run: |
           $gb = 1GB
-          # Which drive has room decides whether this does anything: the workspace and RUNNER_TEMP are both on D:, and only the caches under the profile sit on C:.
+          # Which drive has room decides whether this does anything. The workspace and RUNNER_TEMP are both on D:, and only the caches under the profile sit on C:.
           Get-PSDrive -PSProvider FileSystem | Where-Object { $null -ne $_.Free } | ForEach-Object {
             Write-Host ("before: {0}: {1:N1} GB free of {2:N1} GB" -f $_.Name, ($_.Free/$gb), (($_.Free + $_.Used)/$gb))
           }
@@ -156,7 +182,7 @@ jobs:
             'C:\hostedtoolcache\windows\Python',
             'C:\hostedtoolcache\windows\node'
           )
-          # rd walks a tree one entry at a time. robocopy mirrors an empty directory over each tree with many threads instead, which frees the space and leaves a shell of empty directories nothing reads again.
+          # rd walks a tree one entry at a time. robocopy mirrors an empty directory over each tree with many threads instead. This frees the space and leaves a shell of empty directories nothing reads again.
           $empty = Join-Path $env:RUNNER_TEMP 'empty-for-mirror'
           New-Item -ItemType Directory -Force -Path $empty | Out-Null
           # An unlink is an MFT update and those serialize per volume, so four trees at eight threads is past the point where more helps.
@@ -172,12 +198,15 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
-      - uses: wow-look-at-my/actions@common-checks#latest
+          lfs: true
+      - uses: wow-look-at-my/actions@disable-windows-defender#latest
       - uses: wow-look-at-my/actions@secret-server#latest
       # run.bash rebuilds the cmd packages from this tree, so the suite tests the client source the build leg linked in.
       - uses: ./.github/actions/track-submodules
       # run.bash reaches the same sandboxed generate directives the build leg does.
       - uses: wow-look-at-my/actions@bubblewrap#latest
+      # TestRepeatBootstrap runs make.bash again, which compiles the APE loaders with these.
+      - uses: ./.github/actions/apeld-tools
 
       # The suite is what wants the room, so the deletion is joined here. wait-all takes no if, and a host that backgrounded nothing passes straight through.
       - name: Wait for the room the suite needs
@@ -193,7 +222,12 @@ jobs:
         shell: bash
         run: ./bin/go version
 
-      # This image's gcc links libwinpthread as a DLL that lives in C:\mingw64\bin and nowhere else, so a binary carrying any cgo package reaches it through PATH alone and dies at load with 0xc0000135 once a test narrows PATH or hands a child an environment without one. The loader reads the system directory whatever the environment says, so a copy there is found by every binary, and the stdlib archives the suite links against were built before this step runs.
+      # The dats sandbox mounts .git read-only, so git status there cannot run the LFS clean filter on a file the restore rewrote.
+      - name: Refresh the index here, where .git is writable
+        shell: bash
+        run: git update-index -q --ignore-submodules --refresh
+
+      # Consider this image's gcc links. Those links libwinpthread as a DLL that lives in C:\mingw64\bin and nowhere else. A binary carrying any cgo package reaches it through PATH alone and dies at load with 0xc0000135 once a test narrows PATH. It hands a child an environment without one. The loader reads the system directory whatever the environment says. A copy there is found by every binary, and the stdlib archives the suite links against were built before this step runs.
       - name: Put the mingw runtime where the loader always looks (NT)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -250,15 +284,50 @@ jobs:
           & "$env:RUNNER_TEMP\dats.exe" -v --no-sandbox test dats/host
           exit $LASTEXITCODE
 
+      # The runner's forwarder at 192.168.64.1 answers an NXDOMAIN query late or never, which net's TestLookupNoSuchHost reads as a timeout. Public resolvers answer it at once, and the last dig proves the system resolver now does too.
+      - name: A resolver that answers NXDOMAIN (darwin)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "before:"
+          scutil --dns | grep -E 'nameserver\[0\]' || true
+          networksetup -listallnetworkservices | while IFS= read -r service; do
+            case "$service" in 'An asterisk'*|'*'*) continue ;; esac
+            sudo networksetup -setdnsservers "$service" 1.1.1.1 8.8.8.8 || echo "no DNS setting on $service"
+          done
+          echo "after:"
+          scutil --dns | grep -E 'nameserver\[0\]'
+          grep nameserver /etc/resolv.conf
+          dig +time=3 +tries=1 invalid.invalid. @1.1.1.1 | grep -E 'status: NXDOMAIN'
+          dig +time=3 +tries=1 invalid.invalid. | grep -E 'status: NXDOMAIN'
+
+      # The suite profile records every process's CPU and samples call stacks system-wide.
+      - name: Profiling tools (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: sudo apt-get install -y -qq acct linux-tools-common "linux-tools-$(uname -r)"
+
       - name: The whole test suite (run.bash)
         # the distribution's own all-tests entry point, on every host it builds on. tee feeds the timing step; `shell: bash` is -o pipefail, so a red suite still fails. see docs/CI.md.
+        id: suite
         if: runner.os != 'Windows'
         shell: bash
         run: |
           sh "$GITHUB_WORKSPACE/.github/resource-log.sh" &
           probe=$!
           trap 'kill "$probe"' EXIT
-          cd src && ./run.bash 2>&1 | tee "$RUNNER_TEMP/suite.log"
+          if [ "$RUNNER_OS" = Linux ]; then
+            bash misc/suiteprof/profile-suite.bash "${{ runner.temp }}/suiteprof" | tee "${{ runner.temp }}/suite.log"
+          else
+            cd src && ./run.bash 2>&1 | tee "${{ runner.temp }}/suite.log"
+          fi
+
+      # profile-suite.bash writes the report once it starts, so a suite step that ran has one, and a step that never started has none.
+      - name: Where the suite spent its CPU (Linux)
+        if: always() && runner.os == 'Linux' && contains(fromJSON('["success","failure","cancelled"]'), steps.suite.outcome)
+        shell: bash
+        run: cat "${{ runner.temp }}/suiteprof/report.md" >> "$GITHUB_STEP_SUMMARY"
 
       # Strawberry's patch 2.5.9 leads PATH here and asserts partway through a two-file diff, which is what go mod tidy -diff writes. This picks one that applies such a diff, proven by applying one.
       - name: A patch that applies a multi-file diff (NT)
@@ -310,7 +379,7 @@ jobs:
           }
           exit $status
 
-      - name: What the suite spent its time on
+      - name: Test coverage, and what the suite spent its time on
         # runs on a red suite too: the slow packages are most worth seeing when it failed. A missing log is a no-op, never a second failure.
         if: always()
         uses: wow-look-at-my/actions@typescript#latest
@@ -327,8 +396,21 @@ jobs:
               core.info('no suite.log; nothing to report');
               return;
             }
+            const logLines = fs.readFileSync(logPath, 'utf-8').split(/\r?\n/);
+            // dist test ends with this block, ahead of its verdict line.
+            const coverageAt = logLines.indexOf('##### Test coverage');
+            if (coverageAt < 0) {
+              core.error('suite.log has no "##### Test coverage" block; dist test stopped before it measured coverage');
+            } else {
+              const block = [`### Test coverage (${required('RUNNER_OS')})`];
+              for (const line of logLines.slice(coverageAt + 1)) {
+                if (/^(FAILED|ALL TESTS PASSED|NO TESTS TO RUN)/.test(line)) break;
+                block.push(line);
+              }
+              fs.appendFileSync(summaryPath, block.join('\n').trimEnd() + '\n\n');
+            }
             const rows = [];
-            for (const line of fs.readFileSync(logPath, 'utf-8').split('\n')) {
+            for (const line of logLines) {
               // dist test prints one of these per package it ran.
               const hit = /^ok\s+(\S+)\s+([0-9.]+)s/.exec(line);
               if (hit) rows.push({ pkg: hit[1], secs: Number(hit[2]) });
@@ -354,19 +436,24 @@ jobs:
             fs.appendFileSync(summaryPath, lines.join('\n') + '\n');
             core.info(`recorded ${rows.length} package timings`);
 
+      - if: failure()
+        uses: wow-look-at-my/actions@fail-fast#latest
+
   # Checks whose answer does not depend on the host. Each runs once, here, on the linux toolchain.
   cosmo-checks:
-    timeout-minutes: 60
+    timeout-minutes: ${{ github.ref == 'refs/heads/master' && 120 || 60 }}
     needs: build-linux
     permissions:
       id-token: write
       contents: read
+      actions: write
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: true
+          lfs: true
       - uses: wow-look-at-my/actions@secret-server#latest
       # embedded-std.dats rebuilds the go command from this tree, so the submodules carry their branch heads here too.
       - uses: ./.github/actions/track-submodules
@@ -377,9 +464,19 @@ jobs:
           name: toolchain-Linux
           path: .
 
+      # The restore rewrites LFS files, and a sandboxed git cannot run the LFS clean filter on a read-only .git.
+      - name: Refresh the git index after the restore
+        shell: bash
+        run: git update-index -q --refresh
+
       - name: The restored go answers
         shell: bash
         run: ./bin/go version
+
+      # The dats sandbox mounts .git read-only, so git status there cannot run the LFS clean filter on a file the restore rewrote.
+      - name: Refresh the index here, where .git is writable
+        shell: bash
+        run: git update-index -q --ignore-submodules --refresh
 
       # An APE starts through its loader, and execve of one reaches the loader only through this entry. F pre-opens it, so the path stops mattering.
       - name: Let the kernel exec an APE directly
@@ -392,43 +489,34 @@ jobs:
           printf ':APE:M::MZqFpD=\x27::%s:F' "$l" | sudo tee /proc/sys/fs/binfmt_misc/register >/dev/null
           cat /proc/sys/fs/binfmt_misc/APE
 
-      # apeld-reproducible.dats rebuilds the committed APE loaders with these; the tarball is pinned by digest so they cannot drift with a zig release.
-      - name: Install the toolchain that builds the APE loaders
+      # cosmo-cgo.dats compiles C for both cosmo architectures and runs the arm64 payload under qemu.
+      - uses: ./.github/actions/cosmocc
+      - name: Install qemu-user
         shell: bash
-        env:
-          ZIG_VERSION: 0.16.0
-          ZIG_SHA256: 70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
-        run: |
-          set -euo pipefail
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq lld-18 llvm-18
-          url="https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz"
-          curl -fsSL "$url" -o /tmp/zig.tar.xz
-          echo "${ZIG_SHA256}  /tmp/zig.tar.xz" | sha256sum -c -
-          sudo tar -xf /tmp/zig.tar.xz -C /opt
-          echo "/opt/zig-x86_64-linux-${ZIG_VERSION}" >> "$GITHUB_PATH"
-          echo "LLD=/usr/lib/llvm-18/bin/ld64.lld" >> "$GITHUB_ENV"
-          echo "STRIP=llvm-strip-18" >> "$GITHUB_ENV"
+        run: sudo apt-get install -y -qq qemu-user
 
       # Every host-independent suite. Which tests each covers is the suite's decision, not this file's.
       - name: The dats suites
-        timeout-minutes: 45
+        timeout-minutes: ${{ github.ref == 'refs/heads/master' && 90 || 45 }}
         uses: wow-look-at-my/dats@master
         with:
           tests: dats/checks
 
+      - if: failure()
+        uses: wow-look-at-my/actions@fail-fast#latest
+
   # Test all APE binaries on each platform using Go tests -- see docs/CI.md "test job".
   test:
     # NT links more and links it slower, so it gets 40 minutes where the others get 25.
-    timeout-minutes: ${{ matrix.test-os == 'windows-latest' && 40 || 25 }}
+    timeout-minutes: ${{ matrix.test-os == 'windows-latest' && (github.ref == 'refs/heads/master' && 80 || 40) || (github.ref == 'refs/heads/master' && 50 || 25) }}
     needs: [build, build-linux]
+    permissions:
+      contents: read
+      actions: write
     strategy:
       fail-fast: true
       matrix:
         test-os: [ubuntu-latest, macos-latest, windows-latest]
-        # NT is the longest leg by far, so it is excluded rather than run. Drop this exclude to run it again. waiver-expires: 2026-10-13
-        exclude:
-          - test-os: windows-latest
 
     runs-on: ${{ matrix.test-os }}
 
@@ -437,8 +525,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: true
+          lfs: true
 
-      - uses: wow-look-at-my/actions@common-checks#latest
+      - uses: wow-look-at-my/actions@disable-windows-defender#latest
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -468,11 +557,20 @@ jobs:
 
       # Prefetched separately so a stalled module download can't masquerade as a hung test step.
       - name: Download apetest modules
-        timeout-minutes: 3
+        timeout-minutes: ${{ github.ref == 'refs/heads/master' && 6 || 3 }}
         shell: bash
         run: |
           cd testdata/ape/apetest
           sh ./with-deadline.sh 150 go mod download
+
+      # This job builds no toolchain, so the loaders come from the build leg that compiled them, to where a toolchain keeps them.
+      - name: Put the APE loaders where the toolchain keeps them
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p src/cmd/link/internal/ld/apeld/bin
+          cp binaries/ape-binary-${{ runner.os }}/apeld/apeld-* src/cmd/link/internal/ld/apeld/bin/
+          ls -l src/cmd/link/internal/ld/apeld/bin
 
       # An APE starts through its loader, and execve of one reaches the loader only through this entry. F pre-opens it, so the path stops mattering.
       - name: Let the kernel exec an APE directly
@@ -490,7 +588,7 @@ jobs:
       # apetest per origin then the subsets, and the read-only boot. readonly-boot is unix-only: NTFS ignores the mode bit it relies on, and nt.dats carries that claim for NT.
       - name: The APE binaries run on this host (dats)
         if: matrix.test-os != 'windows-latest'
-        timeout-minutes: 45
+        timeout-minutes: ${{ github.ref == 'refs/heads/master' && 90 || 45 }}
         uses: wow-look-at-my/dats@master
         with:
           tests: dats/test/apetest.dats dats/test/readonly-boot.dats
@@ -501,7 +599,7 @@ jobs:
       # The container shape is built from mount namespaces, so it is linux only.
       - name: An APE runs in a read-only container (dats)
         if: runner.os == 'Linux'
-        timeout-minutes: 10
+        timeout-minutes: ${{ github.ref == 'refs/heads/master' && 20 || 10 }}
         uses: wow-look-at-my/dats@master
         with:
           tests: dats/test/readonly-boot-container.dats
@@ -516,7 +614,7 @@ jobs:
 
       - name: The APE binaries run on this host, and the NT host suite (dats, on NT)
         if: matrix.test-os == 'windows-latest'
-        timeout-minutes: 45
+        timeout-minutes: ${{ github.ref == 'refs/heads/master' && 90 || 45 }}
         shell: pwsh
         env:
           DATS_BIN: ${{ steps.dats.outputs.path }}
@@ -525,15 +623,19 @@ jobs:
           & "$env:RUNNER_TEMP\dats.exe" -v --no-sandbox test dats/test/apetest.dats dats/test/nt.dats
           exit $LASTEXITCODE
 
+      - if: failure()
+        uses: wow-look-at-my/actions@fail-fast#latest
+
   # Regression-gate the WebAssembly ports (GOOS=js and GOOS=wasip1) -- see docs/WASM.md and docs/CI.md "wasm job".
   wasm:
     # Off while the wasip1 suite recompiles its modules and starves the queue; flip the condition back to re-enable. waiver-expires: 2026-10-13
     if: ${{ false }}
-    timeout-minutes: 45
+    timeout-minutes: ${{ github.ref == 'refs/heads/master' && 90 || 45 }}
     needs: build-linux
     permissions:
       id-token: write
       contents: read
+      actions: write
     runs-on: ubuntu-latest
 
     steps:
@@ -541,6 +643,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: true
+          lfs: true
 
       - uses: wow-look-at-my/actions@secret-server#latest
 
@@ -558,9 +661,9 @@ jobs:
 
       - name: Install wazero (wasip1 runtime)
         # Runs before the fork toolchain is built so `go` is unambiguously the setup-go bootstrap -- see docs/CI.md "wasm job".
-        timeout-minutes: 5
+        timeout-minutes: ${{ github.ref == 'refs/heads/master' && 10 || 5 }}
         shell: bash
-        run: GOOS=linux GOARCH=amd64 GOBIN="$RUNNER_TEMP/wasibin" go install github.com/tetratelabs/wazero/cmd/wazero@v1.12.0 && sudo install -m 0755 "$RUNNER_TEMP/wasibin/wazero" /usr/local/bin/wazero
+        run: GOOS=linux GOARCH=amd64 GOBIN="${{ runner.temp }}/wasibin" go install github.com/tetratelabs/wazero/cmd/wazero@v1.12.0 && sudo install -m 0755 "${{ runner.temp }}/wasibin/wazero" /usr/local/bin/wazero
 
       - name: Take the toolchain build-linux built
         uses: wow-look-at-my/actions@cache-download#latest
@@ -572,22 +675,31 @@ jobs:
         shell: bash
         run: ./bin/go version
 
+      # The dats sandbox mounts .git read-only, so git status there cannot run the LFS clean filter on a file the restore rewrote.
+      - name: Refresh the index here, where .git is writable
+        shell: bash
+        run: git update-index -q --ignore-submodules --refresh
+
       # Every wasm suite: std for both ports, the object writer, the node and wasip1sock transports, wasmexport and GOWASM=threads.
       - name: The wasm dats suites
-        timeout-minutes: 40
+        timeout-minutes: ${{ github.ref == 'refs/heads/master' && 80 || 40 }}
         uses: wow-look-at-my/dats@master
         with:
           tests: dats/wasm
+
+      - if: failure()
+        uses: wow-look-at-my/actions@fail-fast#latest
 
   # The whole test suite for each wasm port, the gate the other ports get -- see docs/CI.md "wasm-suite job".
   wasm-suite:
     # Off while the wasip1 suite recompiles its modules and starves the queue; flip the condition back to re-enable. waiver-expires: 2026-10-13
     if: ${{ false }}
-    timeout-minutes: 120
+    timeout-minutes: ${{ github.ref == 'refs/heads/master' && 240 || 120 }}
     needs: build-linux
     permissions:
       id-token: write
       contents: read
+      actions: write
     runs-on: ubuntu-latest
     strategy:
       fail-fast: true
@@ -599,6 +711,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: true
+          lfs: true
 
       - uses: wow-look-at-my/actions@secret-server#latest
 
@@ -615,13 +728,13 @@ jobs:
           node-version: '22'
 
       - name: Install wasmtime (wasip1 runtime)
-        # The exec wrapper's default engine, at the release upstream's wasip1 builder pins: v15 onward answers a FIFO read with ESPIPE (wasitest TestNonblock), and wazero sits 10 pages over test/wasmmemsize's ceiling.
+        # The exec wrapper's default engine, at the release upstream's wasip1 builder pins: v15 onward answers a FIFO read with ESPIPE (wasitest TestNonblock), and wazero sits 10 pages. Over test/wasmmemsize's ceiling.
         if: matrix.port == 'wasip1'
-        timeout-minutes: 5
+        timeout-minutes: ${{ github.ref == 'refs/heads/master' && 10 || 5 }}
         shell: bash
         run: curl -sSfL https://wasmtime.dev/install.sh | bash -s -- --version v14.0.4
 
-      # wasmtime compiles each test binary's module before running it, and that compile is most of a cheap package: sort.test costs 2.53s cold against 1.05s warm.
+      # wasmtime compiles each test binary's module before running it. That compile is most of a cheap package: sort.test costs 2.53s cold against 1.05s warm.
       - name: Keep the compiled wasm modules between runs
         if: matrix.port == 'wasip1'
         uses: actions/cache@v4
@@ -640,6 +753,11 @@ jobs:
       - name: The restored go answers
         shell: bash
         run: ./bin/go version
+
+      # The dats sandbox mounts .git read-only, so git status there cannot run the LFS clean filter on a file the restore rewrote.
+      - name: Refresh the index here, where .git is writable
+        shell: bash
+        run: git update-index -q --ignore-submodules --refresh
 
       - name: The whole test suite (dist test)
         # Actions withholds this job's log for the hour it runs, so the command streams live instead.
@@ -701,10 +819,13 @@ jobs:
         env:
           WASM_PORT: ${{ matrix.port }}
 
+      - if: failure()
+        uses: wow-look-at-my/actions@fail-fast#latest
+
 
   # Publishes an installable toolchain distribution to buildhost on every green push -- see docs/CI.md "publish jobs".
   publish-create:
-    timeout-minutes: 10
+    timeout-minutes: ${{ github.ref == 'refs/heads/master' && 20 || 10 }}
     # Switching the wasm legs back on goes with putting them back here: a needed job reporting `skipped` skips this one.
     needs: [source-checks, build, build-linux, suite, cosmo-checks, test]
     runs-on: ubuntu-latest
@@ -720,6 +841,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: true
+          lfs: true
 
       - name: Create buildhost release
         # No version input: buildhost auto-increments it. See docs/CI.md "publish jobs".
@@ -730,7 +852,7 @@ jobs:
 
   # Uploading is generic work, so it takes the cheapest runner. Each build leg packaged its own archive; this job only moves them to buildhost.
   publish-upload:
-    timeout-minutes: 15
+    timeout-minutes: ${{ github.ref == 'refs/heads/master' && 30 || 15 }}
     needs: publish-create
     runs-on: ubuntu-latest
     strategy:
@@ -775,7 +897,7 @@ jobs:
             core.setOutput('name', names[0]);
 
       - name: Upload toolchain tarball
-        timeout-minutes: 10
+        timeout-minutes: ${{ github.ref == 'refs/heads/master' && 20 || 10 }}
         uses: wow-look-at-my/buildhost/.github/actions/buildhost-upload-artifact@master
         with:
           project: gosmopolitan
@@ -792,7 +914,7 @@ jobs:
           echo "::notice::uploaded ${{ steps.tarball.outputs.name }} to gosmopolitan v${{ needs.publish-create.outputs.version }} (${{ matrix.goos }}/${{ matrix.goarch }})"
 
   publish-finish:
-    timeout-minutes: 10
+    timeout-minutes: ${{ github.ref == 'refs/heads/master' && 20 || 10 }}
     needs: [publish-create, publish-upload]
     runs-on: ubuntu-latest
     permissions:
@@ -805,6 +927,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: true
+          lfs: true
 
       - name: Publish buildhost release
         uses: wow-look-at-my/buildhost/.github/actions/buildhost-publish-release@master
@@ -820,3 +943,17 @@ jobs:
           echo "::notice::published gosmopolitan v$v for linux/amd64 and darwin/arm64"
           echo "::notice::linux:  https://dl.pazer.build/gosmopolitan?branch=$b&os=linux&arch=amd64"
           echo "::notice::darwin: https://dl.pazer.build/gosmopolitan?branch=$b&os=darwin&arch=arm64"
+
+  # A run hands off about 1.5GB, and the repository's cache holds 10GB. Concurrent runs evict each other's hand-offs unless each run drops its own when its readers finish.
+  cleanup:
+    needs: [suite, cosmo-checks, test, wasm, wasm-suite, publish-upload, publish-finish]
+    # A cancelled or failed run still has hand-offs to drop; without this the job is skipped and they are orphaned.
+    if: always()
+    timeout-minutes: ${{ github.ref == 'refs/heads/master' && 20 || 10 }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: wow-look-at-my/actions@cache-cleanup#latest
+        if: always()

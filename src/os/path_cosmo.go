@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo
 
@@ -8,17 +7,10 @@ package os
 
 import "runtime"
 
-// PathSeparator stays the slash. Cosmopolitan's own file calls take it, and NT
-// accepts it beside the backslash, so one value serves every host.
+// PathSeparator stays the slash.
 const PathSeparator = '/' // OS-specific path separator
 
-// PathListSeparator cannot be compiled in. One APE runs where PATH is split on
-// a colon and where it is split on a semicolon, so the value belongs to the
-// host rather than to the build. The entry stub records the host before any Go
-// code runs, so this is answered by the time package initialization reads it.
-//
-// It is a rune rather than an untyped constant, so a comparison against a byte
-// needs a conversion. That is why the callers here spell rune(b).
+// PathListSeparator cannot be compiled in.
 var PathListSeparator = hostPathListSeparator() // OS-specific path list separator
 
 func hostPathListSeparator() rune {

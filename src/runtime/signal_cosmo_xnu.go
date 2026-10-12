@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo && arm64
 
@@ -9,25 +8,10 @@ package runtime
 import "unsafe"
 
 // Real signal-handler installation on macOS hosts (hostos == XNU).
-//
-// The shared runtime code speaks Linux: Linux signal numbers, Linux
-// sigactiont and stackt layouts, Linux flag values, Linux 8-byte
-// sigsets. Everything below translates at the boundary and calls Apple
-// libc through the APE loader's Syslib.
-//
-// All of it can run in the narrowest runtime contexts: setsig,
-// setsigstack and getsig during dieFromSignal on the signal stack, and
-// clearSignalHandlers and msigrestore in a child between fork and
-// exec. So everything is nosplit, takes no locks, allocates nothing,
-// and calls only pre-resolved async-signal-safe libc entries.
 
-// The Apple sigaction flag values and both translation directions live
-// in signal_cosmo_xnu_flags.go, which carries no architecture tag: amd64
-// reaches Apple sigaction through the raw __sigaction syscall rather
-// than the Syslib, and the flags are identical either way.
+// The Apple sigaction flag values and both translation directions live in signal_cosmo_xnu_flags.go, which carries no architecture tag.
 
-// Apple sigaltstack flag values. SS_ONSTACK is 1 on both systems;
-// SS_DISABLE is 4 on Apple, 2 on Linux (_SS_DISABLE, os2_cosmo.go).
+// Apple sigaltstack flag values.
 const (
 	xnuSS_ONSTACK = 0x1
 	xnuSS_DISABLE = 0x4
@@ -36,24 +20,20 @@ const (
 	xnuMINSIGSTKSZ = 32768
 )
 
-// xnuSigactiont is Apple's libc struct sigaction (what sigaction(2)'s
-// libc wrapper takes; upstream runtime calls it usigactiont). The
-// kernel-side trampoline field does not appear here - libc adds it.
+// xnuSigactiont is Apple's libc struct sigaction (what sigaction(2)'s libc
+// wrapper takes; upstream runtime calls it usigactiont).
 type xnuSigactiont struct {
 	sa_handler uintptr
 	sa_mask    uint32
 	sa_flags   int32
 }
 
-// darwinSigaction implements sysSigaction on XNU hosts, over Syslib
-// offset 272, a sysret-wrapped passthrough to Apple libc sigaction. It
-// takes Apple's struct sigaction {handler, mask u32, flags i32} with
-// APPLE numbers and flag values, and libc supplies its own trampoline,
-// which invokes the handler under SA_SIGINFO and calls sigreturn. So
-// sigtramp here just returns and needs no restorer. A signal with no
-// Apple equivalent succeeds as a no-op, because it cannot be generated
-// on an XNU host and initsig stays oblivious; reading one back reports
-// SIG_DFL. Answers 0 on success, like rt_sigaction.
+// It takes Apple's struct sigaction {handler, mask u32, flags i32} with APPLE
+// numbers and flag values, and libc supplies its own trampoline. This invokes
+// the handler under SA_SIGINFO and calls sigreturn. So sigtramp here returns
+// and needs no restorer. A signal with no Apple equivalent succeeds as a
+// no-op, because it cannot be generated on an XNU host and initsig stays
+// oblivious. Reading one back reports SIG_DFL.
 //
 //go:nosplit
 //go:nowritebarrierrec
@@ -72,8 +52,6 @@ func darwinSigaction(sig uint32, new, old *sigactiont) int32 {
 	var anew, aold xnuSigactiont
 	var anewp, aoldp uintptr
 	if new != nil {
-		// SIG_DFL (0) and SIG_IGN (1) coincide on both systems; real
-		// handler pointers (our sigtramp) pass through untranslated.
 		anew.sa_handler = new.sa_handler
 		anew.sa_flags = xnuSigFlagsL2A(new.sa_flags)
 		anew.sa_mask = cosmoSigmaskL2A(new.sa_mask)
@@ -82,7 +60,6 @@ func darwinSigaction(sig uint32, new, old *sigactiont) int32 {
 	if old != nil {
 		aoldp = uintptr(unsafe.Pointer(&aold))
 	}
-	// Sysret-wrapped: 0 or -errno (Apple numbering).
 	if int64(cosmoLibcCall6(lib.sigaction, uintptr(asig), anewp, aoldp, 0, 0, 0)) < 0 {
 		return -1
 	}
@@ -95,13 +72,8 @@ func darwinSigaction(sig uint32, new, old *sigactiont) int32 {
 	return 0
 }
 
-// darwinSigprocmask implements sigprocmask on XNU hosts with
-// pthread_sigmask: translate `how` (+1, because Apple's
-// BLOCK/UNBLOCK/SETMASK are 1/2/3 against Linux's 0/1/2) and remap the
-// sigset bits both ways, into a 4-byte Apple sigset. Syslib offset 96
-// is the raw libc function, which answers a positive APPLE errno
-// directly. Crashes on failure like the Linux asm path, so a bad mask
-// can never be silently ignored.
+// Crashes on failure like the Linux asm path, so a bad mask can never be
+// silently ignored.
 //
 //go:nosplit
 //go:nowritebarrierrec
@@ -130,10 +102,6 @@ func darwinSigprocmask(how int32, new, old *sigset) {
 	}
 }
 
-// darwinSigaltstack implements sigaltstack on XNU hosts, translating
-// the Linux arm64 stackt {sp, flags, pad, size} to and from Apple's
-// stack_t {sp, size, flags}, whose SS_DISABLE is 4 against Linux's 2.
-// Syslib offset 296 is sysret-wrapped libc sigaltstack.
 //
 //go:nosplit
 //go:nowritebarrierrec
@@ -151,14 +119,12 @@ func darwinSigaltstack(new, old *stackt) {
 		if new.ss_flags&_SS_DISABLE != 0 {
 			fl |= xnuSS_DISABLE
 		}
-		if new.ss_flags&xnuSS_ONSTACK != 0 { // SS_ONSTACK is 1 on both
+		if new.ss_flags&xnuSS_ONSTACK != 0 {
 			fl |= xnuSS_ONSTACK
 		}
 		anew.ss_flags = fl
 		if fl&xnuSS_DISABLE != 0 && anew.ss_size < xnuMINSIGSTKSZ {
 			// A disable carries no stack, so Linux sends a zero size.
-			// This host measures the size first and answers ENOMEM, so
-			// the disable never reaches the flag it asked for.
 			anew.ss_size = xnuMINSIGSTKSZ
 		}
 		anewp = uintptr(unsafe.Pointer(&anew))
@@ -166,20 +132,13 @@ func darwinSigaltstack(new, old *stackt) {
 	if old != nil {
 		aoldp = uintptr(unsafe.Pointer(&aold))
 	}
-	// Sysret-wrapped: 0 or -errno (Apple numbering).
 	if r := int64(cosmoLibcCall6(lib.sigaltstack, anewp, aoldp, 0, 0, 0, 0)); r < 0 {
-		// Apple rejects a NEW stack carrying any flag but SS_DISABLE
-		// (EINVAL 22), one smaller than MINSIGSTKSZ (ENOMEM 12), and
-		// any change made while running on it (EPERM 1). Print what it
-		// said and what it was given: the message alone names none of
-		// the three.
 		print("runtime: sigaltstack errno=", -r, " sp=", hex(anew.ss_sp),
 			" size=", anew.ss_size, " flags=", anew.ss_flags, "\n")
 		throw("darwinSigaltstack: sigaltstack failed")
 	}
 	if old != nil {
-		// Uintptr store: stackt.ss_sp is *byte, but this can run in
-		// nowritebarrierrec contexts (same trick as setSignalstackSP).
+		// Uintptr store: stackt.ss_sp is *byte.
 		*(*uintptr)(unsafe.Pointer(&old.ss_sp)) = aold.ss_sp
 		old.ss_size = aold.ss_size
 		var fl int32
@@ -193,9 +152,8 @@ func darwinSigaltstack(new, old *stackt) {
 	}
 }
 
-// sigaltstack dispatches on the host: Apple's stack_t layout and flag
-// values differ from Linux's, so the raw syscall path only serves
-// Linux hosts.
+// sigaltstack dispatches on the host: Apple's stack_t layout and flag values
+// differ from Linux's.
 //
 //go:nosplit
 //go:nowritebarrierrec
@@ -207,22 +165,15 @@ func sigaltstack(new, old *stackt) {
 	sigaltstackLinux(new, old)
 }
 
-// sigaltstackLinux is the raw Linux sigaltstack syscall
-// (sys_cosmo_arm64.s).
-//
 //go:noescape
 func sigaltstackLinux(new, old *stackt)
 
-// darwinSetitimer implements setitimer on XNU hosts. setitimer is not
-// in the Syslib, so this calls Apple libc setitimer, resolved by dlsym
-// at startup; that stub is a shallow syscall wrapper, so the direct
-// cosmoLibcCall6 style applies and no asmcgocall is needed. Apple's
-// tv_usec is a 32-bit suseconds_t where Linux arm64's is an int64, and
-// _ITIMER_* coincides, so mode passes through. Failures are ignored
-// like the Linux asm path: a dead timer surfaces as a zero-sample
-// profile, which the runtimeprobe cpuprof check turns into a loud
-// FAIL. nosplit, so the stack cannot move between taking the pointers
-// and the call.
+// darwinSetitimer implements setitimer on XNU hosts. setitimer is not in the
+// Syslib. This calls Apple libc setitimer, resolved by dlsym at startup.
+// That stub is a shallow syscall wrapper, so the direct cosmoLibcCall6 style
+// applies and no asmcgocall is needed. Apple's tv_usec is a 32-bit
+// suseconds_t where Linux arm64's is an int64, and _ITIMER_* coincides, so
+// mode passes through.
 //
 //go:nosplit
 func darwinSetitimer(mode int32, new, old *itimerval) {

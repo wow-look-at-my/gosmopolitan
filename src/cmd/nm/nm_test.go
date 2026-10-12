@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package main
+package nm
 
 import (
 	"internal/obscuretestdata"
@@ -19,8 +19,7 @@ import (
 // GO_NMTEST_IS_NM is set, and runs the tests otherwise.
 func TestMain(m *testing.M) {
 	if os.Getenv("GO_NMTEST_IS_NM") != "" {
-		main()
-		os.Exit(0)
+		os.Exit(Main(os.Args[1:]))
 	}
 
 	os.Setenv("GO_NMTEST_IS_NM", "1") // Set for subprocesses to inherit.

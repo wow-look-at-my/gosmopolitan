@@ -1,6 +1,5 @@
-// Copyright 2011 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 // Netlink sockets and messages
 
@@ -19,8 +18,6 @@ const (
 	NETLINK_ROUTE = 0x0
 
 	// Interface flags, as a Linux kernel reports them in an IfInfomsg.
-	// These describe netlink DATA, so the Linux values are the right ones
-	// whatever host the APE booted on: no other kernel sends an IfInfomsg.
 	IFF_UP          = 0x1
 	IFF_BROADCAST   = 0x2
 	IFF_LOOPBACK    = 0x8
@@ -106,8 +103,7 @@ func nlmAlignOf(msglen int) int {
 	return (msglen + NLMSG_ALIGNTO - 1) & ^(NLMSG_ALIGNTO - 1)
 }
 
-// Round the length of a netlink route attribute up to align it
-// properly.
+// Round the length of a netlink route attribute up to align it properly.
 func rtaAlignOf(attrlen int) int {
 	return (attrlen + RTA_ALIGNTO - 1) & ^(RTA_ALIGNTO - 1)
 }
@@ -148,9 +144,7 @@ var pageBufPool = &sync.Pool{New: func() any {
 // NetlinkRIB returns routing information base, as known as RIB, which
 // consists of network facility information, states and parameters.
 func NetlinkRIB(proto, family int) ([]byte, error) {
-	// Only a Linux kernel provides netlink. The macOS arm64 and the
-	// Windows socket emulations reject the AF_NETLINK domain, so this
-	// call returns EAFNOSUPPORT on those hosts.
+	// Only a Linux kernel provides netlink.
 	s, err := Socket(AF_NETLINK, SOCK_RAW|SOCK_CLOEXEC, NETLINK_ROUTE)
 	if err != nil {
 		return nil, err

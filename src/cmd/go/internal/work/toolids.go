@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package work
 
@@ -14,13 +13,13 @@ import (
 )
 
 // linkedToolIDs answers the tool IDs of the tools linked into root's binary,
-// as "name=id" pairs sorted by name and joined by commas, or "" when root
-// links no tool. A tool is a GOROOT package directly under cmd, and its ID
-// hashes the content IDs of its package and every package it depends on.
+// as "name=id" pairs sorted by name and joined by commas. Otherwise, "" when
+// root links no tool. A tool is a GOROOT package directly under cmd, and its
+// ID hashes the content IDs of its package and every package it depends on.
 //
 // The ID describes the tool's code and nothing else. A binary that links the
 // go command and its tools is rebuilt whenever any of its own code changes,
-// and the tool ID must not: a compiler that is the same code reads the same
+// and the tool ID must not. A compiler that is the same code reads the same
 // cache entries from whichever binary carries it. Builds of the same tool by
 // different compilers converge once their archives do.
 func linkedToolIDs(root *Action) string {
@@ -67,7 +66,9 @@ func linkedToolIDs(root *Action) string {
 }
 
 // packageContentIDs answers the content ID of top and of every package
-// reachable from it in the action graph, by import path.
+// reachable from it in the action graph, by import path. It reads the action
+// graph, because go build leaves Package.Deps empty. Only go list fills that
+// field.
 func packageContentIDs(top *Action) map[string]string {
 	ids := map[string]string{}
 	seen := map[*Action]bool{}
@@ -77,7 +78,7 @@ func packageContentIDs(top *Action) map[string]string {
 			return
 		}
 		seen[act] = true
-		if isBuiltPackage(act) {
+		if isBuiltPackage(act) || (act.Mode == "embedded std" && act.Package != nil && act.buildID != "") {
 			ids[act.Package.ImportPath] = contentID(act.buildID)
 		}
 		for _, dep := range act.Deps {

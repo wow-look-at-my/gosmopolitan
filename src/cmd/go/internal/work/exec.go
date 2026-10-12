@@ -282,6 +282,15 @@ func (b *Builder) Do(ctx context.Context, root *Action) {
 				if !ok {
 					return
 				}
+				// An interrupt stops the pool from starting anything else,
+				// even when work is already queued: the order of the two
+				// ready cases is the scheduler's choice otherwise.
+				select {
+				case <-base.Interrupted:
+					base.SetExitStatus(1)
+					return
+				default:
+				}
 				// Receiving a value from the semaphore entitles us to take
 				// from its queue.
 				b.exec.Lock()
@@ -336,17 +345,8 @@ func packageOriginKey(pkg *load.Package, trimpath bool, workDir string) string {
 		// builds something in GOROOT. The C compiler does not, so ccompile
 		// passes -ffile-prefix-map for a GOROOT package, which rewrites the
 		// path as though -trimpath were set. Neither leaves a directory in
-		// the output, so GOROOT itself stays out of the key.
-		//
-		// cgo is the exception, and this cache is shared between machines.
-		// cgo writes a //line naming this directory into the Go file it
-		// generates (go.dev/issue/36072), so that output belongs to one
-		// GOROOT. A tree at another path that reused it handed cmd/vet a
-		// path holding no file, and the cgocall pass answered "can't parse
-		// raw cgo file".
-		if len(pkg.CgoFiles)+len(pkg.SwigFiles)+len(pkg.SwigCXXFiles) > 0 {
-			return fmt.Sprintf("cgo dir %s\n", pkg.Dir)
-		}
+		// the output, so GOROOT itself stays out of the key. The cgo files
+		// kept for vet are the exception: see objdirKey.
 		return ""
 	}
 
@@ -359,6 +359,21 @@ func packageOriginKey(pkg *load.Package, trimpath bool, workDir string) string {
 	// No rewrite rule applies, so the object file can name the absolute
 	// directory holding the package.
 	return fmt.Sprintf("dir %s\n", pkg.Dir)
+}
+
+// writesSSADump reports whether compiling p writes an SSA dump into GOSSADIR.
+// GOSSAFUNC asks every compile for one, and an ssa/<phase>/dump debug flag
+// asks this package's compile.
+func writesSSADump(p *load.Package) bool {
+	if os.Getenv("GOSSAFUNC") != "" {
+		return true
+	}
+	for _, flag := range slices.Concat(forcedGcflags, p.Internal.Gcflags) {
+		if strings.Contains(flag, "ssa/") && strings.Contains(flag, "/dump") {
+			return true
+		}
+	}
+	return false
 }
 
 // buildActionID computes the action ID for a build action.
@@ -402,8 +417,8 @@ func (b *Builder) buildActionID(a *Action) cache.ActionID {
 		fmt.Fprintf(h, "teststartup %q\n", p.Internal.TestStartup)
 	}
 	if p.Internal.TestVariantOf != nil {
-		// The replaced package's own compile is a dependency, so its content
-		// is hashed with the others below; this says what it is used for.
+		// The replaced package's own compile is a dependency, so its export
+		// data is hashed with the others below; this says what it is used for.
 		fmt.Fprintf(h, "testvariant %q\n", p.Internal.TestVariantOf.ImportPath)
 	}
 	if len(p.CgoFiles)+len(p.SwigFiles)+len(p.SwigCXXFiles) > 0 {
@@ -412,6 +427,14 @@ func (b *Builder) buildActionID(a *Action) cache.ActionID {
 
 		ccExe := b.ccExe()
 		fmt.Fprintf(h, "CC=%q %q %q %q\n", ccExe, cppflags, cflags, ldflags)
+		// A #cgo pkg-config line's flags are an input too: a .pc file that changes must not hit a stale cgo archive.
+		if len(p.CgoPkgConfig) > 0 {
+			if pcCflags, pcLdflags, err := b.getPkgConfigFlags(a, p); err == nil {
+				fmt.Fprintf(h, "pkg-config=%q %q\n", pcCflags, pcLdflags)
+			} else {
+				fmt.Fprintf(h, "pkg-config ERROR=%q\n", err)
+			}
+		}
 		// Include the C compiler tool ID so that if the C
 		// compiler changes we rebuild the package.
 		if ccID, _, err := b.gccToolID(ccExe[0], "c"); err == nil {
@@ -489,6 +512,10 @@ func (b *Builder) buildActionID(a *Action) cache.ActionID {
 			"GOCOMPILEDEBUG",
 		}
 		for _, env := range magic {
+			if env == "GOSSADIR" && !writesSSADump(p) {
+				// GOSSADIR only names where a dump goes. A compile that writes none must keep its key, or every dependency rebuilds.
+				continue
+			}
 			if x := os.Getenv(env); x != "" {
 				fmt.Fprintf(h, "magic %s=%s\n", env, x)
 			}
@@ -531,7 +558,7 @@ func (b *Builder) buildActionID(a *Action) cache.ActionID {
 	for _, a1 := range a.Deps {
 		p1 := a1.Package
 		if p1 != nil {
-			fmt.Fprintf(h, "import %s %s\n", p1.ImportPath, contentID(a1.buildID))
+			fmt.Fprintf(h, "import %s %s\n", p1.ImportPath, b.importID(a1))
 		}
 		if a1.Mode == "preprocess PGO profile" {
 			fmt.Fprintf(h, "pgofile %s\n", b.fileHash(a1.built))
@@ -1183,12 +1210,12 @@ func (b *Builder) cacheObjdirFile(a *Action, c cache.Cache, name string) error {
 		return err
 	}
 	defer f.Close()
-	_, _, err = c.Put(cache.Subkey(a.actionID, name), f)
+	_, _, err = c.Put(cache.Subkey(objdirKey(a), name), f)
 	return err
 }
 
 func (b *Builder) findCachedObjdirFile(a *Action, c cache.Cache, name string) (string, error) {
-	file, _, err := cache.GetFile(c, cache.Subkey(a.actionID, name))
+	file, _, err := cache.GetFile(c, cache.Subkey(objdirKey(a), name))
 	if err != nil {
 		return "", fmt.Errorf("loading cached file %s: %w", name, err)
 	}
@@ -1213,6 +1240,16 @@ func (b *Builder) loadCachedCgoHdr(a *Action) error {
 	return b.loadCachedObjdirFile(a, c, "_cgo_install.h")
 }
 
+// objdirKey returns the key for the files a keeps from its object directory.
+func objdirKey(a *Action) cache.ActionID {
+	pkg := a.Package
+	// cgo writes the package directory into a //line, and vet opens that path.
+	if pkg != nil && pkg.Goroot && !cfg.BuildTrimpath && len(pkg.CgoFiles)+len(pkg.SwigFiles)+len(pkg.SwigCXXFiles) > 0 {
+		return cache.Subkey(a.actionID, "cgo dir "+pkg.Dir)
+	}
+	return a.actionID
+}
+
 func (b *Builder) cacheSrcFiles(a *Action, srcfiles []string) {
 	c := a.cache()
 	var buf bytes.Buffer
@@ -1231,12 +1268,12 @@ func (b *Builder) cacheSrcFiles(a *Action, srcfiles []string) {
 			return
 		}
 	}
-	cache.PutBytes(c, cache.Subkey(a.actionID, "srcfiles"), buf.Bytes())
+	cache.PutBytes(c, cache.Subkey(objdirKey(a), "srcfiles"), buf.Bytes())
 }
 
 func (b *Builder) loadCachedVet(a *Action, vetDeps []*Action) error {
 	c := a.cache()
-	list, _, err := cache.GetBytes(c, cache.Subkey(a.actionID, "srcfiles"))
+	list, _, err := cache.GetBytes(c, cache.Subkey(objdirKey(a), "srcfiles"))
 	if err != nil {
 		return fmt.Errorf("reading srcfiles list: %w", err)
 	}
@@ -1260,7 +1297,7 @@ func (b *Builder) loadCachedVet(a *Action, vetDeps []*Action) error {
 
 func (b *Builder) loadCachedCompiledGoFiles(a *Action) error {
 	c := a.cache()
-	list, _, err := cache.GetBytes(c, cache.Subkey(a.actionID, "srcfiles"))
+	list, _, err := cache.GetBytes(c, cache.Subkey(objdirKey(a), "srcfiles"))
 	if err != nil {
 		return fmt.Errorf("reading srcfiles list: %w", err)
 	}
@@ -1973,8 +2010,29 @@ func splitPkgConfigOutput(out []byte) ([]string, error) {
 	return flags, nil
 }
 
-// Calls pkg-config if needed and returns the cflags/ldflags needed to build a's package.
+// pkgConfigResult is what one pkg-config run answered for a package.
+type pkgConfigResult struct {
+	cflags, ldflags []string
+	err             error
+}
+
+// getPkgConfigFlags returns the cflags/ldflags needed to build a's package.
+// The action ID and the cgo step both ask, and pkg-config runs once.
 func (b *Builder) getPkgConfigFlags(a *Action, p *load.Package) (cflags, ldflags []string, err error) {
+	if len(p.CgoPkgConfig) == 0 {
+		return nil, nil, nil
+	}
+	if v, ok := b.pkgConfigCache.Load(p); ok {
+		r := v.(*pkgConfigResult)
+		return r.cflags, r.ldflags, r.err
+	}
+	cflags, ldflags, err = b.runPkgConfig(a, p)
+	b.pkgConfigCache.Store(p, &pkgConfigResult{cflags: cflags, ldflags: ldflags, err: err})
+	return cflags, ldflags, err
+}
+
+// runPkgConfig calls pkg-config and returns the cflags/ldflags needed to build a's package.
+func (b *Builder) runPkgConfig(a *Action, p *load.Package) (cflags, ldflags []string, err error) {
 	sh := b.Shell(a)
 	if pcargs := p.CgoPkgConfig; len(pcargs) > 0 {
 		// pkg-config permits arguments to appear anywhere in
@@ -2628,12 +2686,12 @@ func (b *Builder) gfortranCmd(incdir, workdir string) []string {
 
 // ccExe returns the CC compiler setting without all the extra flags we add implicitly.
 func (b *Builder) ccExe() []string {
-	return envList("CC", cfg.DefaultCC(cfg.Goos, cfg.Goarch))
+	return envList("CC", cfg.TargetCC(cfg.Goos, cfg.Goarch))
 }
 
 // cxxExe returns the CXX compiler setting without all the extra flags we add implicitly.
 func (b *Builder) cxxExe() []string {
-	return envList("CXX", cfg.DefaultCXX(cfg.Goos, cfg.Goarch))
+	return envList("CXX", cfg.TargetCXX(cfg.Goos, cfg.Goarch))
 }
 
 // fcExe returns the FC compiler setting without all the extra flags we add implicitly.

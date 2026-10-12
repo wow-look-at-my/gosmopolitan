@@ -52,28 +52,28 @@ stdout '^\tpath\trsc.io/fortune'
 stdout '^\tmod\trsc.io/fortune\tv1.0.0'
 
 # Check the build info of a binary built from $GOROOT/src/cmd
-go build -o test2json.exe cmd/test2json
-go version -m test2json.exe
+go build -o gofmt.exe cmd/gofmt
+go version -m gofmt.exe
 stdout -buildmode=exe
-stdout '^test2json.exe: .+'
-stdout '^\tpath\tcmd/test2json$'
+stdout '^gofmt.exe: .+'
+stdout '^\tpath\tcmd/gofmt$'
 ! stdout 'mod[^e]'
 
 # Check -json flag
-go build -o test2json.exe cmd/test2json
-go version -m -json test2json.exe
-stdout '"Path": "cmd/test2json"'
+go build -o gofmt.exe cmd/gofmt
+go version -m -json gofmt.exe
+stdout '"Path": "cmd/gofmt"'
 ! stdout 'null'
 
 # Check -json flag output with multiple binaries
-go build -o test2json.exe cmd/test2json
-go version -m -json test2json.exe test2json.exe
-stdout -count=2 '"Path": "cmd/test2json"'
+go build -o gofmt.exe cmd/gofmt
+go version -m -json gofmt.exe gofmt.exe
+stdout -count=2 '"Path": "cmd/gofmt"'
 
 # Check -json flag without -m
-go build -o test2json.exe cmd/test2json
-! go version -json test2json.exe
-! stdout '"Path": "cmd/test2json"'
+go build -o gofmt.exe cmd/gofmt
+! go version -json gofmt.exe
+! stdout '"Path": "cmd/gofmt"'
 stderr 'with -json flag requires -m flag'
 
 # Repeat the test with -buildmode=pie and default linking.

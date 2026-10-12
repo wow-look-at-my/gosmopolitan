@@ -1,6 +1,5 @@
-// Copyright 2024 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo
 
@@ -11,14 +10,6 @@ import (
 	"syscall"
 )
 
-// Cosmopolitan stores the backlog like Linux:
-//
-//   - uint16 in kernel version < 4.1,
-//   - uint32 in kernel version >= 4.1
-//
-// Truncate number to avoid wrapping.
-//
-// See issue 5030 and 41470.
 func maxAckBacklog(n int) int {
 	size := 16
 	if unix.KernelVersionGE(4, 1) {

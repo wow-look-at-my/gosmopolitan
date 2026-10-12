@@ -1,5 +1,5 @@
 # runtime.GOOS names the HOST here. A syscall flag belongs to the build
-# target, and os/removeall_at.go shipped the difference: it opened a directory
+# target, and os/removeall_at.go shipped the difference. It opened a directory
 # with O_WRONLY|O_RDWR because the host was NT, which is EISDIR under cosmo.
 tests:
 	- desc: no runtime.GOOS predicate decides an open flag

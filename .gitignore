@@ -21,9 +21,13 @@ _testmain.go
 
 /VERSION.cache
 /bin/
+/go
+/link
 /build.out
 /doc/articles/wiki/*.bin
+/go
 /goinstall.log
+/link
 /last-change
 /misc/cgo/life/run.out
 /misc/cgo/stdio/run.out
@@ -42,6 +46,8 @@ _testmain.go
 /distpack.dbg
 /distpack.aarch64.elf
 /src/cmd/go/internal/cfg/zdefaultcc.go
+# cmd/dist compiles the APE loaders here; cmd/link embeds them.
+/src/cmd/link/internal/ld/apeld/bin/
 /src/cmd/internal/objabi/zbootstrap.go
 /src/go/build/zcgo.go
 /src/go/doc/headscan

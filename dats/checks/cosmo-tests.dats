@@ -1,6 +1,6 @@
 # The GOOS=cosmo package tests, run on this host through the misc/cosmo exec
 # wrappers. They live here rather than in the workflow because each one names
-# the tests it covers, and a name list is a test-selection decision: a workflow
+# the tests it covers. A name list is a test-selection decision: a workflow
 # step is a scheduler, not a place to keep one.
 tests:
 	- desc: the cosmo syscall shim package
@@ -21,10 +21,10 @@ tests:
 		stdout:
 			- "ok  \tsyscall"
 
-	# One cosmo binary starting another. A kernel refuses the APE header,
-	# so this is the whole exec surface: t.Fork, t.Setenv, t.Chdir and
-	# every test that runs a helper process. The target is built into
-	# $TMPDIR and never run first, because an APE that has run once has
+	# One cosmo binary starting another. A kernel refuses the APE header.
+	# This is the whole exec surface: t.Fork, t.Setenv, t.Chdir and every
+	# test that runs a helper process. The target is built into $TMPDIR
+	# and never run first. This is because an APE that has run once has
 	# assimilated itself on a Linux host and execs natively after that.
 	- desc: a cosmo binary can exec a pristine APE
 	  cmd: export PATH="$PWD/bin:$PWD/misc/cosmo:$PATH"; GOCOSMOFAT=0 GOOS=cosmo go build -o "$TMPDIR/fizzbuzz.com" ./testdata/fizzbuzz/fizzbuzz.go; GO_TEST_APE_TARGET="$TMPDIR/fizzbuzz.com" GO_TEST_APE_ARGS="10 5" GO_TEST_APE_WANT=fizzbuzz GOOS=cosmo go test -count=1 -run TestAPEExec syscall

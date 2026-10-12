@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package orgmod
 
@@ -12,8 +11,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -26,10 +28,38 @@ const (
 
 var testRun = Run{Repository: "wow-look-at-my/consumer", ID: "4242", Attempt: "1"}
 
+// testStateEnv names the state directory a child of these tests shares with its parent. Only this test binary reads it.
+const testStateEnv = "ORGMOD_TEST_STATE_DIR"
+
+// TestMain gives this process its own state directory, so no test reads what
+// another run of these tests kept. A child started by a test shares its parent's.
+func TestMain(m *testing.M) {
+	dir := os.Getenv(testStateEnv)
+	if dir == "" {
+		made, err := os.MkdirTemp("", "orgmod-state")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		dir = made
+	}
+	StateDir = func() string { return dir }
+	if asks := os.Getenv(childAsks); asks != "" {
+		answerChild(asks)
+		os.Exit(0)
+	}
+	code := m.Run()
+	if os.Getenv(testStateEnv) == "" {
+		os.RemoveAll(dir)
+	}
+	os.Exit(code)
+}
+
 // memStore is a RunLockStore in memory. With blind set, Lookup finds nothing,
 // so every caller races to Claim.
 type memStore struct {
 	mu      sync.Mutex
+	name    string
 	locks   map[RunLockKey]string
 	blind   bool
 	fail    error
@@ -37,9 +67,13 @@ type memStore struct {
 	claims  int
 }
 
-func newMemStore() *memStore { return &memStore{locks: map[RunLockKey]string{}} }
+var memStores atomic.Int64
 
-func (s *memStore) String() string { return "mem://test" }
+func newMemStore() *memStore {
+	return &memStore{name: fmt.Sprintf("mem://test/%d", memStores.Add(1)), locks: map[RunLockKey]string{}}
+}
+
+func (s *memStore) String() string { return s.name }
 
 func (s *memStore) Lookup(ctx context.Context, key RunLockKey) (string, bool, error) {
 	s.mu.Lock()
@@ -146,8 +180,10 @@ func TestLockedVersionRacingWritersConverge(t *testing.T) {
 			t.Errorf("writer %d got %q, want the winner %q", i, got, winner)
 		}
 	}
-	if store.claims != writers {
-		t.Errorf("store saw %d claims, want %d", store.claims, writers)
+	// A writer that starts after the winner kept its lock reads that copy, and
+	// never reaches the store.
+	if store.claims < 1 || store.claims > writers {
+		t.Errorf("store saw %d claims, want between 1 and %d", store.claims, writers)
 	}
 }
 
@@ -182,15 +218,15 @@ func (s *claimFails) Claim(ctx context.Context, key RunLockKey, version string) 
 	return "", errors.New("503 Service Unavailable")
 }
 
-func TestVersionOutsideCINeverTouchesStore(t *testing.T) {
+func TestVersionWithoutARunNeverTouchesStore(t *testing.T) {
 	open := func() (RunLockStore, Run, error) {
-		t.Fatal("a build outside CI opened the run lock store")
+		t.Fatal("a build that locks no run opened the run lock store")
 		return nil, Run{}, nil
 	}
 	var calls int
-	got, err := Version(context.Background(), false, open, alphaPath, "main", resolveTo(headB, &calls))
+	got, err := Version(context.Background(), false, false, open, alphaPath, "main", resolveTo(headB, &calls))
 	if err != nil || got != headB || calls != 1 {
-		t.Errorf("Version outside CI = %q, %v after %d resolves; want the head %q", got, err, calls, headB)
+		t.Errorf("Version without a run = %q, %v after %d resolves; want the head %q", got, err, calls, headB)
 	}
 }
 
@@ -199,15 +235,54 @@ func TestVersionInCIUsesLock(t *testing.T) {
 	store.locks[key("main")] = headA
 	open := func() (RunLockStore, Run, error) { return store, testRun, nil }
 	var calls int
-	got, err := Version(context.Background(), true, open, alphaPath, "main", resolveTo(headB, &calls))
+	got, err := Version(context.Background(), true, false, open, alphaPath, "main", resolveTo(headB, &calls))
 	if err != nil || got != headA {
 		t.Errorf("Version in CI = %q, %v; want the locked %q", got, err, headA)
 	}
 
 	open = func() (RunLockStore, Run, error) { return nil, Run{}, errors.New("GITHUB_RUN_ID is not set") }
-	_, err = Version(context.Background(), true, open, alphaPath, "main", resolveTo(headB, &calls))
+	_, err = Version(context.Background(), true, false, open, alphaPath, "main", resolveTo(headB, &calls))
 	if err == nil || !strings.Contains(err.Error(), alphaPath+"@main") {
 		t.Errorf("Version with no store = %v; want an error that names the module", err)
+	}
+}
+
+// A run the caller named itself is an optimization: a store it cannot use
+// resolves the head per command rather than failing the build.
+func TestVersionNamedRunFallsBackWhenStoreFails(t *testing.T) {
+	store := newMemStore()
+	store.fail = errors.New("connection refused")
+	open := func() (RunLockStore, Run, error) { return store, testRun, nil }
+	var calls int
+	got, err := Version(context.Background(), true, true, open, alphaPath, "main", resolveTo(headB, &calls))
+	if err != nil || got != headB {
+		t.Errorf("Version with a named run and a failing store = %q, %v; want the head %q", got, err, headB)
+	}
+	if calls != 1 {
+		t.Errorf("resolve ran %d times; want once", calls)
+	}
+
+	// A run name the store cannot read is the same: the head resolves per command.
+	open = func() (RunLockStore, Run, error) {
+		return nil, Run{}, errors.New(`GOSMOPOLITAN_RUN="a/b": want owner/repo/run-id/attempt`)
+	}
+	got, err = Version(context.Background(), true, true, open, alphaPath, "main", resolveTo(headB, &calls))
+	if err != nil || got != headB {
+		t.Errorf("Version with a malformed named run = %q, %v; want the head %q", got, err, headB)
+	}
+}
+
+// Only a failure to resolve the head itself fails a named run, because the lock
+// never stood in for the resolution.
+func TestVersionNamedRunFailsWhenResolveFails(t *testing.T) {
+	store := newMemStore()
+	store.blind = true
+	open := func() (RunLockStore, Run, error) { return store, testRun, nil }
+	resolveErr := errors.New("no such branch")
+	resolve := func() (string, error) { return "", resolveErr }
+	_, err := Version(context.Background(), true, true, open, alphaPath, "main", resolve)
+	if !errors.Is(err, resolveErr) {
+		t.Errorf("Version with a named run and an unresolvable head = %v; want the resolve error", err)
 	}
 }
 
@@ -229,18 +304,18 @@ func TestOpenRunLock(t *testing.T) {
 	}
 
 	for _, name := range []string{"GITHUB_REPOSITORY", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT"} {
-		_, err := openRunLock(envOf(with(map[string]string{name: ""})))
+		_, err := openRunLock(true, envOf(with(map[string]string{name: ""})))
 		if err == nil || !strings.Contains(err.Error(), name) {
 			t.Errorf("openRunLock without %s = %v; want an error that names it", name, err)
 		}
 	}
 
 	// The default store is buildhost, which needs the job's OIDC token.
-	_, err := openRunLock(envOf(ci))
+	_, err := openRunLock(true, envOf(ci))
 	if err == nil || !strings.Contains(err.Error(), DefaultRunLockStore) || !strings.Contains(err.Error(), "id-token: write") {
 		t.Errorf("openRunLock with no OIDC token = %v; want an error that names the store and the permission", err)
 	}
-	lock, err := openRunLock(envOf(with(map[string]string{
+	lock, err := openRunLock(true, envOf(with(map[string]string{
 		"ACTIONS_ID_TOKEN_REQUEST_URL":   "https://token.example/?x=1",
 		"ACTIONS_ID_TOKEN_REQUEST_TOKEN": "bearer",
 	})))
@@ -249,7 +324,7 @@ func TestOpenRunLock(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	lock, err = openRunLock(envOf(with(map[string]string{RunLockEnv: "file://" + dir})))
+	lock, err = openRunLock(true, envOf(with(map[string]string{RunLockEnv: "file://" + dir})))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,7 +332,7 @@ func TestOpenRunLock(t *testing.T) {
 		t.Errorf("openRunLock with a file URL = %#v, want a file store in %s", lock.store, dir)
 	}
 
-	_, err = openRunLock(envOf(with(map[string]string{RunLockEnv: "ftp://example.com/locks"})))
+	_, err = openRunLock(true, envOf(with(map[string]string{RunLockEnv: "ftp://example.com/locks"})))
 	if err == nil || !strings.Contains(err.Error(), "ftp://example.com/locks") {
 		t.Errorf("openRunLock with an ftp URL = %v; want an error that names it", err)
 	}
@@ -270,21 +345,41 @@ func TestOpenRunLock(t *testing.T) {
 		RunLockEnv:           "file://" + dir,
 	}
 	blanked[RunEnv] = testRun.Repository + "/" + testRun.ID + "/" + testRun.Attempt
-	lock, err = openRunLock(envOf(blanked))
+	lock, err = openRunLock(false, envOf(blanked))
 	if err != nil || lock.run != testRun {
 		t.Errorf("openRunLock from %s = %v, %v; want run %v", RunEnv, lock.run, err, testRun)
 	}
 	for _, bad := range []string{"wow-look-at-my/consumer/4242", "consumer/4242/1", "a/b//1", "a/b/c/d/e"} {
 		blanked[RunEnv] = bad
-		_, err = openRunLock(envOf(blanked))
+		_, err = openRunLock(false, envOf(blanked))
 		if err == nil || !strings.Contains(err.Error(), RunEnv) {
 			t.Errorf("openRunLock with %s=%q = %v; want an error that names %s", RunEnv, bad, err, RunEnv)
 		}
 	}
 	delete(blanked, RunEnv)
-	_, err = openRunLock(envOf(blanked))
+	_, err = openRunLock(false, envOf(blanked))
 	if err == nil || !strings.Contains(err.Error(), RunEnv) {
 		t.Errorf("openRunLock with no run at all = %v; want an error that names %s too", err, RunEnv)
+	}
+
+	// A local run with no store named gets one of its own. One build never
+	// reads another's locks and no job authenticates to the shared server.
+	local := map[string]string{
+		"GITHUB_REPOSITORY":  "",
+		"GITHUB_RUN_ID":      "",
+		"GITHUB_RUN_ATTEMPT": "",
+	}
+	local[RunEnv] = testRun.Repository + "/" + testRun.ID + "/" + testRun.Attempt
+	lock, err = openRunLock(false, envOf(local))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fs, ok := lock.store.(fileStore)
+	if !ok {
+		t.Fatalf("a local run's default store = %#v, want a file store", lock.store)
+	}
+	if root := filepath.Join(localRunLockRoot(), testRun.slug()); fs.dir != root {
+		t.Errorf("a local run's default store = %s, want %s", fs.dir, root)
 	}
 }
 
@@ -396,7 +491,7 @@ func TestHTTPStore(t *testing.T) {
 		"ACTIONS_ID_TOKEN_REQUEST_URL":   srv.URL + "/token?api-version=2.0",
 		"ACTIONS_ID_TOKEN_REQUEST_TOKEN": "request-token",
 	}
-	lock, err := openRunLock(envOf(env))
+	lock, err := openRunLock(true, envOf(env))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -423,7 +518,7 @@ func TestHTTPStore(t *testing.T) {
 
 	// A token the job cannot get fails the same way.
 	env["ACTIONS_ID_TOKEN_REQUEST_TOKEN"] = "wrong"
-	lock, err = openRunLock(envOf(env))
+	lock, err = openRunLock(true, envOf(env))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -470,7 +565,7 @@ func TestHTTPStoreRetriesOnlyUnansweredRequests(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	lock, err := openRunLock(envOf(map[string]string{
+	lock, err := openRunLock(true, envOf(map[string]string{
 		"GITHUB_REPOSITORY":              testRun.Repository,
 		"GITHUB_RUN_ID":                  testRun.ID,
 		"GITHUB_RUN_ATTEMPT":             testRun.Attempt,
@@ -510,5 +605,224 @@ func TestHTTPStoreRetriesOnlyUnansweredRequests(t *testing.T) {
 	mu.Unlock()
 	if err == nil || !strings.Contains(err.Error(), "403") || sent != 1 {
 		t.Errorf("LockedVersion refused by the store = %v after %d requests; want the refusal after one", err, sent)
+	}
+}
+
+func TestHTTPStoreRetriesTransportFailures(t *testing.T) {
+	var mu sync.Mutex
+	var tokenHits, getHits, postHits int
+	var locked string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		if r.URL.Path == "/token" {
+			tokenHits++
+			if tokenHits == 1 {
+				http.Error(w, "bad gateway", http.StatusBadGateway)
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]string{"value": "oidc-jwt"})
+			return
+		}
+		// net/http resends a GET on a dropped connection by itself, and never a POST.
+		if r.Method == http.MethodPost {
+			postHits++
+			if postHits == 1 {
+				conn, _, err := w.(http.Hijacker).Hijack()
+				if err == nil {
+					conn.Close()
+				}
+				return
+			}
+		} else {
+			getHits++
+			if getHits == 1 {
+				http.Error(w, "unavailable", http.StatusServiceUnavailable)
+				return
+			}
+		}
+		if r.URL.Query().Get("run_id") == "denied" {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		answer := runLockBody{}
+		if r.Method == http.MethodPost {
+			var body runLockBody
+			json.NewDecoder(r.Body).Decode(&body)
+			if locked == "" {
+				locked = body.Value
+			}
+			answer.Found = true
+		}
+		answer.Value = locked
+		answer.Found = answer.Found || locked != ""
+		json.NewEncoder(w).Encode(answer)
+	}))
+	defer srv.Close()
+
+	env := map[string]string{
+		"GITHUB_REPOSITORY":              testRun.Repository,
+		"GITHUB_RUN_ID":                  testRun.ID,
+		"GITHUB_RUN_ATTEMPT":             testRun.Attempt,
+		RunLockEnv:                       srv.URL,
+		"ACTIONS_ID_TOKEN_REQUEST_URL":   srv.URL + "/token",
+		"ACTIONS_ID_TOKEN_REQUEST_TOKEN": "request-token",
+	}
+	lock, err := openRunLock(true, envOf(env))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock.store.(*httpStore).retryDelay = func(int) time.Duration { return time.Millisecond }
+
+	var calls int
+	got, err := LockedVersion(context.Background(), lock.store, RunLockKey{lock.run, alphaPath, "main"}, resolveTo(headA, &calls))
+	if err != nil || got != headA {
+		t.Fatalf("LockedVersion over a 502, a reset and a 503 = %q, %v; want %q", got, err, headA)
+	}
+	if getHits != 2 || postHits != 2 {
+		t.Errorf("%d lookups and %d claims reached the store; want 2 of each", getHits, postHits)
+	}
+	if tokenHits != getHits+postHits+1 {
+		t.Errorf("%d token requests for %d store requests; want the 502 asked again", tokenHits, getHits+postHits)
+	}
+
+	denied := lock.run
+	denied.ID = "denied"
+	before := getHits
+	_, _, err = lock.store.Lookup(context.Background(), RunLockKey{denied, alphaPath, "main"})
+	if err == nil || !strings.Contains(err.Error(), "403") {
+		t.Errorf("Lookup refused by the store = %v; want the 403", err)
+	}
+	if getHits != before+1 {
+		t.Errorf("a 403 was sent %d times; want once", getHits-before)
+	}
+}
+
+// TestLockedVersionAsksTheStoreOncePerJob pins what a job sends and prints.
+// The first command claims and prints. A later command of the same job reads
+// the kept copy: it sends nothing and prints nothing. A new job asks once again.
+func TestLockedVersionAsksTheStoreOncePerJob(t *testing.T) {
+	t.Serial()
+	var out strings.Builder
+	jobTemp := t.TempDir()
+	saveOutput, saveDir := logOutput, StateDir
+	logOutput, StateDir = &out, func() string { return jobTemp }
+	defer func() { logOutput, StateDir = saveOutput, saveDir }()
+
+	store := newMemStore()
+	var calls int
+	for range 3 {
+		got, err := LockedVersion(context.Background(), store, key("main"), resolveTo(headA, &calls))
+		if err != nil || got != headA {
+			t.Fatalf("LockedVersion = %q, %v; want %q", got, err, headA)
+		}
+	}
+	if store.lookups != 1 || store.claims != 1 || calls != 1 {
+		t.Errorf("three commands of one job sent %d lookups and %d claims and resolved %d times; want one of each", store.lookups, store.claims, calls)
+	}
+	want := "go: " + alphaPath + "@main: building " + headA + " -- the branch head, locked here for the rest of this run\n"
+	if out.String() != want {
+		t.Errorf("one job, three commands printed %q; want only the claim %q", out.String(), want)
+	}
+
+	out.Reset()
+	jobTemp = t.TempDir()
+	for range 2 {
+		got, err := LockedVersion(context.Background(), store, key("main"), resolveTo(headB, &calls))
+		if err != nil || got != headA {
+			t.Fatalf("LockedVersion in a second job = %q, %v; want the locked %q", got, err, headA)
+		}
+	}
+	if store.lookups != 2 || store.claims != 1 {
+		t.Errorf("a second job sent %d lookups and %d claims in all; want one more lookup and no claim", store.lookups, store.claims)
+	}
+	want = "go: " + alphaPath + "@main: building " + headA + " -- the version this run locked earlier\n"
+	if out.String() != want {
+		t.Errorf("a second job printed %q; want the lock once, %q", out.String(), want)
+	}
+
+	// The copy belongs to its store. A store that fails is asked, and fails.
+	failing := newMemStore()
+	failing.fail = errors.New("connection refused")
+	if _, err := LockedVersion(context.Background(), failing, key("main"), resolveTo(headA, &calls)); err == nil {
+		t.Error("a failing store succeeded on a lock another store's copy holds")
+	}
+}
+
+// childAsks names the head a child of this test binary looks up. TestMain answers it in place of running the tests.
+const childAsks = "ORGMOD_TEST_CHILD_ASKS"
+
+// askChild starts this test binary as a child process and returns the head it
+// inherits for module@branch, or "none".
+func askChild(t *testing.T, module, branch string) string {
+	t.Helper()
+	cmd := exec.Command(os.Args[0], "-test.run=^$")
+	cmd.Env = append(os.Environ(), testStateEnv+"="+StateDir(), childAsks+"="+module+"@"+branch)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("child: %v", err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// answerChild prints the head this process inherits for the module@branch
+// that childAsks names.
+func answerChild(asks string) {
+	module, branch, _ := strings.Cut(asks, "@")
+	if version, ok := InheritedHead(module, branch); ok {
+		fmt.Println(version)
+		return
+	}
+	fmt.Println("none")
+}
+
+// TestPassHeadReachesOnlyChildren pins where an inherited head comes from: a
+// live ancestor that wrote it, and nothing else.
+func TestPassHeadReachesOnlyChildren(t *testing.T) {
+	t.Serial()
+	me, procFound := self()
+	cleanup, err := PassHead(alphaPath, "main", headA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !procFound {
+		// No /proc: no process finds an ancestor, so none takes a head.
+		if cleanup != nil {
+			t.Error("PassHead kept a head with no way for a child to find this process")
+		}
+		if got := askChild(t, alphaPath, "main"); got != "none" {
+			t.Errorf("a child with no /proc inherited %q; want none", got)
+		}
+		return
+	}
+	if cleanup == nil {
+		t.Fatal("the first PassHead returned no cleanup")
+	}
+	if again, err := PassHead(alphaPath, "v1", headB); err != nil || again != nil {
+		t.Errorf("a second PassHead = %v, %v; want no second cleanup", again != nil, err)
+	}
+
+	if got := askChild(t, alphaPath, "main"); got != headA {
+		t.Errorf("a child inherited %q; want the head its parent passed, %q", got, headA)
+	}
+	if got := askChild(t, alphaPath, "v1"); got != headB {
+		t.Errorf("a child inherited %q for v1; want %q", got, headB)
+	}
+
+	// A record no live ancestor wrote is never read: one under this pid with another start time.
+	betaPath := "github.com/wow-look-at-my/beta"
+	for _, forged := range []procID{{me.pid, me.start + "0"}, {1, "0"}} {
+		store := fileStore{dir: filepath.Join(StateDir(), "heads", forged.String())}
+		if _, err := store.Claim(context.Background(), RunLockKey{Module: betaPath, Branch: "main"}, headB); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := askChild(t, betaPath, "main"); got != "none" {
+		t.Errorf("a child inherited %q from a record no ancestor wrote; want none", got)
+	}
+
+	cleanup()
+	if got := askChild(t, alphaPath, "main"); got != "none" {
+		t.Errorf("a child inherited %q after its parent removed its heads; want none", got)
 	}
 }

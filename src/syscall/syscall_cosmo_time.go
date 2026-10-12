@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo
 
@@ -11,10 +10,8 @@ import (
 	"unsafe"
 )
 
-// Time, clock and file-timestamp calls that the linux port declares on
-// every architecture. The linux port keeps the architecture-specific
-// members of this group in syscall_cosmo_time_amd64.go and
-// syscall_cosmo_time_arm64.go.
+// Time, clock and file-timestamp calls that the linux port declares on every
+// architecture.
 
 func Adjtimex(buf *Timex) (state int, err error) {
 	r0, _, e1 := Syscall(SYS_ADJTIMEX, uintptr(unsafe.Pointer(buf)), 0, 0)
@@ -50,10 +47,8 @@ func Times(tms *Tms) (ticks uintptr, err error) {
 	return
 }
 
-// cosmoTime reads the wall clock. Both linux architectures read the
-// clock this way. The per-architecture Time wrappers call this helper,
-// because the linux port declares Time with different result names on
-// each architecture.
+// cosmoTime reads the wall clock. Both linux architectures read the clock
+// this way.
 func cosmoTime(t *Time_t) (Time_t, error) {
 	var tv Timeval
 	err := Gettimeofday(&tv)

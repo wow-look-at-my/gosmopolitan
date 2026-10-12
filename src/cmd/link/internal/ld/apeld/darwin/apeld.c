@@ -1,10 +1,11 @@
 // apeld: boot an APE's arm64 payload on macOS from a precompiled loader.
 //
-// macOS has no memfd and cannot exec an ELF, so the loader maps the
-// payload's PT_LOAD segments itself, builds a SysV stack with an auxv,
-// hands the payload a Syslib table of libSystem entry points, and jumps.
-// This is the job gosmopolitan's embedded ape-m1.c does after the shell
-// compiles it with cc. Here it is compiled once, ahead of time.
+// macOS has no memfd and cannot exec an ELF. The loader maps the
+// payload's PT_LOAD segments itself and builds a SysV stack with an
+// auxv. The loader also hands the payload a Syslib table of libSystem
+// entry points, and jumps. This is the job gosmopolitan's embedded
+// ape-m1.c does after the shell compiles it with cc. Here it is compiled
+// once, ahead of time.
 //
 // Contract with the payload (rt0_cosmo_arm64.s): sp = argc block, x2 =
 // program path, x3 = 8 (XNU), x15 = Syslib with magic "slib", x16 = entry.
@@ -236,8 +237,6 @@ static void fill_syslib(void) {
 	lib.sysctlnametomib = w_sysctlnametomib;
 }
 
-// Refuse a load range that already holds live memory: MAP_FIXED would
-// replace it in silence, and a payload at 4 TiB can land on a malloc arena.
 static void check_range_free(uint64_t lo, uint64_t hi) {
 	for (mach_vm_address_t a = lo & -PAGESZ; a < hi;) {
 		mach_vm_address_t ra = a;
@@ -314,7 +313,7 @@ int main(int argc, char **argv, char **envp) {
 
 	// -u removes this loader's own file before anything else. A caller that
 	// unpacked a throwaway copy passes it, so an APE leaves no second file on
-	// the host. It is argv and not an environment variable on purpose: an
+	// the host. It is argv and not an environment variable on purpose. An
 	// environment variable reaches the payload, and a nested run could then
 	// delete a loader somebody installed.
 	//
@@ -366,8 +365,6 @@ int main(int argc, char **argv, char **envp) {
 	fill_syslib();
 	if (getentropy(rando, sizeof rando)) die("getentropy failed");
 
-	// New stack block: argc, argv[1..], NULL, envp, NULL, auxv, in a frame
-	// that never returns. argv[0] of the loader is dropped.
 	int envc = 0;
 	while (envp[envc]) envc++;
 	long words = 1 + (argc - 1) + 1 + envc + 1 + AUXV_WORDS;

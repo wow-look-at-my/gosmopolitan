@@ -1,13 +1,5 @@
 #!/usr/bin/env bash
-# one-test-binary.sh GOOS GOARCH PATTERN... -- refuse a go test run over
-# several packages that links more than one test binary.
-#
-# Every package's tests go into ONE binary per port, run with -test.unit per
-# package. go test -n prints the plan without running it. -c -o /dev/null
-# keeps a cached test result from sparing its binary the link.
-#
-# The packages and flags are dist test's short mode ones: the patterns less
-# vendored code, and -pgo=off, because a binary holds one PGO profile.
+# one-test-binary.sh GOOS GOARCH PATTERN... -- refuse a go test run over several packages that links more.
 
 set -uo pipefail
 

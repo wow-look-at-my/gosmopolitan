@@ -101,7 +101,7 @@
 // as a sequence of events with Test set to the benchmark name, terminated
 // by a final event with Action == "bench" or "fail".
 // Benchmarks have no events with Action == "pause".
-package main
+package test2json
 
 import (
 	"flag"
@@ -111,13 +111,18 @@ import (
 	"os/exec"
 	"os/signal"
 
+	"cmd/internal/objabi"
 	"cmd/internal/telemetry/counter"
 	"cmd/internal/test2json"
 )
 
+// flagSet is test2json's command line, one set of its own so test2json can
+// be linked beside the other tools; Main installs it before parsing.
+var flagSet = flag.NewFlagSet("test2json", flag.ExitOnError)
+
 var (
-	flagP = flag.String("p", "", "report `pkg` as the package being tested in each event")
-	flagT = flag.Bool("t", false, "include timestamps in events")
+	flagP = flagSet.String("p", "", "report `pkg` as the package being tested in each event")
+	flagT = flagSet.Bool("t", false, "include timestamps in events")
 )
 
 func usage() {
@@ -130,7 +135,10 @@ func ignoreSignals() {
 	signal.Ignore(signalsToIgnore...)
 }
 
-func main() {
+// Main runs test2json with args, the command line after the program name,
+// and answers its exit status.
+func Main(args []string) int {
+	objabi.Enter("test2json", args, flagSet)
 	counter.Open()
 
 	flag.Usage = usage
@@ -165,9 +173,10 @@ func main() {
 		c.Exited(err)
 		if err != nil {
 			c.Close()
-			os.Exit(1)
+			return 1
 		}
 	}
+	return 0
 }
 
 type countWriter struct {

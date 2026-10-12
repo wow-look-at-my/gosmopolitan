@@ -1061,6 +1061,12 @@ func inlineCostOK(n *ir.CallExpr, caller, callee *ir.Func, bigCaller, closureCal
 	baseMaxCost := adjust(maxCost)
 	maxCost = adjust(loopSiteMaxCost(maxCost, loopCeiling, loopDepth))
 
+	// The linker bounds a nosplit function's frame. A nosplit caller therefore takes no loop boost and no profile boost.
+	nosplit := caller.Pragma&ir.Nosplit != 0
+	if nosplit {
+		maxCost = baseMaxCost
+	}
+
 	metric := callee.Inl.Cost
 	if inlheur.Enabled() {
 		score, ok := inlheur.GetCallSiteScore(caller, n)
@@ -1091,8 +1097,8 @@ func inlineCostOK(n *ir.CallExpr, caller, callee *ir.Func, bigCaller, closureCal
 	// We'll also allow inlining of hot functions below inlineHotMaxBudget,
 	// but only in small functions.
 
-	if !hot {
-		// Cold
+	if !hot || nosplit {
+		// Cold, or a caller whose frame the hot budget must not grow.
 		return false, maxCost, metric, false
 	}
 

@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package cosmoape
 
@@ -13,7 +12,7 @@ import (
 // TestPlatformTableIsClosed pins the whole platform table, and
 // windows/arm64's absence in particular.
 //
-// os_cosmo_nt_arm64.go answers every entry point with a throw, which is
+// os_cosmo_nt_arm64.go answers every entry point with a throw. This is
 // safe only because no APE this toolchain emits starts on that host.
 // Adding the row without the runtime turns those throws into a crash in
 // the scheduler. If this test stopped you, that is the work it asks for.
@@ -59,8 +58,7 @@ func TestParse(t *testing.T) {
 		if got := s.Arches(); !reflect.DeepEqual(got, tt.arches) {
 			t.Errorf("Parse(%q).Arches() = %v, want %v", tt.spec, got, tt.arches)
 		}
-		// The canonical spelling must round-trip, since cmd/go hands it
-		// to cmd/link as -apeplatforms.
+		// The canonical spelling must round-trip, since cmd/go hands it to cmd/link as -apeplatforms.
 		back, err := Parse(s.String())
 		if err != nil || back != s {
 			t.Errorf("Parse(%q).String() = %q, which reparses to %v (err %v)", tt.spec, s.String(), back, err)
@@ -98,10 +96,9 @@ func TestParseRejects(t *testing.T) {
 	}
 }
 
-// TestDefaultIsTheSupportedThree pins what a build with no
-// GOCOSMOPLATFORMS claims. The default is narrower than the table on
-// purpose: linux/arm64 is selectable but not promised, so a default build
-// must not advertise it.
+// TestDefaultIsTheSupportedThree pins what a build with no GOCOSMOPLATFORMS
+// claims. The default is narrower than the table on purpose: linux/arm64 is
+// selectable but not promised, so a default build must not advertise it.
 //
 // Both arches are still required, because darwin/arm64 is in the set.
 // Narrowing the default is an accuracy change, not a size one.
@@ -125,8 +122,7 @@ func TestDefaultIsTheSupportedThree(t *testing.T) {
 }
 
 func TestRestrictToArches(t *testing.T) {
-	// A build with no explicit selection supports what its payloads allow:
-	// an amd64-only build claims no arm64 platform.
+	// A build with no explicit selection supports what its payloads allow: an amd64-only build claims no arm64 platform.
 	got := Default().RestrictToArches([]string{"amd64"})
 	want := []Platform{LinuxAMD64, WindowsAMD64}
 	if !reflect.DeepEqual(got.Platforms(), want) {

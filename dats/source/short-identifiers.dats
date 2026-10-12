@@ -4,10 +4,18 @@
 #
 # Go sources are NAMED, never globbed: the fork's own files only. CLAUDE.md
 # says not to rename upstream's receivers in a file this fork is not otherwise
-# rewriting, so a glob would fail on code that is not ours to change.
+# rewriting. A glob would fail on code that is not ours to change.
 tests:
 	- desc: the fork's own cmd/go additions name their variables
 	  cmd: dats/source/short-identifiers.sh src/cmd/go/internal/load/testgroup.go src/cmd/go/internal/load/testgroupalone.go src/cmd/go/internal/load/generatedep.go src/cmd/go/internal/load/generatesandbox.go
+	  exit: 0
+
+	- desc: the fork's cosmo cgo additions name their variables
+	  cmd: dats/source/short-identifiers.sh src/cmd/link/internal/ld/cosmolink.go src/cmd/link/internal/ld/cosmolds.go src/cmd/go/internal/cfg/cosmocc.go src/go/build/cosmocc.go testdata/cgoprobe/main.go
+	  exit: 0
+
+	- desc: the regexp precompiler and its tests name their variables
+	  cmd: dats/source/short-identifiers.sh src/cmd/compile/internal/regexpprecompile/precompile.go src/regexp/precompiled.go src/regexp/precompiled_test.go src/cmd/compile/internal/test/regexpprecompile_test.go src/cmd/compile/internal/test/regexpprecompile_profile_test.go test/regexpprecompile.go test/regexpprecompile_err.go
 	  exit: 0
 
 	- desc: the scanner refuses a one-letter receiver

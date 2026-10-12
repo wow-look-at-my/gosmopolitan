@@ -36,15 +36,23 @@ import (
 	"cmd/internal/obj"
 	"cmd/internal/src"
 	"internal/abi"
+	"sync"
 )
 
-var sharedProgArray = new([10000]obj.Prog) // *T instead of T to work around issue 19839
+// sharedProgArray is the Prog cache the backend workers share, made on the
+// first compile. The go command links this package, and a go command that
+// compiles nothing has no use for two megabytes of Progs.
+var (
+	sharedProgOnce  sync.Once
+	sharedProgArray *[10000]obj.Prog // *T instead of T to work around issue 19839
+)
 
 // NewProgs returns a new Progs for fn.
 // worker indicates which of the backend workers will use the Progs.
 func NewProgs(fn *ir.Func, worker int) *Progs {
 	pp := new(Progs)
 	if base.Ctxt.CanReuseProgs() {
+		sharedProgOnce.Do(func() { sharedProgArray = new([10000]obj.Prog) })
 		sz := len(sharedProgArray) / base.Flag.LowerC
 		pp.Cache = sharedProgArray[sz*worker : sz*(worker+1)]
 	}

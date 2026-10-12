@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package main
 
@@ -14,37 +13,38 @@ import (
 	"time"
 )
 
-// fallbackWidth is the line width to use when the terminal does not report
-// one. A log file and a CI runner both reach this.
+// fallbackWidth is the line width to use when the terminal does not report one.
 const fallbackWidth = 120
 
 // progressPeriod is how often a progress line appears.
 const progressPeriod = time.Second
 
-// testProgress writes one line each second in which a test finished. The line
-// carries how far the run has come and which tests ended during that second,
-// slowest first.
-//
-// A second that finished nothing writes no line, because the counter alone
-// names no test. This names a slow test while the run is still going, which is
-// what a reader wanted from verbose output.
+// testProgress writes one line each second in which a test finished.
 type testProgress struct {
 	dst     io.Writer
 	timings *testTimings
 
 	lock  sync.Mutex
-	total int
+	steps int
 	done  map[string]bool
 
 	stop chan struct{}
 	wait sync.WaitGroup
 }
 
-func newTestProgress(dst io.Writer, timings *testTimings, total int) *testProgress {
+// progressCounts is what a progress line reports.
+type progressCounts struct {
+	testsEnded   int
+	testsStarted int
+	stepsDone    int
+	steps        int
+}
+
+func newTestProgress(dst io.Writer, timings *testTimings, steps int) *testProgress {
 	return &testProgress{
 		dst:     dst,
 		timings: timings,
-		total:   total,
+		steps:   steps,
 		done:    make(map[string]bool),
 		stop:    make(chan struct{}),
 	}
@@ -74,39 +74,48 @@ func (pro *testProgress) finish() {
 	pro.wait.Wait()
 }
 
-// markDone records that a named dist test finished. A dist test can hold
-// several commands, so the name repeats and the map keeps the count right.
+// markDone records that a named dist test finished.
 func (pro *testProgress) markDone(name string) {
 	pro.lock.Lock()
 	defer pro.lock.Unlock()
 	pro.done[name] = true
 }
 
-func (pro *testProgress) counts() (done, total int) {
+func (pro *testProgress) counts() progressCounts {
+	ended, started := pro.timings.testCounts()
 	pro.lock.Lock()
 	defer pro.lock.Unlock()
-	return len(pro.done), pro.total
+	return progressCounts{
+		testsEnded:   ended,
+		testsStarted: started,
+		stepsDone:    len(pro.done),
+		steps:        pro.steps,
+	}
 }
 
 func (pro *testProgress) emit() {
-	// The drain is what says whether this second finished anything, and it
-	// empties the buffer on the way out, so a quiet tick passes nothing on.
+	// The drain is what says whether this second finished anything, and it empties the buffer on the way out.
 	recent := pro.timings.drainRecent()
 	if len(recent) == 0 {
 		return
 	}
-	done, total := pro.counts()
-	fmt.Fprintln(pro.dst, progressLine(done, total, recent, lineWidth()))
+	fmt.Fprintln(pro.dst, progressLine(pro.counts(), recent, lineWidth()))
 }
 
 // progressLine builds the line. It is separate from emit so a test can check
 // the text without a clock.
-func progressLine(done, total int, recent []testTiming, width int) string {
+//
+// Each test that ended counts one, subtests included, over the tests started
+// so far: a test is known only once its binary runs it, so that total grows.
+// The steps that follow are fixed at the start of the run and carry the
+// percentage, since they are what says how much is left to announce.
+func progressLine(cnt progressCounts, recent []testTiming, width int) string {
 	pct := 0
-	if total > 0 {
-		pct = done * 100 / total
+	if cnt.steps > 0 {
+		pct = cnt.stepsDone * 100 / cnt.steps
 	}
-	prefix := fmt.Sprintf("[%d/%d %d%%] ", done, total, pct)
+	prefix := fmt.Sprintf("[%d done/%d started, %d/%d steps %d%%] ",
+		cnt.testsEnded, cnt.testsStarted, cnt.stepsDone, cnt.steps, pct)
 
 	var parts []string
 	for _, tng := range recent {

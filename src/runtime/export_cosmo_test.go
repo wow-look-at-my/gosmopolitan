@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo
 
@@ -15,7 +14,7 @@ var CosmoSigA2L = cosmoSigA2L
 var CosmoSigmaskL2A = cosmoSigmaskL2A
 var CosmoSigmaskA2L = cosmoSigmaskA2L
 
-// Exports for sigprof_cosmo_test.go: the Apple itimerval ABI pins and
+// Exports for sigprof_cosmo_test.go. The Apple itimerval ABI pins and
 // the timeval translation (signal_cosmo_itimer.go), surfaced over
 // plain integers since the struct types are unexported.
 
@@ -36,8 +35,22 @@ func CosmoTimevalX2L(sec int64, usec int32) (int64, int64) {
 	return l.tv_sec, l.tv_usec
 }
 
-// Export for futex_cosmo_test.go: one step of the darwin futex wait.
+// Exports for futex_cosmo_test.go.
 
-func DarwinFutexDelay(sleep uint32, leftNsec int64, timed bool) (uint32, bool) {
-	return darwinFutexDelay(sleep, leftNsec, timed)
+var XnuUlockTimeout = xnuUlockTimeout
+
+// CosmoFutexsleep runs futexsleep the way a parked M does, with this
+// goroutine's P handed off for the length of the sleep.
+//
+//go:nosplit
+func CosmoFutexsleep(addr *uint32, val uint32, ns int64) {
+	entersyscallblock()
+	futexsleep(addr, val, ns)
+	exitsyscall()
+}
+
+func CosmoFutexwakeup(addr *uint32, cnt uint32) {
+	systemstack(func() {
+		futexwakeup(addr, cnt)
+	})
 }

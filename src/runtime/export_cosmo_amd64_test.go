@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo && amd64
 
@@ -8,8 +7,8 @@ package runtime
 
 import "unsafe"
 
-// Exports for signal_cosmo_xnu_amd64_test.go: the XNU x86-64 layouts
-// sigctxt and the darwin sigaction/sigaltstack paths read and write,
+// Exports for signal_cosmo_xnu_amd64_test.go: the XNU x86-layouts
+// sigctxt. The darwin sigaction/sigaltstack paths read and write,
 // surfaced over plain integers since the struct types are unexported.
 
 const (
@@ -78,6 +77,5 @@ const (
 
 var XnuFPECodeA2L = xnuFPECodeA2L
 
-// CosmoXlatErrno is the amd64 Apple-to-Linux errno translation
-// (cosmo_xlat_errno_ax over cosmo_errno_xlat_tab).
+// CosmoXlatErrno is the amd64 Apple-to-Linux errno translation (cosmo_xlat_errno_ax over cosmo_errno_xlat_tab).
 var CosmoXlatErrno = cosmoXlatErrno

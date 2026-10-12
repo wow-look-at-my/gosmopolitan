@@ -10,6 +10,8 @@ import (
 	"internal/testenv"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -19,26 +21,20 @@ import (
 func FetchModule(t *testing.T, module, version string) string {
 	testenv.MustHaveExternalNetwork(t)
 
-	// If the default GOMODCACHE doesn't exist, use a temporary directory
-	// instead. (For example, run.bash sets GOPATH=/nonexist-gopath.)
-	out, err := testenv.CleanCmdEnv(testenv.Command(t, testenv.GoToolPath(t), "env", "GOMODCACHE")).Output()
+	// The module cache and the checksum database's tree head live under
+	// GOPATH. A test never makes a private one: that downloads the module
+	// again for every call.
+	out, err := testenv.CleanCmdEnv(testenv.Command(t, testenv.GoToolPath(t), "env", "GOPATH")).Output()
 	if err != nil {
-		t.Errorf("%s env GOMODCACHE: %v\n%s", testenv.GoToolPath(t), err, out)
+		t.Errorf("%s env GOPATH: %v\n%s", testenv.GoToolPath(t), err, out)
 		if ee, ok := err.(*exec.ExitError); ok {
 			t.Logf("%s", ee.Stderr)
 		}
 		t.FailNow()
 	}
-	modcacheOk := false
-	if gomodcache := string(bytes.TrimSpace(out)); gomodcache != "" {
-		if _, err := os.Stat(gomodcache); err == nil {
-			modcacheOk = true
-		}
-	}
-	if !modcacheOk {
-		t.Setenv("GOMODCACHE", t.TempDir())
-		// Allow t.TempDir() to clean up subdirectories.
-		t.Setenv("GOFLAGS", os.Getenv("GOFLAGS")+" -modcacherw")
+	gopath := strings.TrimSpace(string(out))
+	if list := filepath.SplitList(gopath); len(list) == 0 || !dirExists(list[0]) {
+		t.Fatalf("GOPATH %q is not a directory. run.bash makes one under GOROOT/pkg.", gopath)
 	}
 
 	t.Logf("fetching %s@%s\n", module, version)
@@ -61,4 +57,9 @@ func FetchModule(t *testing.T, module, version string) string {
 	}
 
 	return j.Dir
+}
+
+func dirExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }

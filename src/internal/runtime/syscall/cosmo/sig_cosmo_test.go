@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo
 
@@ -11,9 +10,9 @@ import (
 	"testing"
 )
 
-// sigPairs must match runtime/sigxlat_cosmo_test.go: the single
-// authoritative Linux<->Apple correspondence, from upstream
-// defs_linux_arm64.go and defs_darwin_arm64.go.
+// sigPairs must match runtime/sigxlat_cosmo_test.go: the authoritative
+// Linux<->Apple correspondence, from upstream defs_linux_arm64.go and
+// defs_darwin_arm64.go.
 var sigPairs = map[uintptr]uintptr{ // linux -> apple
 	1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6,
 	7:  10, // BUS
@@ -79,13 +78,13 @@ func TestDarwinXlatWaitStatus(t *testing.T) {
 		{"exit 0", 0x0000, 0x0000},
 		{"exit 3", 0x0300, 0x0300},
 		{"exit 255", 0xff00, 0xff00},
-		{"killed SIGKILL", 9, 9},                        // same number
-		{"killed SIGUSR1", 30, 10},                      // Apple 30 -> Linux 10
-		{"killed SIGUSR2", 31, 12},                      // Apple 31 -> Linux 12
-		{"killed SIGBUS+core", 10 | 0x80, 7 | 0x80},     // core flag preserved
-		{"killed SIGEMT", 7, 7},                         // no Linux number: passthrough
-		{"stopped SIGSTOP", 0x7f | 17<<8, 0x7f | 19<<8}, // Apple 17 -> Linux 19
-		{"stopped SIGTSTP", 0x7f | 18<<8, 0x7f | 20<<8}, // Apple 18 -> Linux 20
+		{"killed SIGKILL", 9, 9}, // same number
+		{"killed SIGUSR1", 30, 10},
+		{"killed SIGUSR2", 31, 12},
+		{"killed SIGBUS+core", 10 | 0x80, 7 | 0x80}, // core flag preserved
+		{"killed SIGEMT", 7, 7},                     // no Linux number: passthrough
+		{"stopped SIGSTOP", 0x7f | 17<<8, 0x7f | 19<<8},
+		{"stopped SIGTSTP", 0x7f | 18<<8, 0x7f | 20<<8},
 		{"continued", 0xffff, 0xffff},
 	}
 	for _, tc := range cases {

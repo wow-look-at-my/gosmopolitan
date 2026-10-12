@@ -11,11 +11,11 @@ A directive is a command the module's author wrote. Completing a module runs it 
 - A module with no `go.mod` has nowhere to write the marker. It never generates unless its path is the org's.
 - A skipped module is named on stderr. The build compiles the zip as published. What a consumer sees is an undeclared symbol.
 
-`gendep.Allowed` decides this from the module's own bytes alone, the way the directive count does. One module version therefore means one thing to every machine that reads the one overlay cache key.
+`gendep.Allowed` decides this from the module's own bytes alone, the way the directive count does. One module version therefore means one thing to every machine that reads the overlay cache key.
 
 ## What a run may touch
 
-Each package that carries a directive generates on its own, in path order. The run happens in a staged copy of the fetched module, never in the tree other builds compile from. The command runs confined: bubblewrap on a Linux host, seatbelt on a macOS one. It may write the staged tree and the caches a go command needs, and nothing else. The network stays reachable, because a generator that fetches its own inputs is the case this exists for.
+Each package that carries a directive generates on its own, in path order. The run happens in a staged copy of the fetched module, not in the tree other builds compile from. The command runs confined: bubblewrap on a Linux host, seatbelt on a macOS one. It may write the staged tree and the caches a go command needs, and nothing else. The network stays reachable, because a generator that fetches its own inputs is the case this exists for.
 
 A file the zip carries keeps the zip's bytes, whatever a generator wrote over it. What the module's authors published is the module.
 

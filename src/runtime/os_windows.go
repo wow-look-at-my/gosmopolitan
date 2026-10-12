@@ -140,6 +140,10 @@ var (
 	_RtlGetCurrentPeb                stdFunction
 	_RtlGetVersion                   stdFunction
 
+	// WaitOnAddress and WakeByAddressSingle, from the synchronization API set.
+	_WaitOnAddress       stdFunction
+	_WakeByAddressSingle stdFunction
+
 	// These are from non-kernel32.dll, so we prefer to LoadLibraryEx them.
 	_timeBeginPeriod,
 	_timeEndPeriod,
@@ -150,6 +154,7 @@ var (
 	bcryptprimitivesdll = [...]uint16{'b', 'c', 'r', 'y', 'p', 't', 'p', 'r', 'i', 'm', 'i', 't', 'i', 'v', 'e', 's', '.', 'd', 'l', 'l', 0}
 	ntdlldll            = [...]uint16{'n', 't', 'd', 'l', 'l', '.', 'd', 'l', 'l', 0}
 	powrprofdll         = [...]uint16{'p', 'o', 'w', 'r', 'p', 'r', 'o', 'f', '.', 'd', 'l', 'l', 0}
+	synchdll            = [...]uint16{'a', 'p', 'i', '-', 'm', 's', '-', 'w', 'i', 'n', '-', 'c', 'o', 'r', 'e', '-', 's', 'y', 'n', 'c', 'h', '-', 'l', '1', '-', '2', '-', '0', '.', 'd', 'l', 'l', 0}
 	winmmdll            = [...]uint16{'w', 'i', 'n', 'm', 'm', '.', 'd', 'l', 'l', 0}
 )
 
@@ -294,6 +299,16 @@ func loadOptionalSyscalls() {
 	}
 	_RtlGetCurrentPeb = windowsFindfunc(n32, []byte("RtlGetCurrentPeb\000"))
 	_RtlGetVersion = windowsFindfunc(n32, []byte("RtlGetVersion\000"))
+
+	synch := windowsLoadSystemLib(synchdll[:])
+	if synch == 0 {
+		throw("api-ms-win-core-synch-l1-2-0.dll not found")
+	}
+	_WaitOnAddress = windowsFindfunc(synch, []byte("WaitOnAddress\000"))
+	_WakeByAddressSingle = windowsFindfunc(synch, []byte("WakeByAddressSingle\000"))
+	if _WaitOnAddress == nil || _WakeByAddressSingle == nil {
+		throw("WaitOnAddress not found")
+	}
 }
 
 func monitorSuspendResume() {
@@ -1195,6 +1210,7 @@ func preemptM(mp *m) {
 		// The M hasn't been minit'd yet (or was just unminit'd).
 		unlock(&mp.threadLock)
 		atomic.Store(&mp.preemptExtLock, 0)
+		preemptExtWake(mp)
 		mp.preemptGen.Add(1)
 		return
 	}
@@ -1223,6 +1239,7 @@ func preemptM(mp *m) {
 		unlock(&suspendLock)
 		stdcall(_CloseHandle, thread)
 		atomic.Store(&mp.preemptExtLock, 0)
+		preemptExtWake(mp)
 		// The thread no longer exists. This shouldn't be
 		// possible, but just acknowledge the request.
 		mp.preemptGen.Add(1)
@@ -1260,6 +1277,9 @@ func preemptM(mp *m) {
 
 	stdcall(_ResumeThread, thread)
 	stdcall(_CloseHandle, thread)
+
+	// The thread runs again, so a wait in osPreemptExtEnter can end.
+	preemptExtWake(mp)
 }
 
 // osPreemptExtEnter is called before entering external code that may
@@ -1276,12 +1296,27 @@ func osPreemptExtEnter(mp *m) {
 		// ExitProcess and deadlock with SuspendThread.
 		// Ideally we would do the preemption ourselves, but
 		// can't since there may be untyped syscall arguments
-		// on the stack. Instead, just wait and encourage the
-		// SuspendThread APC to run. The preemption should be
-		// done shortly.
-		osyield()
+		// on the stack. Instead, sleep in WaitOnAddress, where
+		// SuspendThread can still stop this thread. preemptM
+		// wakes the word once it has resumed the thread.
+		preemptExtWait(mp)
 	}
 	// Asynchronous preemption is now blocked.
+}
+
+// preemptExtWait sleeps until mp.preemptExtLock no longer reads as held.
+//
+//go:nosplit
+func preemptExtWait(mp *m) {
+	systemstack(func() {
+		held := uint32(1)
+		stdcall(_WaitOnAddress, uintptr(unsafe.Pointer(&mp.preemptExtLock)), uintptr(unsafe.Pointer(&held)), 4, windows.INFINITE)
+	})
+}
+
+// preemptExtWake wakes mp's thread if it sleeps in preemptExtWait.
+func preemptExtWake(mp *m) {
+	stdcall(_WakeByAddressSingle, uintptr(unsafe.Pointer(&mp.preemptExtLock)))
 }
 
 // osPreemptExtExit is called after returning from external code that

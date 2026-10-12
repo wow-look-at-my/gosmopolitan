@@ -10,7 +10,6 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/rsa"
 	"crypto/x509/pkix"
 	"encoding/asn1"
 	"encoding/pem"
@@ -612,7 +611,9 @@ func generatePEMCertWithRepeatSAN(currentTime int64, count int, san string) stri
 	} else {
 		cert.DNSNames = slices.Repeat([]string{san}, count)
 	}
-	privKey, err := rsa.GenerateKey(rand.Reader, 4096)
+	// The key type does not matter here. This runs at package init, in every
+	// test process and child, so it uses the cheapest key to generate.
+	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		log.Fatal(err)
 	}

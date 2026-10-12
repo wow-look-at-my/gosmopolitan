@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package syscall_test
 
@@ -44,8 +43,8 @@ type (
 )
 
 // The statfs and utsname conversions (bigbuf_cosmo.go) are pure struct
-// rewriting, so they are pinned here on any host rather than only where
-// a macOS runner can reach them.
+// rewriting. They are pinned here on any host rather than only where a
+// macOS runner can reach them.
 
 func TestDarwinStatfsToLinux(t *testing.T) {
 	src := cosmo.DarwinStatfs{
@@ -88,8 +87,7 @@ func TestDarwinStatfsToLinux(t *testing.T) {
 		t.Errorf("Namelen = %d, want 0 (Apple statfs has no such field)", dst.Namelen)
 	}
 
-	// Every conversion starts from a cleared destination, so a reused
-	// buffer cannot leak a previous filesystem's numbers.
+	// Every conversion starts from a cleared destination, so a reused buffer cannot leak a previous filesystem's numbers.
 	dst = Statfs_t{Namelen: 255, Spare: [4]int64{1, 2, 3, 4}}
 	darwinStatfsToLinux(&dst, &cosmo.DarwinStatfs{})
 	if dst.Namelen != 0 || dst.Spare != [4]int64{} {
@@ -110,8 +108,7 @@ func TestDarwinMntFlagsToLinux(t *testing.T) {
 		{"noexec", appleMNT_NOEXEC, linuxST_NOEXEC},
 		{"sync", appleMNT_SYNCHRONOUS, linuxST_SYNCHRONOUS},
 		{"noatime", appleMNT_NOATIME, linuxST_NOATIME},
-		// An Apple-only flag (MNT_LOCAL, 0x1000) reports nothing rather
-		// than colliding with an unrelated Linux bit.
+		// An Apple-only flag (MNT_LOCAL, 0x1000) reports nothing rather than colliding with an unrelated Linux bit.
 		{"apple-only", 0x1000, 0},
 	} {
 		if got := darwinMntFlagsToLinux(tc.apple); got != tc.linux {
@@ -121,11 +118,11 @@ func TestDarwinMntFlagsToLinux(t *testing.T) {
 }
 
 // TestRawStatfsLinuxBuffer issues statfs and fstatfs the way
-// golang.org/x/sys/unix does: straight through Syscall and Syscall6, with
+// golang.org/x/sys/unix does. Straight through Syscall and Syscall6, with
 // a Linux Statfs_t and nothing in a3. On a macOS host that buffer is not
 // the shape Apple's statfs fills, so this is the call the conversion in
-// Syscall exists for. A disk-pressure check that reads free space
-// through x/sys sees these numbers or an error.
+// Syscall exists for. A disk-pressure check that reads free space through
+// x/sys sees these numbers or an error.
 func TestRawStatfsLinuxBuffer(t *testing.T) {
 	dir := t.TempDir()
 	path, err := syscall.BytePtrFromString(dir)
@@ -156,9 +153,8 @@ func TestRawStatfsLinuxBuffer(t *testing.T) {
 	}
 	checkStatfs(t, "SYS_FSTATFS", &viaFd)
 
-	// One filesystem, asked by path and by descriptor: its identity and
-	// its size agree. Free counts move under other writers, so they are
-	// left out.
+	// One filesystem, asked by path and by descriptor: its identity and its size
+	// agree. Free counts move under other writers, so they are left out.
 	if viaFd.Fsid != viaPath.Fsid || viaFd.Bsize != viaPath.Bsize || viaFd.Blocks != viaPath.Blocks {
 		t.Errorf("fstatfs fsid=%v bsize=%d blocks=%d, statfs fsid=%v bsize=%d blocks=%d: the same filesystem",
 			viaFd.Fsid, viaFd.Bsize, viaFd.Blocks, viaPath.Fsid, viaPath.Bsize, viaPath.Blocks)

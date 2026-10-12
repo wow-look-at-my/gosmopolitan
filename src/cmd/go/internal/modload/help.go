@@ -21,12 +21,12 @@ https://go.dev/doc/tutorial/create-module.
 
 For a detailed reference on modules, see https://go.dev/ref/mod.
 
-The go command downloads modules from https://proxy.golang.org and falls back
-to the origin repository. It authenticates modules using the checksum database
-at https://sum.golang.org. GOPROXY and GOSUMDB do not exist in this toolchain.
-Both services are operated by the Go team at Google. The privacy policies for these services are available at
-https://proxy.golang.org/privacy and https://sum.golang.org/privacy,
-respectively.
+The go command downloads each module from its origin repository. A github.com
+module comes from its GitHub archive. The go command never asks the module
+mirror at proxy.golang.org. It authenticates modules using the checksum
+database at https://sum.golang.org. GOPROXY and GOSUMDB do not exist in this
+toolchain. The privacy policy of the checksum database is available at
+https://sum.golang.org/privacy.
 
 The go command's download behavior may be configured using GOPRIVATE,
 GONOPROXY, GONOSUMDB and other environment variables. See 'go help environment'

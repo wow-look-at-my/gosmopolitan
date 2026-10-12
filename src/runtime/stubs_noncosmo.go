@@ -1,20 +1,16 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build !cosmo
 
 package runtime
 
-// cosmoStacksAreSystemAllocated is a stub for non-cosmo systems; see
-// mStackIsSystemAllocated and the GOOS=cosmo implementation in os_cosmo.go.
+// cosmoStacksAreSystemAllocated is a stub for non-cosmo systems.
 func cosmoStacksAreSystemAllocated() bool {
 	return false
 }
 
-// cosmoHostIsWindows is a stub for non-cosmo systems; see
-// sysReserveAligned in mem.go and the GOOS=cosmo implementation in
-// os_cosmo.go.
+// cosmoHostIsWindows is a stub for non-cosmo systems.
 //
 //go:nosplit
 func cosmoHostIsWindows() bool {

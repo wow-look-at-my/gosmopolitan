@@ -1,15 +1,10 @@
 #!/usr/bin/env bash
-# embedded-std.sh -- the embedded standard library end to end: go tool
-# embedstd writes the blob, a cosmo go command links it in, and with no
-# GOROOT that command lists std from its manifest, takes a GOROOT naming
-# itself through a link or a copy, builds a program byte for byte as the
-# source tree does, links it the same way twice, vets and tests it, and
-# refuses to test std. Run from the repository root with the toolchain
-# built.
+# embedded-std.sh -- the embedded standard library end to end: go tool embedstd writes the blob.
 set -euo pipefail
 
 root=$PWD
-export PATH="$root/bin:$root/misc/cosmo:$PATH"
+# cosmocc first: embedstd builds std with cgo on, and the source tree's own listing and builds must see the same compiler.
+export PATH="$root/bin:$root/misc/cosmo:/opt/cosmocc/bin:$PATH"
 work=$(mktemp -d)
 mkdir -p "$work/hello" "$work/embedded" "$work/source" "$work/again"
 cat >"$work/hello/go.mod" <<'EOF'
@@ -99,6 +94,38 @@ echo "== vet, test and tidy run through it"
 embedded vet .
 embedded test .
 embedded mod tidy
+
+echo "== a cgo program builds through it, byte for byte the source tree's build, and runs"
+cp -r testdata/cgoprobe "$work/cgoprobe"
+(cd "$work/cgoprobe" && env -u GOROOT GOCACHE="$work/cache" /bin/sh "$work/go.com" build -trimpath -ldflags=-buildid= -o "$work/embedded/cgoprobe.com" .)
+(cd "$work/cgoprobe" && GOOS=cosmo go build -trimpath -ldflags=-buildid= -o "$work/source/cgoprobe.com" .)
+cmp "$work/embedded/cgoprobe.com" "$work/source/cgoprobe.com"
+/bin/sh "$work/embedded/cgoprobe.com" >"$work/cgoprobe.out"
+grep -q "ok callback" "$work/cgoprobe.out"
+(cd "$work/cgoprobe" && env -u GOROOT GOCACHE="$work/cache" /bin/sh "$work/go.com" vet .)
+
+# wasm_build builds hello for GOOS $1 on wasm through the carried std, compiling no standard package, byte for byte the source tree's build.
+wasm_build() {
+	if ! GOOS="$1" GOARCH=wasm embedded build -x -trimpath -ldflags=-buildid= -o "$work/embedded/hello.$1.wasm" . 2>"$work/build-$1.log"; then
+		cat "$work/build-$1.log" >&2
+		exit 1
+	fi
+	if grep -E "compile .* -p (fmt|runtime|os) " "$work/build-$1.log"; then
+		echo "a standard package was compiled from source for $1/wasm" >&2
+		exit 1
+	fi
+	# A link served out of the build cache writes no importcfg, as above.
+	if grep -qE "/link( |$)" "$work/build-$1.log" && ! grep -q "self:std/$1_wasm/" "$work/build-$1.log"; then
+		echo "the $1/wasm link names no embedded package" >&2
+		exit 1
+	fi
+	(cd "$work/hello" && GOOS="$1" GOARCH=wasm go build -trimpath -ldflags=-buildid= -o "$work/source/hello.$1.wasm" .)
+	cmp "$work/embedded/hello.$1.wasm" "$work/source/hello.$1.wasm"
+}
+
+echo "== js/wasm and wasip1/wasm programs build through it from the carried std"
+wasm_build js
+wasm_build wasip1
 
 echo "== a listing hands an outside reader a standard package's export data as a file"
 export_file=$(embedded list -export -f '{{.Export}}' fmt)

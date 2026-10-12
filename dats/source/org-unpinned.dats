@@ -58,6 +58,18 @@ tests:
 		dats/source/org-unpinned.sh "$TMPDIR/lz4.mod"
 	  exit: 0
 
+	- desc: a third-party module replaced by an org module keeps its version
+	  cmd: |
+		printf 'replace golang.org/x/tools v0.49.0 => github.com/wow-look-at-my/tools v0.0.0\n' > "$TMPDIR/tools.mod"
+		dats/source/org-unpinned.sh "$TMPDIR/tools.mod"
+	  exit: 0
+
+	- desc: the guard refuses a dated org replacement of a third-party module
+	  cmd: |
+		printf 'replace golang.org/x/tools v0.49.0 => github.com/wow-look-at-my/tools v0.0.0-20260101000000-abcdefabcdef\n' > "$TMPDIR/datedtools.mod"
+		rc=0; dats/source/org-unpinned.sh "$TMPDIR/datedtools.mod" || rc=$?
+		test "$rc" -eq 2
+
 	- desc: the guard refuses an org action pinned to a tag
 	  cmd: |
 		printf '      - uses: wow-look-at-my/dats@v1\n' > "$TMPDIR/tag.yml"

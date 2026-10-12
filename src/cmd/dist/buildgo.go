@@ -82,6 +82,15 @@ func defaultCCFunc(name string, defaultcc map[string]string) string {
 		fmt.Fprintf(&buf, "\tcase %s:\n\t\treturn %s\n", quote(k), quote(defaultcc[k]))
 	}
 	fmt.Fprintf(&buf, "\t}\n")
+	// A cosmo port always defaults to its cosmocc cross compiler, even when the toolchain has a CC.
+	fmt.Fprintf(&buf, "\tswitch goos+`/`+goarch {\n")
+	for _, port := range []string{"cosmo/amd64", "cosmo/arm64"} {
+		if _, ok := defaultcc[port]; ok {
+			continue
+		}
+		fmt.Fprintf(&buf, "\tcase %s:\n\t\treturn %s\n", quote(port), quote(cosmoDefaultCC(name, port)))
+	}
+	fmt.Fprintf(&buf, "\t}\n")
 	if cc := defaultcc[""]; cc != "" {
 		fmt.Fprintf(&buf, "\treturn %s\n", quote(cc))
 	} else {
@@ -105,6 +114,18 @@ func defaultCCFunc(name string, defaultcc map[string]string) string {
 	fmt.Fprintf(&buf, "}\n")
 
 	return buf.String()
+}
+
+// cosmoDefaultCC names the cosmocc driver for one cosmo port. A name that ends in CXX asks for the C++ driver.
+func cosmoDefaultCC(name, port string) string {
+	prefix := "x86_64"
+	if port == "cosmo/arm64" {
+		prefix = "aarch64"
+	}
+	if strings.HasSuffix(name, "CXX") {
+		return prefix + "-unknown-cosmo-c++"
+	}
+	return prefix + "-unknown-cosmo-cc"
 }
 
 // mktzdata src/time/tzdata/zzipdata.go:

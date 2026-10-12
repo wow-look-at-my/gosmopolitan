@@ -9,8 +9,10 @@
 # with a url.<base>.insteadOf rewrite rather than a proxy. Nothing here reaches
 # the network.
 
-[short] skip 'constructs local git repositories'
 [!git] skip
+
+# Every org repository is a local file:// clone behind an insteadOf rule.
+env TESTGOVCSREMOTE=
 
 env GIT_CONFIG_GLOBAL=$WORK${/}home${/}gopher${/}.gitconfig
 env HOME=$WORK${/}home${/}gopher
@@ -182,6 +184,12 @@ go list -m github.com/wow-look-at-my/alpha
 stdout '=> github.com/wow-look-at-my/alpha v0\.0\.0-20260104050607-[0-9a-f]+$'
 go run .
 stdout '^alpha-v1$'
+
+# modules.txt records the placeholder on both sides of the replacement, as
+# go.mod does, so vendor mode finds both files consistent.
+go mod vendor
+grep '^# github.com/wow-look-at-my/alpha v0\.0\.0 => github.com/wow-look-at-my/alpha v0\.0\.0$' vendor/modules.txt
+go build -mod=vendor ./...
 
 # A name the dependency has no branch for takes the default branch, the same as
 # the branch this repository is on does. The merge that closes a pull request

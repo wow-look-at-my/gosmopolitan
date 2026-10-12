@@ -259,6 +259,25 @@ cond_signal_enosys:
 	MOVW	$78, R0		// Apple ENOSYS
 	RET
 
+// The __ulock_wait and __ulock_wake trampolines unpack xnuUlockWait's and
+// xnuUlockWake's argument blocks the same way.
+TEXT runtime·cosmo_ulock_wait_trampoline(SB),NOSPLIT,$0
+	MOVD	runtime·cosmoUlockWaitFn(SB), R12
+	MOVWU	24(R0), R3	// arg 4 timeout
+	MOVD	16(R0), R2	// arg 3 value
+	MOVD	8(R0), R1	// arg 2 addr
+	MOVWU	0(R0), R0	// arg 1 op
+	BL	(R12)
+	RET
+
+TEXT runtime·cosmo_ulock_wake_trampoline(SB),NOSPLIT,$0
+	MOVD	runtime·cosmoUlockWakeFn(SB), R12
+	MOVD	16(R0), R2	// arg 3 wake value
+	MOVD	8(R0), R1	// arg 2 addr
+	MOVWU	0(R0), R0	// arg 1 op
+	BL	(R12)
+	RET
+
 // Helper macro: check if we're on macOS and jump to label if so
 // Clobbers R9
 #define CHECK_DARWIN(label) \
@@ -1333,19 +1352,19 @@ TEXT runtime·sigaltstackLinux(SB),NOSPLIT,$0
 sigaltstack_ok:
 	RET
 
-TEXT runtime·osyield(SB),NOSPLIT,$0
+TEXT runtime·osyield(SB),NOSPLIT,$8
 	CHECK_DARWIN(osyield_darwin)
 	// Linux path
 	MOVD	$SYS_sched_yield, R8
 	SVC
 	RET
 osyield_darwin:
-	// macOS: use pthread_yield_np
-	MOVD	runtime·__syslib(SB), R9
-	MOVD	176(R9), R12
-	SUB	$16, RSP
-	BL	(R12)
-	ADD	$16, RSP
+	// usleep(1), as upstream darwin. XNU's own yield (swtch_pri) holds
+	// the caller at priority 0 for a quantum, so on a saturated host each
+	// yield costs ~10ms.
+	MOVW	$1, R0
+	MOVW	R0, 8(RSP)
+	BL	runtime·usleep(SB)
 	RET
 
 TEXT runtime·sched_getaffinity(SB),NOSPLIT,$0-28

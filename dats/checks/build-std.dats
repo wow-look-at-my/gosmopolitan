@@ -1,4 +1,4 @@
-# The uprev tripwire: every std package builds for cosmo on both
+# The uprev tripwire. Every std package builds for cosmo on both
 # architectures, and the go-toolchain consumers that reach the cosmo
 # syscall surface build against it. The execution suites compile only
 # what fizzbuzz and runtimeprobe import, so a package an upstream merge

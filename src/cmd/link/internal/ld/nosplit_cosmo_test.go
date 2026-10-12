@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package ld
 
@@ -16,7 +15,7 @@ import (
 )
 
 // TestAPECosmoNosplitBudget pins the nosplit budget: cosmo gets the same
-// extra stack guard unit as AIX and OpenBSD, because its darwin-host
+// extra stack guard unit as AIX and OpenBSD. This is because its darwin-host
 // syscall emulation is a deep nosplit chain over dlsym'd libc.
 func TestAPECosmoNosplitBudget(t *testing.T) {
 	oldGOOS := buildcfg.GOOS
@@ -33,14 +32,14 @@ func TestAPECosmoNosplitBudget(t *testing.T) {
 }
 
 // TestAPECosmoNosplitABI0SyscallChain builds a GOOS=cosmo fat APE whose
-// assembly enters syscall.Syscall/Syscall6/RawSyscall through ABI0, the
+// assembly enters syscall.Syscall/Syscall6/RawSyscall through ABI0. The
 // way golang.org/x/sys/unix's asm_linux_*.s files do. The ABI0 entry
 // drags the ABI-bridge wrappers into the nosplit chain on top of the
 // darwin syscall-emulation spine (syscall6SlowDarwin and the darwin*
-// helpers), which is the deepest nosplit chain a cosmo binary links.
+// helpers). This is the deepest nosplit chain a cosmo binary links.
 // Under a single stack guard unit the arm64 link fails with "nosplit
-// stack over 792 byte limit"; any module that imports x/sys/unix hits
-// it, since cosmo satisfies the linux build tag.
+// stack over byte limit". Any module that imports x/sys/unix hits it,
+// since cosmo satisfies the linux build tag.
 func TestAPECosmoNosplitABI0SyscallChain(t *testing.T) {
 	testenv.MustHaveGoBuild(t)
 	if testing.Short() {
@@ -97,8 +96,7 @@ TEXT ·RawSyscall(SB),NOSPLIT,$0-56
 	JMP	syscall·RawSyscall(SB)
 `)
 
-	// The fat build links both architectures; arm64 has the deeper
-	// frames and is where the budget overflowed.
+	// The fat build links both architectures; arm64 has the deeper frames and is where the budget overflowed.
 	cmd := testenv.Command(t, testenv.GoToolPath(t), "build", "-o", filepath.Join(dir, "probe.com"), ".")
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "GOOS=cosmo", "GOCOSMOFAT=", "GOCOSMOSTRIP=", "GOCOSMODEBUG=", "GOCOSMOPLATFORMS=")

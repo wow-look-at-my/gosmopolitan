@@ -11,10 +11,10 @@ import (
 	"internal/race"
 	"internal/testenv"
 	"math"
+	"math/bits"
 	"math/rand"
 	"os"
 	. "runtime"
-	"slices"
 	"strings"
 	"testing"
 	"unsafe"
@@ -112,7 +112,8 @@ func TestSmhasherSanity(t *testing.T) {
 }
 
 type HashSet struct {
-	list []uintptr // list of hashes added
+	list  []uintptr // list of hashes added
+	table []uintptr // open-addressed set check reuses to count distinct hashes
 }
 
 func newHashSet() *HashSet {
@@ -132,15 +133,8 @@ func (s *HashSet) addS_seed(x string, seed uintptr) {
 }
 func (s *HashSet) check(t *testing.T) {
 	list := s.list
-	slices.Sort(list)
-
-	collisions := 0
-	for i := 1; i < len(list); i++ {
-		if list[i] == list[i-1] {
-			collisions++
-		}
-	}
 	n := len(list)
+	collisions := n - s.countDistinct()
 
 	const SLOP = 50.0
 	pairs := int64(n) * int64(n-1) / 2
@@ -151,6 +145,47 @@ func (s *HashSet) check(t *testing.T) {
 	}
 	// Reset for reuse
 	s.list = s.list[:0]
+}
+
+// countDistinct returns how many distinct hashes s.list holds, in one pass
+// over an open-addressed table at most half full. A sort costs log n
+// compares per hash, and the collision check needs only the count.
+func (s *HashSet) countDistinct() int {
+	width := 1
+	for 1<<width < 2*len(s.list) {
+		width++
+	}
+	size := 1 << width
+	if cap(s.table) < size {
+		s.table = make([]uintptr, size)
+	}
+	s.table = s.table[:size]
+	clear(s.table)
+	mask := uint64(size - 1)
+
+	// The slot comes from a Fibonacci multiply of the whole hash, so a hash
+	// whose low bits are constant still spreads over the table. Zero marks
+	// an empty slot, so a zero hash is counted beside the table.
+	distinct := 0
+	sawZero := false
+	for _, hash := range s.list {
+		if hash == 0 {
+			if !sawZero {
+				sawZero = true
+				distinct++
+			}
+			continue
+		}
+		slot := (uint64(hash) * 0x9E3779B97F4A7C15) >> (64 - width)
+		for s.table[slot] != 0 && s.table[slot] != hash {
+			slot = (slot + 1) & mask
+		}
+		if s.table[slot] == 0 {
+			s.table[slot] = hash
+			distinct++
+		}
+	}
+	return distinct
 }
 
 // a string plus adding zeros must make distinct hashes
@@ -515,14 +550,20 @@ func TestSmhasherAvalanche(t *testing.T) {
 	avalancheTest1(t, &EfaceKey{})
 	avalancheTest1(t, &IfaceKey{})
 }
+// avalanchePlanes holds a count up to 1<<avalanchePlanes - 1, past REP.
+const avalanchePlanes = 17
+
 func avalancheTest1(t *testing.T, k Key) {
 	const REP = 100000
 	r := rand.New(rand.NewSource(1234))
 	n := k.bits()
 
-	// grid[i][j] is a count of whether flipping
-	// input bit i affects output bit j.
-	grid := make([][hashSize]int, n)
+	// planes[i] counts, for each output bit j at once, how often flipping
+	// input bit i flipped output bit j. The counts are bit-sliced: bit j of
+	// planes[i][p] is bit p of output bit j's count, so adding a flip mask
+	// is a ripple-carry add across the planes. That is two word operations
+	// per add on average, where a counter per output bit costs hashSize.
+	planes := make([][avalanchePlanes]uint64, n)
 
 	for z := 0; z < REP; z++ {
 		// pick a random key, hash it
@@ -532,14 +573,23 @@ func avalancheTest1(t *testing.T, k Key) {
 		// flip each bit, hash & compare the results
 		for i := 0; i < n; i++ {
 			k.flipBit(i)
-			d := h ^ k.hash()
+			carry := uint64(h ^ k.hash())
 			k.flipBit(i)
 
 			// record the effects of that bit flip
-			g := &grid[i]
+			for plane := 0; carry != 0; plane++ {
+				carry, planes[i][plane] = planes[i][plane]&carry, planes[i][plane]^carry
+			}
+		}
+	}
+
+	// grid[i][j] is a count of whether flipping
+	// input bit i affects output bit j.
+	grid := make([][hashSize]int, n)
+	for i := range grid {
+		for plane, word := range planes[i] {
 			for j := 0; j < hashSize; j++ {
-				g[j] += int(d & 1)
-				d >>= 1
+				grid[i][j] += int(word>>j&1) << plane
 			}
 		}
 	}
@@ -599,14 +649,15 @@ func windowed(t *testing.T, h *HashSet, k Key) {
 	}
 	const BITS = 16
 
+	// Walk the window's 1<<BITS values in Gray code order: each value
+	// differs from the one before in a single bit, so the key needs one
+	// flip per hash instead of a clear and a flip per set bit. It is the
+	// same set of keys.
 	for r := 0; r < k.bits(); r++ {
-		for i := 0; i < 1<<BITS; i++ {
-			k.clear()
-			for j := 0; j < BITS; j++ {
-				if i>>uint(j)&1 != 0 {
-					k.flipBit((j + r) % k.bits())
-				}
-			}
+		k.clear()
+		h.add(k.hash())
+		for step := 1; step < 1<<BITS; step++ {
+			k.flipBit((bits.TrailingZeros(uint(step)) + r) % k.bits())
 			h.add(k.hash())
 		}
 		h.check(t)

@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo
 
@@ -17,7 +16,7 @@ import (
 
 // TestStartPristineAPE starts a freshly built APE straight from the file, with
 // no wrapper and no binfmt registration: the kernel answers ENOEXEC on a posix
-// host, and the file must still run.
+// host. The file must still run.
 func TestStartPristineAPE(t *testing.T) {
 	testenv.MustHaveGoBuild(t)
 	dir := t.TempDir()

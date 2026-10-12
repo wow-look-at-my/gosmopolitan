@@ -1,15 +1,14 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 // Package embedded reads the standard library a go binary carries inside
-// itself: a blob of compiled package archives, the assembly headers and a
+// itself. A blob of compiled package archives. The assembly headers and a
 // manifest per target, appended past the APE's load span by the linker's
-// -apeappend flag and found through a trailer at the end of the file.
+// -apeappend flag and found through a trailer. At the end of the file.
 //
 // A tool names an entry as "self:<name>", for example
 // "self:std/cosmo_amd64/fmt.a" in an importcfg or "self:include" as an
-// assembler include directory, and resolves it here with no file of its own.
+// assembler include directory. It resolves it here with no file of its own.
 package embedded
 
 import (
@@ -103,9 +102,7 @@ func load() (*blob, error) {
 	once.Do(func() {
 		exe, err := os.Executable()
 		if err != nil {
-			// Every archive in this binary is reached through this name, so a
-			// bare error here reaches the reader as one unexplained failure
-			// per import.
+			// Every archive in this binary is reached through this name.
 			loadErr = fmt.Errorf("naming this executable, which carries the standard library: %w", err)
 			return
 		}
@@ -118,9 +115,7 @@ func load() (*blob, error) {
 func openBlob(exe string) (*blob, error) {
 	file, err := os.Open(exe)
 	if err != nil {
-		// Named, because this is the one path every embedded archive is read
-		// through. A bare errno here reads as one unexplained import failure
-		// per package, and says neither the file nor the step that wanted it.
+		// Named, because this is the path every embedded archive is read through.
 		return nil, fmt.Errorf("opening %s, which carries the standard library: %w", exe, err)
 	}
 	defer file.Close()
@@ -321,23 +316,29 @@ func (writer *Writer) Add(name string, content []byte) {
 
 // WriteTo writes the blob: magic, index length, index, then the entries.
 func (writer *Writer) WriteTo(out io.Writer) (int64, error) {
-	index, err := json.Marshal(writer.entries)
-	if err != nil {
-		return 0, err
-	}
-	for len(index)%8 != 0 {
-		index = append(index, ' ')
-	}
-	head := int64(16 + len(index))
+	// The offsets include the index that spells them, and a wider spelling can widen the index. The loop ends when the head stops moving.
+	base := make([]int64, len(writer.entries))
 	for idx := range writer.entries {
-		writer.entries[idx].Offset += head
+		base[idx] = writer.entries[idx].Offset
 	}
-	index, err = json.Marshal(writer.entries)
-	if err != nil {
-		return 0, err
-	}
-	for len(index)%8 != 0 {
-		index = append(index, ' ')
+	var index []byte
+	head := int64(0)
+	for {
+		for idx := range writer.entries {
+			writer.entries[idx].Offset = base[idx] + head
+		}
+		var err error
+		index, err = json.Marshal(writer.entries)
+		if err != nil {
+			return 0, err
+		}
+		for len(index)%8 != 0 {
+			index = append(index, ' ')
+		}
+		if int64(16+len(index)) == head {
+			break
+		}
+		head = int64(16 + len(index))
 	}
 	var buf bytes.Buffer
 	buf.WriteString(blobMagic)

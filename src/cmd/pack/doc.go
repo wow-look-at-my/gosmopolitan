@@ -37,4 +37,4 @@ For the p command, each file is prefixed by the name on a line by itself.
 For the t command, the listing includes additional file metadata.
 For the x command, names are printed as files are extracted.
 */
-package main
+package pack

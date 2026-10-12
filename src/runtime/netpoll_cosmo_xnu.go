@@ -1,23 +1,11 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo
 
 package runtime
 
-// Darwin (XNU) network poller for GOOS=cosmo, built on kqueue. One
-// runtime serves Linux, macOS and Windows, so the poller cannot be
-// chosen by build tag: netpoll_cosmo.go holds the epoll implementation
-// and dispatches on __hostos to this file when the host is XNU. kqueue
-// and kevent are Apple libc wrappers, resolved through the Syslib's
-// dlsym at osinit. amd64 has no Syslib, so its stubs report the poller
-// unsupported and netpollinit fails visibly.
-//
-// This ports upstream netpoll_kqueue.go: a descriptor is registered
-// once at netpollopen with EV_ADD|EV_CLEAR, netpollBreak is an
-// EVFILT_USER self-event, and kevent registration is thread-safe in
-// the kernel. So there are NO runtime locks and no wakeup pipe here.
+// Darwin (XNU) network poller for GOOS=cosmo, built on kqueue.
 
 import (
 	"internal/runtime/atomic"
@@ -49,25 +37,20 @@ const (
 	_EV_EOF_xnu       = 0x8000
 	_NOTE_TRIGGER_xnu = 0x1000000
 
-	// Magic identifier for the EVFILT_USER wakeup event; same value as
-	// upstream netpoll_kqueue_event.go so a stray printout of it leads
-	// searchers to the same place.
+	// Magic identifier for the EVFILT_USER wakeup event.
 	xnuKqIdent = 0xee1eb9f4
 
-	// Linux ETIMEDOUT: kevent errnos arrive here already translated to
-	// Linux numbering by cosmoDarwinErrno.
+	// Linux ETIMEDOUT: kevent errnos arrive here already translated to Linux numbering by cosmoDarwinErrno.
 	_ETIMEDOUT_linux = 110
 )
 
 // xnuKq is the kqueue descriptor, valid only on XNU hosts.
 var xnuKq int32 = -1
 
-// Poller forensics: three atomic stores per kevent cycle, noise next
-// to the syscall. The runtimeprobe watchdog samples them twice through
-// cosmoNetpollDiag when it fires, so a poller stall names itself in
-// the CI log. A frozen cycle counter with exit older than enter means
-// stuck inside kevent; done < cycles means stuck between kevent and
-// cycle end; the sema counters tell the parking side's story.
+// Poller forensics: atomic stores per kevent cycle, noise next to the
+// syscall. The runtimeprobe watchdog samples them twice through
+// cosmoNetpollDiag when it fires, so a poller stall names itself in the CI
+// log.
 var (
 	xnuPollCycles  atomic.Uint64 // kevent cycles started
 	xnuPollDone    atomic.Uint64 // kevent cycles completed
@@ -76,9 +59,7 @@ var (
 	xnuPollLastN   atomic.Int32  // last kevent result
 	xnuPollLastE   atomic.Int32  // last kevent errno (Linux numbering)
 
-	// M-parking progress on XNU hosts, incremented by the arm64 sema
-	// code (os_cosmo_arm64_sema.go); declared here so the diag function
-	// builds on both arches.
+	// M-parking progress on XNU hosts, incremented by the arm64 sema code (os_cosmo_arm64_sema.go).
 	xnuSemaWakeEnter atomic.Uint64 // semawakeup entered (darwin path)
 	xnuSemaWakeDone  atomic.Uint64 // semawakeup completed
 	xnuSemaAcquired  atomic.Uint64 // semasleep consumed a wakeup (count--)
@@ -121,9 +102,7 @@ func netpollinitDarwin() {
 			break
 		}
 		if e == _EINTR {
-			// All changes contained in the changelist should have been
-			// applied before returning EINTR, but retry anyway to make
-			// a 100% commitment (matches upstream).
+			// All changes contained in the changelist should have been applied before returning EINTR.
 			continue
 		}
 		println("runtime: kevent for EVFILT_USER failed with", e)
@@ -136,11 +115,7 @@ func netpollIsPollDescriptorDarwin(fd uintptr) bool {
 }
 
 func netpollopenDarwin(fd uintptr, pd *pollDesc) uintptr {
-	// Arm both EVFILT_READ and EVFILT_WRITE in edge-triggered mode
-	// (EV_CLEAR) for the whole fd lifetime. The notifications are
-	// automatically unregistered when fd is closed. cosmo is 64-bit
-	// only, so the udata field always carries the tagged pd pointer
-	// (upstream's 32-bit fallback is not needed).
+	// Arm both EVFILT_READ and EVFILT_WRITE in edge-triggered mode (EV_CLEAR) for the whole fd lifetime.
 	var ev [2]keventt
 	*(*uintptr)(unsafe.Pointer(&ev[0].ident)) = fd
 	ev[0].filter = _EVFILT_READ_xnu
@@ -157,14 +132,12 @@ func netpollopenDarwin(fd uintptr, pd *pollDesc) uintptr {
 }
 
 func netpollcloseDarwin(fd uintptr) uintptr {
-	// Don't need to unregister because calling close() on fd will
-	// remove any kevents that reference the descriptor.
+	// Don't need to unregister because calling close() on fd will remove any kevents that reference the descriptor.
 	return 0
 }
 
 func netpollarmDarwin(pd *pollDesc, mode int) {
-	// kqueue is edge-triggered and arms once at netpollopen;
-	// netpollLevelTriggered is not set, so this is never called.
+	// kqueue is edge-triggered and arms once at netpollopen; netpollLevelTriggered is not set, so this is never called.
 	throw("runtime: unused")
 }
 
@@ -190,14 +163,9 @@ func netpollBreakDarwin() {
 	}
 }
 
-// netpollDarwin checks for ready network connections.
-// Returns a list of goroutines that become runnable,
-// and a delta to add to netpollWaiters.
-// This must never return an empty list with a non-zero delta.
-//
-// delay < 0: blocks indefinitely
-// delay == 0: does not block, just polls
-// delay > 0: block for up to that many nanoseconds
+// netpollDarwin checks for ready network connections. Returns a list of
+// goroutines that become runnable, and a delta to add to netpollWaiters. This
+// must never return an empty list with a non-zero delta.
 //
 //go:nowritebarrierrec
 func netpollDarwin(delay int64) (gList, int32) {
@@ -227,16 +195,14 @@ retry:
 	xnuPollLastN.Store(n)
 	xnuPollLastE.Store(e)
 	if n < 0 {
-		// Tolerate ETIMEDOUT like upstream netpoll_kqueue.go
-		// (go.dev/issue/59679: macOS kevent has been seen failing with
-		// ETIMEDOUT instead of returning 0).
+		// Tolerate ETIMEDOUT like upstream netpoll_kqueue.go.
 		if e != _EINTR && e != _ETIMEDOUT_linux {
 			println("runtime: kevent on fd", xnuKq, "failed with", e)
 			throw("runtime: netpoll failed")
 		}
 		xnuPollDone.Add(1)
-		// If a timed sleep was interrupted, just return to
-		// recalculate how long we should sleep now.
+		// If a timed sleep was interrupted, return to recalculate how long we
+		// should sleep now.
 		if delay > 0 {
 			return gList{}, 0
 		}
@@ -253,12 +219,10 @@ retry:
 				throw("runtime: netpoll: break ident ready for something unexpected")
 			}
 			if delay != 0 {
-				// netpollBreak could be picked up by a nonblocking
-				// poll. Only reset the netpollWakeSig if blocking.
+				// netpollBreak could be picked up by a nonblocking poll. Only reset the netpollWakeSig if blocking.
 				netpollWakeSig.Store(0)
 			} else {
-				// Got a wrong thread, relay (upstream
-				// processWakeupEvent).
+				// Got a wrong thread, relay (upstream processWakeupEvent).
 				netpollBreakDarwin()
 			}
 			continue
@@ -269,14 +233,8 @@ retry:
 		case _EVFILT_READ_xnu:
 			mode += 'r'
 
-			// On some systems when the read end of a pipe is closed
-			// the write end will not get a _EVFILT_WRITE event, but
-			// will get a _EVFILT_READ event with EV_EOF set. Note
-			// that setting 'w' here just means that we will wake up
-			// a goroutine waiting to write; that goroutine will try
-			// the write again, and the appropriate thing will happen
-			// based on what that write returns (success, EPIPE,
-			// EAGAIN).
+			// On some systems when the read end of a pipe is closed the write end will
+			// not get a _EVFILT_WRITE event.
 			if ev.flags&_EV_EOF_xnu != 0 {
 				mode += 'w'
 			}

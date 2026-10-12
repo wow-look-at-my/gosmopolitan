@@ -1,6 +1,5 @@
-// Copyright 2024 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo
 
@@ -14,9 +13,7 @@ const (
 	_SIG_SETMASK = 2
 )
 
-// It's hard to tease out exactly how big a Sigset is, but
-// rt_sigprocmask crashes if we get it wrong, so if binaries
-// are running, this is right. Cosmopolitan uses Linux-style sigset.
+// It is hard to tease out exactly how big a Sigset is.
 type sigset [2]uint32
 
 var sigset_all = sigset{^uint32(0), ^uint32(0)}

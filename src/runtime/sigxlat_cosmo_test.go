@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo
 
@@ -11,10 +10,6 @@ import (
 	"testing"
 )
 
-// sigPairs is the authoritative Linux<->Apple signal correspondence,
-// written out pair by pair from upstream defs_linux_arm64.go (which
-// defs_cosmo_arm64.go mirrors for 1..31) and defs_darwin_arm64.go.
-// The runtime tables must match it exactly.
 var sigPairs = map[uint32]uint32{ // linux -> apple
 	1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6, // HUP INT QUIT ILL TRAP ABRT
 	7:  10, // BUS
@@ -65,8 +60,6 @@ func TestCosmoSigXlatTables(t *testing.T) {
 			t.Errorf("CosmoSigA2L(%d) = %d, want 0 (no Linux equivalent)", a, got)
 		}
 	}
-	// Out-of-range and zero inputs must translate to 0, never index
-	// out of the tables.
 	for _, s := range []uint32{0, 32, 33, 64, 65, 128, 1 << 30} {
 		if got := CosmoSigL2A(s); got != 0 {
 			t.Errorf("CosmoSigL2A(%d) = %d, want 0", s, got)
@@ -78,9 +71,7 @@ func TestCosmoSigXlatTables(t *testing.T) {
 }
 
 func TestCosmoSigXlatRoundTrip(t *testing.T) {
-	// Every mapped Linux signal must round-trip exactly, and every
-	// mapped Apple signal must round-trip exactly (the tables are
-	// mutually inverse bijections on their mapped domains).
+	// Every mapped Linux signal must round-trip exactly.
 	for l := uint32(1); l <= 64; l++ {
 		if a := CosmoSigL2A(l); a != 0 {
 			if back := CosmoSigA2L(a); back != l {
@@ -98,8 +89,7 @@ func TestCosmoSigXlatRoundTrip(t *testing.T) {
 }
 
 func TestCosmoSigmaskXlat(t *testing.T) {
-	// A mask of every mapped Linux signal converts to a mask of every
-	// mapped Apple signal and back without loss.
+	// A mask of every mapped Linux signal converts to a mask of every mapped Apple signal and back without loss.
 	var lm uint64
 	var am uint32
 	for l, a := range sigPairs {

@@ -1,7 +1,7 @@
 # T.Serial stops every other test in the process, so it waits on a condition
 # only another test can clear. Asking for it from inside a synctest bubble
-# parks a bubble goroutine on a condition no bubble goroutine can signal, and
-# synctest reports a deadlock naming neither Serial nor the helper that asked.
+# parks a bubble goroutine on a condition no bubble goroutine can signal.
+# Synctest reports a deadlock naming neither Serial nor the helper that asked.
 tests:
 	- desc: no test opens a synctest bubble that waits on the serial barrier
 	  cmd: dats/source/bubble-serial.sh .

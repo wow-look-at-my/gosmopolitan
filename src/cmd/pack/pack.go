@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package main
+package pack
 
 import (
 	"cmd/internal/archive"
@@ -29,7 +29,10 @@ func usage() {
 	os.Exit(2)
 }
 
-func main() {
+// Main runs pack with args, the command line after the program name, and
+// answers its exit status.
+func Main(args []string) int {
+	objabi.Enter("pack", args, nil)
 	log.SetFlags(0)
 	log.SetPrefix("pack: ")
 	counter.Open()
@@ -69,6 +72,7 @@ func main() {
 	if len(ar.files) > 0 {
 		log.Fatalf("file %q not in archive", ar.files[0])
 	}
+	return 0
 }
 
 // The unusual ancestry means the arguments are not Go-standard.

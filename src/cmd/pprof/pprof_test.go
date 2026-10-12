@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package main
+package pprof
 
 import (
 	"internal/testenv"
@@ -16,8 +16,7 @@ import (
 // GO_PPROFTEST_IS_PPROF is set, and runs the tests otherwise.
 func TestMain(m *testing.M) {
 	if os.Getenv("GO_PPROFTEST_IS_PPROF") != "" {
-		main()
-		os.Exit(0)
+		os.Exit(Main(os.Args[1:]))
 	}
 
 	os.Setenv("GO_PPROFTEST_IS_PPROF", "1") // Set for subprocesses to inherit.

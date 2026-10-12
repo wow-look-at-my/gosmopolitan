@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo
 
@@ -11,12 +10,6 @@ import (
 	"testing"
 )
 
-// TestCosmoXnuItimervalABI pins the Apple itimerval mirror
-// (signal_cosmo_itimer.go) against the in-tree darwin port's ground
-// truth (defs_darwin_arm64.go): 16-byte timevals with the 32-bit
-// tv_usec at offset 8, so the itimerval is 32 bytes with usec words
-// at offsets 8 and 24. darwinSetitimer hands this exact layout to
-// Apple libc; a drifted mirror would arm garbage intervals.
 func TestCosmoXnuItimervalABI(t *testing.T) {
 	if XnuTimevalSize != 16 {
 		t.Errorf("xnuTimeval size = %d, want 16", XnuTimevalSize)
@@ -35,7 +28,6 @@ func TestCosmoXnuItimervalABI(t *testing.T) {
 // TestCosmoTimevalTranslation exercises the Linux<->Apple timeval
 // translation darwinSetitimer applies in both directions.
 func TestCosmoTimevalTranslation(t *testing.T) {
-	// The profiling arm shape: hz=100 -> set_usec(1000000/100).
 	if sec, usec := CosmoTimevalL2X(0, 10000); sec != 0 || usec != 10000 {
 		t.Errorf("L2X(0, 10000) = (%d, %d), want (0, 10000)", sec, usec)
 	}

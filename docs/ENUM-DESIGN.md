@@ -29,7 +29,7 @@ A member declares its value with `=` and its display text with a backquoted tag.
 
 A member with no `=` is one more than the member before it. The first member of a block is zero. An explicit value sets that member, and the count continues from it.
 
-Write values where an outside authority pins them. The kernel ABI pins an errno. A wire protocol pins an opcode. A file format pins a tag byte. Inserting a member into such a block must not renumber the members under it, so each one names its own value:
+Write values where an outside authority pins them. The kernel ABI pins an errno. A wire protocol pins an opcode. A file format pins a tag byte. Inserting a member into such a block must not renumber the members under it, so each names its own value:
 
 ```go
 type Errno enum int32 {

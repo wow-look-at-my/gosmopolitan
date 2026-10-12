@@ -1,6 +1,5 @@
 # GOWASM=threads under node: the pool, thread, speedup, STW-GC, liveness and
-# grow-atomic demos, each with its gate. The toolchain must already be
-# built, and node 18+ must be on PATH.
+# grow-atomic demos, each with its gate.
 tests:
 	- desc: the threads demos run and every gate holds
 	  cmd: |

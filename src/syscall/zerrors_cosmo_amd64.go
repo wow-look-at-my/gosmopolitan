@@ -1,6 +1,5 @@
-// Copyright 2024 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 // Error constants for Cosmopolitan Libc on amd64.
 // Cosmopolitan uses Linux error numbers.
@@ -241,10 +240,14 @@ const (
 	TCIOFLUSH = 0x2
 	TCOFLUSH  = 0x1
 
-	TIOCGPGRP = 0x540f
-	TIOCNOTTY = 0x5422
-	TIOCSCTTY = 0x540e
-	TIOCSPGRP = 0x5410
+	TIOCGPGRP  = 0x540f
+	TIOCGPTN   = 0x80045430
+	TIOCGWINSZ = 0x5413
+	TIOCNOTTY  = 0x5422
+	TIOCSCTTY  = 0x540e
+	TIOCSPGRP  = 0x5410
+	TIOCSPTLCK = 0x40045431
+	TIOCSWINSZ = 0x5414
 
 	WNOHANG    = 0x1
 	WUNTRACED  = 0x2

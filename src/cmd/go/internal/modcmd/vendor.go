@@ -67,12 +67,7 @@ func init() {
 }
 
 func runVendor(ctx context.Context, cmd *base.Command, args []string) {
-	moduleLoader := modload.NewLoader()
-	moduleLoader.InitWorkfile()
-	if modload.WorkFilePath(moduleLoader) != "" {
-		base.Fatalf("go: 'go mod vendor' cannot be run in workspace mode. Run 'go work vendor' to vendor the workspace or set 'GOWORK=off' to exit workspace mode.")
-	}
-	RunVendor(moduleLoader, ctx, vendorE, vendorO, args)
+	RunVendor(modload.NewLoader(), ctx, vendorE, vendorO, args)
 }
 
 func RunVendor(ld *modload.Loader, ctx context.Context, vendorE bool, vendorO string, args []string) {
@@ -121,7 +116,7 @@ func RunVendor(ld *modload.Loader, ctx context.Context, vendorE bool, vendorO st
 	includeGoVersions := false
 	isExplicit := map[module.Version]bool{}
 	gv := ld.MainModules.GoVersion(ld)
-	if gover.Compare(gv, "1.14") >= 0 && (ld.FindGoWork(base.Cwd()) != "" || modload.ModFile(ld).Go != nil) {
+	if gover.Compare(gv, "1.14") >= 0 && modload.ModFile(ld).Go != nil {
 		// If the Go version is at least 1.14, annotate all explicit 'require' and
 		// 'replace' targets found in the go.mod file so that we can perform a
 		// stronger consistency check when -mod=vendor is set.
@@ -160,10 +155,6 @@ func RunVendor(ld *modload.Loader, ctx context.Context, vendorE bool, vendorO st
 		w = io.MultiWriter(&buf, os.Stderr)
 	}
 
-	if ld.MainModules.WorkFile() != nil {
-		fmt.Fprintf(w, "## workspace\n")
-	}
-
 	replacementWritten := make(map[module.Version]bool)
 	for _, m := range vendorMods {
 		replacement := modload.Replacement(ld, m)
@@ -197,21 +188,6 @@ func RunVendor(ld *modload.Loader, ctx context.Context, vendorE bool, vendorO st
 		// without access to the complete build list, the consumer of the vendor
 		// directory can't otherwise determine that those replacements had no effect.
 		for _, m := range ld.MainModules.Versions() {
-			if workFile := ld.MainModules.WorkFile(); workFile != nil {
-				for _, r := range workFile.Replace {
-					if replacementWritten[r.Old] {
-						// We already recorded this replacement.
-						continue
-					}
-					replacementWritten[r.Old] = true
-
-					line := moduleLine(r.Old, r.New)
-					buf.WriteString(line)
-					if cfg.BuildV {
-						os.Stderr.WriteString(line)
-					}
-				}
-			}
 			if modFile := ld.MainModules.ModFile(m); modFile != nil {
 				for _, r := range modFile.Replace {
 					if replacementWritten[r.Old] {
@@ -258,6 +234,10 @@ func moduleLine(m, r module.Version) string {
 		b.WriteString(m.Version)
 	}
 	if r.Path != "" {
+		if r.Version != "" {
+			// An org replacement records the placeholder, as go.mod does.
+			r = orgmod.PlaceholderModule(r)
+		}
 		if str.HasFilePathPrefix(filepath.Clean(r.Path), "vendor") {
 			base.Fatalf("go: replacement path %s inside vendor directory", r.Path)
 		}

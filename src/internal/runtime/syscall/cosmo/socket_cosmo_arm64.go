@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo && arm64
 
@@ -8,18 +7,8 @@ package cosmo
 
 import "unsafe"
 
-// Darwin (macOS ARM64) socket syscall emulation, the socket half of the
-// slow path in syscall_cosmo_arm64.go. A socket syscall arrives with
-// Linux numbers, Linux sockaddr layouts and Linux option constants, and
-// Apple libc wants its own of all three, so everything translates here,
-// in one place, in both directions.
-//
-// A Linux sockaddr starts with a 16-bit family where Apple has {uint8
-// sa_len, uint8 sa_family}, and the payload past those two bytes is
-// identical for every family this admits. AF_UNSPEC, AF_UNIX and
-// AF_INET coincide; AF_INET6 is 10 on Linux and 30 on Apple. The option
-// table is darwinSockoptXlat. All of it is reached inside the _Gsyscall
-// window, so every function is nosplit.
+// Darwin (macOS ARM64) socket syscall emulation, the socket half of the slow
+// path in syscall_cosmo_arm64.go.
 
 // Linux arm64 socket syscall numbers handled by the slow path.
 const (
@@ -46,8 +35,7 @@ const (
 	darwinENOPROTOOPT  = 92 // Linux numbering
 )
 
-// Address families. AF_UNSPEC (0), AF_UNIX (1) and AF_INET (2) have the
-// same values on Linux and Apple; AF_INET6 differs.
+// Address families.
 const (
 	linuxAF_UNIX  = 1
 	linuxAF_INET  = 2
@@ -55,9 +43,8 @@ const (
 	appleAF_INET6 = 30
 )
 
-// Linux encodes close-on-exec/nonblocking flags in the socket type
-// argument (socket, socketpair, accept4). Apple has no such flags; they
-// are emulated with fcntl on the new descriptor.
+// Linux encodes close-on-exec/nonblocking flags in the socket type argument
+// (socket, socketpair, accept4).
 const (
 	linuxSOCK_NONBLOCK = 0x800
 	linuxSOCK_CLOEXEC  = 0x80000
@@ -65,12 +52,7 @@ const (
 	fdCLOEXEC = 1 // FD_CLOEXEC, same on both systems
 )
 
-// appleSO_NOSIGPIPE suppresses SIGPIPE on writes to a broken socket
-// (Apple's replacement for Linux's per-call MSG_NOSIGNAL). It is set on
-// every socket this emulation creates: the Go runtime normally absorbs
-// SIGPIPE in its signal handler, but signal handling is still stubbed on
-// macOS hosts (signal wave), where an unsuppressed SIGPIPE would kill
-// the process.
+// appleSO_NOSIGPIPE suppresses SIGPIPE on writes to a broken socket.
 const appleSO_NOSIGPIPE = 0x1022
 
 // darwinSockFamilyToApple translates a Linux address family for Apple.
@@ -86,10 +68,8 @@ func darwinSockFamilyToApple(f uint16) (byte, bool) {
 	return 0, false
 }
 
-// darwinSockaddrOut copies the Linux sockaddr at (addr, addrlen) into
-// buf as an Apple sockaddr and returns the Apple (ptr, len) pair to pass
-// to libc. A nil/empty address passes through as (0, 0) - e.g. sendto on
-// a connected socket.
+// darwinSockaddrOut copies the Linux sockaddr at (addr, addrlen) into buf as
+// an Apple sockaddr and returns the Apple (ptr, len) pair to pass to libc.
 //
 //go:nosplit
 func darwinSockaddrOut(buf *[112]byte, addr, addrlen uintptr) (aptr, alen, errno uintptr) {
@@ -116,10 +96,10 @@ func darwinSockaddrOut(buf *[112]byte, addr, addrlen uintptr) (aptr, alen, errno
 	return uintptr(unsafe.Pointer(&buf[0])), addrlen, 0
 }
 
-// darwinSockaddrIn rewrites, in place, a sockaddr Apple libc just filled
-// in (accept, getsockname, getpeername, recvfrom) into the Linux shape:
-// Apple's {sa_len, sa_family} bytes become the 16-bit Linux family. The
-// rest of the bytes are already in the Linux layout.
+// darwinSockaddrIn rewrites, in place, a sockaddr Apple libc filled in
+// (accept, getsockname, getpeername, recvfrom) into the Linux shape. Apple's
+// {sa_len, sa_family} bytes become the 16-bit Linux family. The rest of the
+// bytes are already in the Linux layout.
 //
 //go:nosplit
 func darwinSockaddrIn(addr uintptr, alenp uintptr) {
@@ -138,15 +118,7 @@ func darwinSockaddrIn(addr uintptr, alenp uintptr) {
 }
 
 // darwinSetNoSigpipe sets SO_NOSIGPIPE on a new socket, best effort (a
-// failure is not worth refusing the socket over). Kept flat - it calls
-// the libc trampoline directly - because it sits on the deepest nosplit
-// chains (socket/socketpair/accept4 with flags), where the darwinCall
-// helper's frame would not fit.
-//
-// SOCK_CLOEXEC/SOCK_NONBLOCK application shares darwinApplyFdFlags with
-// pipe2 (the SOCK_ and O_ flag bits have the same values on Linux);
-// call sites apply both helpers sequentially rather than nested, again
-// for nosplit depth.
+// failure is not worth refusing the socket over).
 //
 //go:nosplit
 func darwinSetNoSigpipe(fd uintptr) {
@@ -263,10 +235,8 @@ func darwinSockname(fn, s, rsa, alenp uintptr) (r1, r2, errno uintptr) {
 	return r1, r2, errno
 }
 
-// darwinCheckMsgFlags admits the send/recv flags whose values coincide
-// on Linux and Apple (none, MSG_OOB 0x1, MSG_PEEK 0x2, MSG_DONTROUTE
-// 0x4) and rejects everything else rather than passing bits Apple would
-// misread (e.g. Linux MSG_DONTWAIT 0x40 is Apple MSG_FLUSH).
+// darwinCheckMsgFlags admits the send/recv flags whose values coincide on
+// Linux and Apple.
 //
 //go:nosplit
 func darwinCheckMsgFlags(flags uintptr) uintptr {
@@ -307,15 +277,15 @@ func darwinRecvfrom(s, p, n, flags, from, fromlenp uintptr) (r1, r2, errno uintp
 	return r1, r2, errno
 }
 
-// darwinSendmsg emulates the Linux sendmsg syscall as a FIXED-SIZE
-// shape adapter: msghdr field widths convert, the iovec array passes
-// through because the layouts coincide, and the msg_name and
-// msg_control POINTERS pass through untouched. Their BYTES must
-// ALREADY be Apple-shaped. Package syscall's darwin branch does the
-// sockaddr translation and cmsg repack as ordinary Go before entering
-// the window, because nothing unbounded fits the nosplit budget here.
-// SIGPIPE needs no handling: every socket this emulation creates
-// carries SO_NOSIGPIPE, so a broken-pipe send fails with EPIPE.
+// darwinSendmsg emulates the Linux sendmsg syscall as a FIXED-SIZE shape
+// adapter: msghdr field widths convert, the iovec array passes through. This
+// is because the layouts coincide, and the msg_name and msg_control POINTERS
+// pass through untouched. Their BYTES must ALREADY be Apple-shaped. Package
+// syscall's darwin branch does the sockaddr translation and cmsg repack as
+// ordinary Go before entering the window. This is because nothing unbounded
+// fits the nosplit budget here. SIGPIPE needs no handling: every socket this
+// emulation creates carries SO_NOSIGPIPE, so a broken-pipe send fails with
+// EPIPE.
 //
 //go:nosplit
 func darwinSendmsg(s, msgp, flags uintptr) (r1, r2, errno uintptr) {
@@ -349,14 +319,14 @@ func darwinSendmsg(s, msgp, flags uintptr) (r1, r2, errno uintptr) {
 	return darwinCall(darwinFns.Sendmsg, s, uintptr(unsafe.Pointer(&amsg)), flags, 0, 0, 0)
 }
 
-// darwinRecvmsg emulates the Linux recvmsg syscall, the same
-// fixed-size shape adapter as darwinSendmsg: msghdr widths in, widths
-// and result-flag VALUES out. The msg_name and msg_control buffers
-// come back with Apple-shaped BYTES, and package syscall's darwin
-// branch rewrites the sockaddr family and repacks the control records
-// after the window. MSG_CMSG_CLOEXEC is refused EINVAL here like every
-// untranslatable flag: the std path strips it and emulates it above,
-// so a raw caller's request is refused visibly, never ignored.
+// darwinRecvmsg emulates the Linux recvmsg syscall, the same fixed-size shape
+// adapter as darwinSendmsg: msghdr widths in, widths and result-flag VALUES
+// out. Consider the msg_name and msg_control buffers. That msg_name come back
+// with Apple-shaped BYTES, and package syscall's darwin branch rewrites the
+// sockaddr family and repacks the control records. This happens after the
+// window. MSG_CMSG_CLOEXEC is refused EINVAL here like every untranslatable
+// flag: the std path strips it. The std path emulates it above, so a raw
+// caller's request is refused visibly, never ignored.
 //
 //go:nosplit
 func darwinRecvmsg(s, msgp, flags uintptr) (r1, r2, errno uintptr) {
@@ -399,11 +369,8 @@ func darwinRecvmsg(s, msgp, flags uintptr) (r1, r2, errno uintptr) {
 
 // darwinSockoptXlat translates a Linux (level, optname) pair to Apple's.
 // Only pairs whose option VALUE also has the same meaning on both
-// systems are listed; everything else reports ENOPROTOOPT so the gap is
+// systems are listed. Everything else reports ENOPROTOOPT so the gap is
 // visible instead of programming a different option than requested.
-//
-// Levels: Linux SOL_SOCKET is 1, Apple's is 0xffff; the IPPROTO_* levels
-// (0 ip, 6 tcp, 17 udp, 41 ipv6) are protocol numbers and coincide.
 //
 //go:nosplit
 func darwinSockoptXlat(level, name uintptr) (alevel, aname uintptr, ok bool) {
@@ -430,9 +397,8 @@ func darwinSockoptXlat(level, name uintptr) (alevel, aname uintptr, ok bool) {
 			return appleSOL_SOCKET, 0x0008, true
 		case 10: // SO_OOBINLINE
 			return appleSOL_SOCKET, 0x0100, true
-		case 13: // SO_LINGER -> SO_LINGER_SEC: struct linger matches, but
-			// Apple's plain SO_LINGER (0x80) counts l_linger in clock
-			// ticks; SO_LINGER_SEC uses seconds like Linux.
+		case 13: // SO_LINGER -> SO_LINGER_SEC: struct linger matches.
+			// Apple's plain SO_LINGER (0x80) counts l_linger in clock ticks; SO_LINGER_SEC uses seconds like Linux.
 			return appleSOL_SOCKET, 0x1080, true
 		case 15: // SO_REUSEPORT
 			return appleSOL_SOCKET, 0x0200, true
@@ -450,10 +416,10 @@ func darwinSockoptXlat(level, name uintptr) (alevel, aname uintptr, ok bool) {
 		case 6: // TCP_KEEPCNT
 			return 6, 0x102, true
 		}
-	case 0: // IPPROTO_IP. Apple's SOL_LOCAL shares this number, but the
+	case 0: // IPPROTO_IP. Apple's SOL_LOCAL shares this number.
 		// emulation never forwards a SOL_LOCAL option - peer identity
 		// arrives under the Linux SO_PEERCRED spelling at SOL_SOCKET
-		// (see darwinPeercred) - so level 0 means IPPROTO_IP here.
+		// (see darwinPeercred) - so level means. IPPROTO_IP here.
 		switch name {
 		case 1: // IP_TOS
 			return 0, 3, true
@@ -482,7 +448,7 @@ func darwinSockoptXlat(level, name uintptr) (alevel, aname uintptr, ok bool) {
 			return 41, 10, true
 		case 19: // IPV6_MULTICAST_LOOP
 			return 41, 11, true
-		case 20: // IPV6_JOIN_GROUP (struct ipv6_mreq matches)
+		case 20:
 			return 41, 12, true
 		case 21: // IPV6_LEAVE_GROUP
 			return 41, 13, true
@@ -505,11 +471,7 @@ func darwinSetsockopt(s, level, name, val, vallen uintptr) (r1, r2, errno uintpt
 	return darwinCall(darwinFns.Setsockopt, s, alevel, aname, val, vallen, 0)
 }
 
-// Apple's SOL_LOCAL options for AF_UNIX peer identity. SOL_LOCAL is
-// level 0, which is IPPROTO_IP on Linux - the two option namespaces
-// collide outright (Linux IP_TTL is 2, LOCAL_PEERPID is 2), so level 0
-// is NOT passed through. Peer identity is reached through the Linux
-// spelling instead; see darwinPeercred.
+// Apple's SOL_LOCAL options for AF_UNIX peer identity.
 const (
 	appleSOL_LOCAL      = 0
 	appleLOCAL_PEERCRED = 0x001
@@ -518,12 +480,7 @@ const (
 	linuxSO_PEERCRED = 17 // level SOL_SOCKET
 )
 
-// appleXucredHead is the leading 16 bytes of Apple's struct xucred:
-// cr_version, cr_uid, cr_ngroups, then cr_groups[0] at offset 12 (gid_t
-// alignment pads the 2-byte cr_ngroups). The rest of cr_groups is the
-// supplementary list, which SO_PEERCRED does not report, so only the head
-// is read - the full 76-byte struct does not fit the 792-byte nosplit
-// budget this dispatch path runs under.
+// appleXucredHead is the leading several bytes of Apple's struct
 type appleXucredHead struct {
 	Version uint32
 	Uid     uint32
@@ -539,7 +496,7 @@ type linuxUcred struct {
 	Gid uint32
 }
 
-// darwinPeercred answers a Linux SO_PEERCRED getsockopt from Apple's two
+// darwinPeercred answers a Linux SO_PEERCRED getsockopt from Apple's
 // SOL_LOCAL options: LOCAL_PEERPID for the pid, LOCAL_PEERCRED for the
 // uid and primary gid. Either failing fails the call - a half-filled
 // ucred would report a real pid beside an invented uid.
@@ -553,9 +510,7 @@ func darwinPeercred(s, val, vallenp uintptr) (r1, r2, errno uintptr) {
 		return ^uintptr(0), 0, darwinEINVAL
 	}
 
-	// Flat calls to the libc trampoline, not darwinCall: this sits under
-	// darwinGetsockopt on an already-deep nosplit chain, where that
-	// helper's frame does not fit (same reason as darwinSetNoSigpipe).
+	// Flat calls to the libc trampoline, not darwinCall.
 	var pid int32
 	pidLen := uint32(4)
 	if int64(darwinLibcCall6(darwinFns.Getsockopt, s, appleSOL_LOCAL, appleLOCAL_PEERPID,
@@ -597,9 +552,6 @@ func darwinGetsockopt(s, level, name, val, vallenp uintptr) (r1, r2, errno uintp
 	r1, r2, errno = darwinCall(darwinFns.Getsockopt, s, alevel, aname, val, vallenp, 0)
 	if errno == 0 && level == 1 && name == 4 && val != 0 && vallenp != 0 &&
 		*(*uint32)(unsafe.Pointer(vallenp)) == 4 {
-		// SO_ERROR reports a saved errno with APPLE numbering (e.g. a
-		// refused nonblocking connect stores 61); Go compares against
-		// Linux values, so translate the payload too.
 		ep := (*uint32)(unsafe.Pointer(val))
 		if *ep != 0 {
 			*ep = uint32(xlatErrnoDarwin(uintptr(*ep)))

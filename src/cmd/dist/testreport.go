@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package main
 
@@ -16,28 +15,16 @@ import (
 
 // testReport turns test2json events into the output a reader acts on, and
 // records how long each test took.
-//
-// The test binary runs verbosely, because a per-test duration exists only in
-// verbose output. This reads those events and writes the failures, so a log
-// carries no line for a test that passed. One package reaches about 9900
-// subtests, and each one costs a line under plain -v.
-//
-// A buffer holds each test's output until that test reports a result. A pass
-// or a skip drops the buffer and keeps the duration. A failure writes the
-// buffer through unchanged.
 type testReport struct {
 	dst     io.Writer
 	timings *testTimings
 
-	// pkgDone reports a package that reached a result. One command can carry
-	// several packages, so this is what counts a run's progress.
+	// pkgDone reports a package that reached a result.
 	pkgDone func(pkg string)
 
 	lineBuf bytes.Buffer // holds an incomplete line between Write calls
 
-	// bufs holds each scope's pending output, keyed by package and test. The
-	// empty test name is the package's own scope. order keeps the keys in the
-	// order they first appeared, so a crash flushes them as they arrived.
+	// bufs holds each scope's pending output, keyed by package and test.
 	bufs  map[string]*bytes.Buffer
 	order []string
 }
@@ -55,9 +42,18 @@ type testTimings struct {
 	lock sync.Mutex
 	all  []testTiming
 
-	// recent holds the tests that ended since the progress line last drained
-	// the buffer.
+	// started counts the tests that announced a run, subtests included. Every entry in all ended one of them.
+	started int
+
+	// recent holds the tests that ended since the progress line last drained the buffer.
 	recent []testTiming
+}
+
+// start records that a test began.
+func (tim *testTimings) start() {
+	tim.lock.Lock()
+	defer tim.lock.Unlock()
+	tim.started++
 }
 
 func (tim *testTimings) add(pkg, test string, seconds float64) {
@@ -65,6 +61,14 @@ func (tim *testTimings) add(pkg, test string, seconds float64) {
 	defer tim.lock.Unlock()
 	tim.all = append(tim.all, testTiming{pkg, test, seconds})
 	tim.recent = append(tim.recent, testTiming{pkg, test, seconds})
+}
+
+// testCounts answers how many tests ended and how many began. A test is
+// known only once its binary runs it, so started grows as packages start.
+func (tim *testTimings) testCounts() (ended, started int) {
+	tim.lock.Lock()
+	defer tim.lock.Unlock()
+	return len(tim.all), tim.started
 }
 
 // drainRecent returns the tests that ended since the last call, slowest
@@ -91,8 +95,7 @@ func (tim *testTimings) report(dst io.Writer, most int) {
 	if len(tim.all) == 0 {
 		return
 	}
-	// A test under the floor is not the reason a suite is slow, and a table
-	// padded with them hides the ones that are.
+	// A test under the floor is not the reason a suite is slow, and a table padded with them hides the ones that are.
 	const floorSeconds = 0.01
 	var all []testTiming
 	for _, tng := range tim.all {
@@ -194,8 +197,7 @@ func (rep *testReport) flushKey(key string) {
 
 func (rep *testReport) process(line []byte) {
 	if len(line) == 0 || line[0] != '{' {
-		// Not an event. A build error arrives this way when the go command
-		// writes it outside the JSON stream, and it must reach the reader.
+		// Not an event.
 		rep.dst.Write(line)
 		return
 	}
@@ -207,10 +209,13 @@ func (rep *testReport) process(line []byte) {
 
 	key := evt.Package + "\t" + evt.Test
 	switch evt.Action {
+	case "run":
+		if evt.Test != "" {
+			rep.timings.start()
+		}
 	case "output":
 		if evt.Test == "" && isBareResult(evt.Output) {
-			// The lone PASS or FAIL line adds nothing to the package's own
-			// result line, which carries the name and the duration.
+			// The lone PASS or FAIL line adds nothing to the package's own result line, which carries the name and the duration.
 			return
 		}
 		rep.bufFor(key).WriteString(evt.Output)

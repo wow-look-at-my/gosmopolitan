@@ -38,4 +38,4 @@
 //		size orders from largest to smallest
 //	-type
 //		print symbol type after name
-package main
+package nm

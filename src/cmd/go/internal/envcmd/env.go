@@ -169,13 +169,13 @@ func MkEnv() []cfg.EnvVar {
 	ccChanged := true
 	if cc == "" {
 		ccChanged = false
-		cc = cfg.DefaultCC(cfg.Goos, cfg.Goarch)
+		cc = cfg.TargetCC(cfg.Goos, cfg.Goarch)
 	}
 	cxx := cfg.Getenv("CXX")
 	cxxChanged := true
 	if cxx == "" {
 		cxxChanged = false
-		cxx = cfg.DefaultCXX(cfg.Goos, cfg.Goarch)
+		cxx = cfg.TargetCXX(cfg.Goos, cfg.Goarch)
 	}
 	ar, arChanged := cfg.EnvOrAndChanged("AR", "ar")
 	env = append(env, cfg.EnvVar{Name: "AR", Value: ar, Changed: arChanged})
@@ -212,15 +212,8 @@ func ExtraEnvVars(ld *modload.Loader) []cfg.EnvVar {
 	} else if ld.Enabled() {
 		gomod = os.DevNull
 	}
-	ld.InitWorkfile()
-	gowork := modload.WorkFilePath(ld)
-	// As a special case, if a user set off explicitly, report that in GOWORK.
-	if cfg.Getenv("GOWORK") == "off" {
-		gowork = "off"
-	}
 	return []cfg.EnvVar{
 		{Name: "GOMOD", Value: gomod},
-		{Name: "GOWORK", Value: gowork},
 	}
 }
 
@@ -628,8 +621,7 @@ func checkEnvWrite(key, val string) error {
 		"GOTELEMETRY",
 		"GOTELEMETRYDIR",
 		"GOTOOLDIR",
-		"GOVERSION",
-		"GOWORK":
+		"GOVERSION":
 		return fmt.Errorf("%s cannot be modified", key)
 	case "GOENV", "GODEBUG":
 		return fmt.Errorf("%s can only be set using the OS environment", key)

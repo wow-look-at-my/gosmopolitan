@@ -1,6 +1,5 @@
-// Copyright 2011 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo
 
@@ -8,9 +7,8 @@ package syscall
 
 import "unsafe"
 
-// Address families that only Linux hosts implement. The cosmo zerrors
-// files do not carry them. Every Linux architecture agrees on both
-// values.
+// Address families that only Linux hosts implement. The cosmo zerrors files
+// do not carry them.
 const (
 	AF_NETLINK = 0x10
 	AF_PACKET  = 0x11

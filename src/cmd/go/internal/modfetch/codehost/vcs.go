@@ -24,6 +24,7 @@ import (
 	"cmd/go/internal/cfg"
 	"cmd/go/internal/lockedfile"
 	"cmd/go/internal/str"
+	"cmd/go/internal/web"
 	"cmd/internal/par"
 
 	"golang.org/x/mod/semver"
@@ -57,6 +58,11 @@ type vcsCacheKey struct {
 }
 
 func NewRepo(ctx context.Context, vcs, remote string, local bool) (Repo, error) {
+	if !local {
+		if err := refuseBannedRemote(remote); err != nil {
+			return nil, &VCSError{err}
+		}
+	}
 	return vcsRepoCache.Do(vcsCacheKey{vcs, remote, local}, func() (Repo, error) {
 		repo, err := newVCSRepo(ctx, vcs, remote, local)
 		if err != nil {
@@ -67,6 +73,15 @@ func NewRepo(ctx context.Context, vcs, remote string, local bool) (Repo, error) 
 }
 
 var vcsRepoCache par.ErrCache[vcsCacheKey, Repo]
+
+// refuseBannedRemote refuses a remote on a host web.IsBannedHost names, before
+// and after the git config rewrites it.
+func refuseBannedRemote(remote string) error {
+	if err := web.RefuseBannedRemote(remote); err != nil {
+		return err
+	}
+	return web.RefuseBannedRemote(gitRewriteTarget(remote, gitInsteadOf()))
+}
 
 type vcsRepo struct {
 	mu lockedfile.Mutex // protects all commands, so we don't have to decide which are safe on a per-VCS basis

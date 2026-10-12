@@ -1,7 +1,7 @@
 # The shape `docker run --read-only` leaves, with the program on a writable
-# bind mount. /dev/shm is writable and noexec there, because that is how docker
-# mounts it, and --read-only takes /tmp away. So the program's own directory is
-# the last candidate the boot script has, and this says it serves.
+# bind mount. /dev/shm is writable and noexec there. This is because that is
+# how docker mounts it, and --read-only takes /tmp away. So the program's own
+# directory is the last candidate the boot script has, and this says it serves.
 #
 # Linux only. The shape is built from mount namespaces, which darwin has not
 # got. readonly-boot.dats carries the claims both platforms share.

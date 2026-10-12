@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package testdir_test
 
@@ -28,11 +27,7 @@ import (
 	"cmd/internal/quoted"
 )
 
-// A test program is built the way the go command builds it: cgo, the
-// compiler, the assembler, the packer and the linker, run directly. The
-// standard library comes from one `go list -export` per distinct build of it,
-// which is its target, its GOEXPERIMENT, its -gcflags=all=, its tags, -race
-// and -linkshared. No program costs a go command of its own.
+// A test program is built the way the go command builds it: cgo, the compiler, the assembler, the packer and the linker.
 
 // goEnv is what `go env` reports for the target.
 var goEnv map[string]string
@@ -69,8 +64,8 @@ func stdImportcfg(want stdBuild) (file, content string, err error) {
 }
 
 // listStd builds one std. A package that does not build under it, such as
-// runtime/cgo for a target this host has no C compiler for, is left out with a
-// comment saying why, so only a program that imports it fails, as it would
+// runtime/cgo for a target this host has no C compiler for, is left out. With
+// a comment saying why, so only a program that imports it fails, as it would
 // under the go command.
 func listStd(want stdBuild) (string, string, error) {
 	format := `{{if .Export}}packagefile {{.ImportPath}}={{.Export}}{{else if .Error}}# {{.ImportPath}}: {{printf "%q" .Error.Err}}{{end}}`
@@ -759,8 +754,7 @@ func (bld *builder) cgo(out *bytes.Buffer, unit *unit) (gofiles, objs []string, 
 		objs = append(objs, obj)
 	}
 
-	// The dynamic imports come from a link of the package's C. A failure of
-	// that link is not an error: it leaves the package to the external linker.
+	// The dynamic imports come from a link of the package's C.
 	mainObj := objdir + "_cgo_main.o"
 	if err := bld.cc(out, unit, compileFlags, mainObj, objdir+"_cgo_main.c"); err != nil {
 		return nil, nil, err

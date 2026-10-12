@@ -71,6 +71,7 @@ type Builder struct {
 	toolIDCache    par.Cache[string, string] // tool name -> tool ID
 	gccToolIDCache map[string]string         // tool name -> tool ID
 	buildIDCache   map[string]string         // file name -> build ID
+	pkgConfigCache sync.Map                  // *load.Package -> *pkgConfigResult, so pkg-config runs once per package
 }
 
 // NOTE: Much of Action would not need to be exported if not for test.
@@ -112,6 +113,7 @@ type Action struct {
 	built    string         // the actual created package or executable
 	actionID cache.ActionID // cache ID of action input
 	buildID  string         // build ID of action output
+	exportID string         // Mode=="build": hash of the export data a compile of an importer reads
 
 	VetxOnly   bool       // Mode=="vet": only being called to supply info about dependencies
 	needVet    bool       // Mode=="build": need to fill in vet config

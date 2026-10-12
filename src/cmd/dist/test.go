@@ -7,6 +7,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -22,6 +23,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -53,7 +55,25 @@ func cmdtest() {
 
 	xflagparse(-1) // any number of args
 
+	testEnv(goroot)
 	t.run()
+}
+
+// testEnv sets the environment that every test of the suite runs in. The
+// caller picks GOOS and GOARCH: the go command that starts dist always
+// reports one, so dist cannot tell a default from a choice.
+func testEnv(root string) {
+	// An empty GOPATH of its own keeps the suite off the user's packages.
+	// Every test shares its module cache, so a module downloads once per run.
+	gopath := pathf("%s/pkg/gopath", root)
+	xmkdirall(gopath)
+	os.Setenv("GOPATH", gopath)
+
+	// cmd/go runs a cross-GOOS test binary through go_<GOOS>_<GOARCH>_exec,
+	// which misc/cosmo holds for the cosmo port.
+	os.Setenv("PATH", fmt.Sprintf("%s%c%s", pathf("%s/misc/cosmo", root), os.PathListSeparator, os.Getenv("PATH")))
+
+	setTestLimits()
 }
 
 // tester executes cmdtest.
@@ -107,6 +127,16 @@ type work struct {
 	out     bytes.Buffer  // combined stdout/stderr from cmd
 	err     error         // work result
 	end     chan struct{} // a value means cmd ended (or was skipped)
+	ended   chan struct{} // closed when cmd ends (or is skipped), for the works that wait on it
+
+	// after is the work whose command must end before this one starts. Their
+	// builds are the same, and the cache hands this one what that one built.
+	after *work
+
+	// first starts this work ahead of the rest of its worklist. Its deadline
+	// bounds a run that takes most of it, and beside the compiles that fill the
+	// machine later in the list, the run gets too little of the CPU to finish.
+	first bool
 }
 
 // printSkip prints a skip message for all of work.
@@ -273,7 +303,13 @@ func (t *tester) run() {
 		}
 		anyIncluded = true
 		dt := dt // dt used in background after this iteration
-		if err := dt.fn(&dt); err != nil {
+		queued := len(t.worklist)
+		err := dt.fn(&dt)
+		if len(t.worklist) == queued {
+			// The test ran here and is finished. A queued one counts when its command ends.
+			t.markTestDone(dt.name)
+		}
+		if err != nil {
 			t.runPending(&dt) // in case that hasn't been done yet
 			t.failed = true
 			if t.keepGoing {
@@ -292,6 +328,19 @@ func (t *tester) run() {
 
 	if !t.json {
 		t.timings.report(os.Stdout, 25)
+		if len(t.runNames) == 0 {
+			var tags []string
+			if t.race {
+				tags = []string{"-tags=race"}
+			}
+			cov, err := measureCoverage(gorootBinGo, tags)
+			if err != nil {
+				t.failed = true
+				log.Printf("Failed measuring test coverage: %v", err)
+			} else {
+				fmt.Printf("\n%s", cov.format())
+			}
+		}
 		if t.failed {
 			fmt.Println("\nFAILED")
 		} else if !anyIncluded {
@@ -483,6 +532,14 @@ type goTest struct {
 	// flags its binary starts with. It starts the binary every package's
 	// tests compile into, with those flags, and builds nothing of its own.
 	shared bool
+
+	// after names the dist test that builds what this one builds. This one
+	// starts once that one's command ends, so the cache answers its build and
+	// every test result whose inputs match. Started together, both compile it.
+	after string
+
+	// first starts this test ahead of the rest of its worklist (see work.first).
+	first bool
 }
 
 // upstreamTestVet is the analyzer list upstream's go test runs, which is this
@@ -547,21 +604,39 @@ func (opts *goTest) bgCommand(t *tester, stdout, stderr io.Writer) (cmd *exec.Cm
 	} else {
 		// The command reports events. A reader wants the failures and the
 		// durations out of them, not a line for every subtest.
-		rep := newTestReport(stdout, &t.timings, t.markPkgDone)
-		cmd.Stdout = rep
-		flush = rep.Flush
+		cmd.Stdout, cmd.Stderr, flush = t.reportTo(stdout, stderr)
+		return cmd, flush
 	}
 	cmd.Stderr = stderr
 
 	return cmd, flush
 }
 
+// reportTo answers the writers of a command whose stdout carries test events,
+// and the flush to call once it exits. The report and stderr can share one
+// writer.
+func (t *tester) reportTo(stdout, stderr io.Writer) (out, errOut io.Writer, flush func()) {
+	if stdout == stderr {
+		// Not the bare buffer: its ReadFrom on stderr cuts off what the report writes.
+		stdout = &lockedWriter{w: stdout}
+		stderr = stdout
+	}
+	rep := newTestReport(stdout, &t.timings, t.markPkgDone)
+	return rep, stderr, rep.Flush
+}
+
 // run runs a go test and returns an error if it does not succeed.
 func (opts *goTest) run(t *tester) error {
+	_, err := opts.runState(t)
+	return err
+}
+
+// runState is run, and also answers what the command cost the machine.
+func (opts *goTest) runState(t *tester) (*os.ProcessState, error) {
 	cmd, flush := opts.bgCommand(t, os.Stdout, os.Stderr)
 	err := cmd.Run()
 	flush()
-	return err
+	return cmd.ProcessState, err
 }
 
 // oneBinary is a test binary that the tests of several packages compile
@@ -915,21 +990,51 @@ func (t *tester) registerStdTest(pkg string) {
 				timeoutSec = 0
 			}
 		}
-		// One binary holds the tests of every package. It is kept, and the
-		// tests that differ from a package's run only in flags start it again.
-		test := oneBinaryTest(stdMatches, goos)
+		// cmd/go runs last and alone, because its scripts each build with -p and fill the machine.
+		rest, alone := withoutCmdGo(stdMatches)
+
+		// One binary holds the tests of every package, is kept, and starts again for the tests that differ from a package's run only in flags.
+		test := oneBinaryTest(rest, goos)
 		test.timeout = timeoutSec
 		test.keep = filepath.Join(workdir, "std.test")
-		// One step builds and runs every package here, so its own line is the
-		// only thing that accounts for the compile.
-		started := time.Now()
-		err := test.run(t)
-		if !t.json {
-			reportStep("test", "std.test", time.Since(started))
+		// One step builds and runs every package here, so its own line is the only thing that accounts for the compile.
+		var err error
+		if len(rest) > 0 {
+			started := time.Now()
+			var state *os.ProcessState
+			state, err = test.runState(t)
+			if !t.json {
+				reportTestStep("std.test", time.Since(started), state)
+			}
+			t.recordOneBinary(false, test.keep, rest)
 		}
-		t.recordOneBinary(false, test.keep, stdMatches)
+
+		if alone {
+			cmdGo := oneBinaryTest([]string{"cmd/go"}, goos)
+			cmdGo.timeout = timeoutSec
+			started := time.Now()
+			state, errCmdGo := cmdGo.runState(t)
+			if !t.json {
+				reportTestStep("cmd-go.test", time.Since(started), state)
+			}
+			if err == nil {
+				err = errCmdGo
+			}
+		}
 		return err
 	})
+}
+
+// withoutCmdGo answers pkgs without cmd/go, and whether cmd/go was there.
+func withoutCmdGo(pkgs []string) (rest []string, alone bool) {
+	for _, pkg := range pkgs {
+		if pkg == "cmd/go" {
+			alone = true
+			continue
+		}
+		rest = append(rest, pkg)
+	}
+	return rest, alone
 }
 
 func (t *tester) registerRaceBenchTest(pkg string) {
@@ -1074,15 +1179,36 @@ func (t *tester) registerTests() {
 		})
 
 		// Test that earlier FIPS snapshots work.
+		fipsDir := filepath.Join(goroot, "lib/fips140")
 		for _, version := range fipsVersions() {
-			t.registerTest("GOFIPS140="+version+" go test crypto/...", &goTest{
-				variant:  "gofips140-" + version,
-				pkg:      "crypto/...",
-				env:      []string{"GOFIPS140=" + version, "GOMODCACHE=" + filepath.Join(workdir, "fips-"+version)},
+			// An alias such as certified builds the very snapshot it names: the
+			// same packages, the same binary, the same results. It shares that
+			// snapshot's module cache, so a test that reads a file there reads
+			// it at the same path, and runs once the snapshot's own run ends.
+			//
+			// The module cache is also where the crypto tests download their
+			// test vectors (cryptotest.FetchModule), and a test result's key
+			// names each file the test opened. A result comes from the cache
+			// only where that path is the same on every run, which a path
+			// under GOROOT is and one under the per-run workdir is not.
+			module := fipsModule(fipsDir, version)
+			snapshot := &goTest{
+				variant: "gofips140-" + version,
+				pkg:     "crypto/...",
+				env: []string{
+					"GOFIPS140=" + version,
+					"GOMODCACHE=" + filepath.Join(goroot, "pkg/obj/fips140", module),
+					// Writable, so the tree a checkout keeps can be deleted.
+					"GOFLAGS=" + strings.TrimSpace(os.Getenv("GOFLAGS")+" -modcacherw"),
+				},
 				// A snapshot is upstream's frozen module. Nobody can add a
 				// t.Serial to its tests, so it is vetted with upstream's list.
 				vet: upstreamTestVet,
-			})
+			}
+			if module != version {
+				snapshot.after = testName(snapshot.pkg, "gofips140-"+module)
+			}
+			t.registerTest("GOFIPS140="+version+" go test crypto/...", snapshot)
 		}
 	}
 
@@ -1150,6 +1276,7 @@ func (t *tester) registerTests() {
 				timeout: 300 * time.Second,
 				env:     []string{"GODEBUG=gccheckmark=1"},
 				pkg:     "runtime",
+				first:   true,
 			})
 	}
 
@@ -1305,7 +1432,6 @@ func (t *tester) registerTests() {
 				timeout: 120 * time.Second,
 				cpu:     "10",
 				pkg:     "sync",
-				shared:  true,
 			})
 	}
 
@@ -1324,17 +1450,6 @@ func (t *tester) registerTests() {
 			})
 	}
 
-	// Only run the API check on fast development platforms.
-	// Every platform checks the API on every GOOS/GOARCH/CGO_ENABLED combination anyway,
-	// so we really only need to run this check once anywhere to get adequate coverage.
-	// To help developers avoid trybot-only failures, we try to run on typical developer machines
-	// which is darwin,linux,windows/amd64 and darwin/arm64.
-	//
-	// TODO: remove the exclusion of goexperiment simd right before dev.simd branch is merged to master.
-	if goos == "darwin" || ((goos == "linux" || goos == "windows") && (goarch == "amd64" && !strings.Contains(goexperiment, "simd"))) {
-		t.registerTest("API check", &goTest{variant: "check", pkg: "cmd/api", timeout: 5 * time.Minute, testFlags: []string{"-check"}, shared: true})
-	}
-
 	// Runtime CPU tests.
 	if !t.compileOnly && t.hasParallelism() {
 		for i := 1; i <= 4; i *= 2 {
@@ -1346,9 +1461,8 @@ func (t *tester) registerTests() {
 					gcflags: gogcflags,
 					// We set GOMAXPROCS=2 in addition to -cpu=1,2,4 in order to test runtime bootstrap code,
 					// creation of first goroutines and first garbage collections in the parallel setting.
-					env:    []string{"GOMAXPROCS=2"},
-					pkg:    "runtime",
-					shared: true,
+					env: []string{"GOMAXPROCS=2"},
+					pkg: "runtime",
 				})
 		}
 	}
@@ -1471,7 +1585,7 @@ func (t *tester) registerTest(heading string, test *goTest, opts ...registerTest
 				// The package's own run compiles what this test would start.
 				return nil
 			}
-			w := &work{dt: dt}
+			w := &work{dt: dt, first: test.first, after: t.queued(test.after)}
 			w.cmd, w.flush = test.bgCommand(t, &w.out, &w.out)
 			if test.shared {
 				flush := w.flush
@@ -1495,11 +1609,33 @@ func (t *tester) registerTest(heading string, test *goTest, opts ...registerTest
 	// Those methods accumulate matched packages in stdMatches and benchMatches slices,
 	// and we can extend that mechanism to work for all other equal variant registrations.
 	// Do the simple thing to start with.
-	for _, pkg := range test.packages() {
+	//
+	// Each package after the first builds with the first one's flags, so it
+	// waits for the first one's command and takes its compiles from the cache.
+	pkgs := test.packages()
+	for idx, pkg := range pkgs {
 		test1 := *test
 		test1.pkg, test1.pkgs = pkg, nil
+		if idx > 0 && test1.after == "" {
+			test1.after = testName(pkgs[0], test.variant)
+		}
 		register1(&test1)
 	}
+}
+
+// queued answers the work for the dist test named name that waits in the
+// worklist, or nil when that test is not queued: it ran already, or this run
+// leaves it out.
+func (t *tester) queued(name string) *work {
+	if name == "" {
+		return nil
+	}
+	for _, pending := range t.worklist {
+		if pending.dt.name == name {
+			return pending
+		}
+	}
+	return nil
 }
 
 // dirCmd constructs a Cmd intended to be run in the foreground.
@@ -1780,11 +1916,21 @@ func (t *tester) registerCgoTests(heading string) {
 	}
 }
 
-// markPkgDone counts one package toward the run's progress. The commands run
-// in parallel, and testProgress holds the lock.
+// markPkgDone counts a package result toward the run's progress. The total
+// counts dist tests, so a result counts only where the package is one: a std
+// package's own test. A variant reports packages too, crypto/... dozens of
+// them, and counts as its one test when its command ends.
 func (t *tester) markPkgDone(pkg string) {
+	if t.testNames[pkg] && t.shouldRunTest(pkg) {
+		t.markTestDone(pkg)
+	}
+}
+
+// markTestDone counts one dist test toward the run's progress. The commands
+// run in parallel, and testProgress holds the lock.
+func (t *tester) markTestDone(name string) {
 	if t.progress != nil {
-		t.progress.markDone(pkg)
+		t.progress.markDone(name)
 	}
 }
 
@@ -1797,9 +1943,39 @@ func (t *tester) markPkgDone(pkg string) {
 func (t *tester) runPending(nextTest *distTest) {
 	worklist := t.worklist
 	t.worklist = nil
+
+	maxbg := maxbg
+	// for runtime.NumCPU() < 4 ||  runtime.GOMAXPROCS(0) == 1, do not change maxbg.
+	// Because there is not enough CPU to parallel the testing of multiple packages.
+	if runtime.NumCPU() > 4 && runtime.GOMAXPROCS(0) != 1 {
+		for _, w := range worklist {
+			// See go.dev/issue/65164
+			// because GOMAXPROCS=2 runtime CPU usage is low,
+			// so increase maxbg to avoid slowing down execution with low CPU usage.
+			// This makes testing a single package slower,
+			// but testing multiple packages together faster.
+			if strings.Contains(w.dt.heading, "GOMAXPROCS=2 runtime") {
+				maxbg = runtime.NumCPU()
+				break
+			}
+		}
+	}
+	slots := make(chan struct{}, maxbg)
+
+	slices.SortStableFunc(worklist, func(left, right *work) int {
+		switch {
+		case left.first == right.first:
+			return 0
+		case left.first:
+			return -1
+		}
+		return 1
+	})
+
 	for _, w := range worklist {
 		w.start = make(chan bool)
 		w.end = make(chan struct{})
+		w.ended = make(chan struct{})
 		// w.cmd must be set up to write to w.out. We can't check that, but we
 		// can check for easy mistakes.
 		if w.cmd.Stdout == nil || w.cmd.Stdout == os.Stdout || w.cmd.Stderr == nil || w.cmd.Stderr == os.Stderr {
@@ -1827,36 +2003,37 @@ func (t *tester) runPending(nextTest *distTest) {
 				}
 			}
 			timelog("end", w.dt.name)
+			close(w.ended)
+			<-slots
 			w.end <- struct{}{}
 		}(w)
 	}
 
-	maxbg := maxbg
-	// for runtime.NumCPU() < 4 ||  runtime.GOMAXPROCS(0) == 1, do not change maxbg.
-	// Because there is not enough CPU to parallel the testing of multiple packages.
-	if runtime.NumCPU() > 4 && runtime.GOMAXPROCS(0) != 1 {
+	// A command takes a slot when any command ends, not when the oldest one
+	// ends. The output still prints in order, but a long command no longer
+	// keeps the slots behind it idle.
+	var failed atomic.Bool
+	failed.Store(t.failed)
+	keepGoing := t.keepGoing
+	go func() {
 		for _, w := range worklist {
-			// See go.dev/issue/65164
-			// because GOMAXPROCS=2 runtime CPU usage is low,
-			// so increase maxbg to avoid slowing down execution with low CPU usage.
-			// This makes testing a single package slower,
-			// but testing multiple packages together faster.
-			if strings.Contains(w.dt.heading, "GOMAXPROCS=2 runtime") {
-				maxbg = runtime.NumCPU()
-				break
+			if w.after != nil && w.after.ended != nil {
+				// The works behind this one start while it waits.
+				go func(waiting *work) {
+					<-waiting.after.ended
+					slots <- struct{}{}
+					waiting.start <- !failed.Load() || keepGoing
+				}(w)
+				continue
 			}
+			slots <- struct{}{}
+			w.start <- !failed.Load() || keepGoing
 		}
-	}
+	}()
 
-	started := 0
 	ended := 0
 	var last *distTest
 	for ended < len(worklist) {
-		for started < len(worklist) && started-ended < maxbg {
-			w := worklist[started]
-			started++
-			w.start <- !t.failed || t.keepGoing
-		}
 		w := worklist[ended]
 		dt := w.dt
 		if t.lastHeading != dt.heading {
@@ -1875,15 +2052,17 @@ func (t *tester) runPending(nextTest *distTest) {
 		}
 		ended++
 		<-w.end
+		t.markTestDone(dt.name)
 		os.Stdout.Write(w.out.Bytes())
 		if w.elapsed > 0 && !t.json {
-			reportStep("test", dt.name, w.elapsed)
+			reportTestStep(dt.name, w.elapsed, w.cmd.ProcessState)
 		}
 		// We no longer need the output, so drop the buffer.
 		w.out = bytes.Buffer{}
 		if w.err != nil {
 			log.Printf("Failed: %v", w.err)
 			t.failed = true
+			failed.Store(true)
 		}
 	}
 	if t.failed && !t.keepGoing {
@@ -2263,6 +2442,25 @@ func fipsVersions() []string {
 		versions = append(versions, strings.TrimSuffix(filepath.Base(txt), ".txt"))
 	}
 	return versions
+}
+
+// fipsModule answers the snapshot that GOFIPS140=version builds, out of dir
+// (GOROOT/lib/fips140). A version with a .txt file there is an alias, and the
+// file names the snapshot, which is how cmd/go resolves it. Any other version
+// is a snapshot itself.
+func fipsModule(dir, version string) string {
+	data, err := os.ReadFile(filepath.Join(dir, version+".txt"))
+	if errors.Is(err, fs.ErrNotExist) {
+		return version
+	}
+	if err != nil {
+		fatalf("reading the GOFIPS140 alias %s: %v", version, err)
+	}
+	module := strings.TrimSpace(string(data))
+	if module == "" {
+		fatalf("the GOFIPS140 alias %s names no snapshot", version)
+	}
+	return module
 }
 
 // goexperiments returns the GOEXPERIMENT value to use

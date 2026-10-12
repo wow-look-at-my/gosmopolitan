@@ -41,12 +41,17 @@ var srcRules = []testRule{
 	{name: "go/src/cmd/dist/dist.exe", exclude: true},
 	{name: "go/src/internal/runtime/sys/zversion.go", exclude: true},
 	{name: "go/src/time/tzdata/zzipdata.go", exclude: true},
+	{name: "go/src/cmd/link/internal/ld/apeld/bin/**", exclude: true},
 }
 
 var zipRules = []testRule{
 	{name: "go/VERSION"},
 	{name: "go/src/cmd/go/main.go"},
 	{name: "go/src/bytes/bytes.go"},
+	// cmd/link embeds the loaders, so a toolchain that rebuilds it needs them.
+	{name: "go/src/cmd/link/internal/ld/apeld/bin/apeld-linux-amd64"},
+	{name: "go/src/cmd/link/internal/ld/apeld/bin/apeld-linux-arm64"},
+	{name: "go/src/cmd/link/internal/ld/apeld/bin/apeld-darwin-arm64"},
 
 	{name: "**/.DS_Store", exclude: true},
 	{name: "go/.git", exclude: true},
@@ -71,14 +76,15 @@ var zipRules = []testRule{
 	{name: "go/pkg/tool/*/compile", goos: "darwin"},
 	{name: "go/pkg/tool/*/compile", goos: "windows", exclude: true},
 	{name: "go/pkg/tool/*/compile.exe", goos: "windows"},
-	{name: "go/pkg/tool/*/pack", exclude: true},
-	{name: "go/pkg/tool/*/pack.exe", exclude: true},
 }
 
 var modRules = []testRule{
 	{name: "golang.org/toolchain@*/VERSION"},
 	{name: "golang.org/toolchain@*/src/cmd/go/main.go"},
 	{name: "golang.org/toolchain@*/src/bytes/bytes.go"},
+	{name: "golang.org/toolchain@*/src/cmd/link/internal/ld/apeld/bin/apeld-linux-amd64"},
+	{name: "golang.org/toolchain@*/src/cmd/link/internal/ld/apeld/bin/apeld-linux-arm64"},
+	{name: "golang.org/toolchain@*/src/cmd/link/internal/ld/apeld/bin/apeld-darwin-arm64"},
 
 	{name: "golang.org/toolchain@*/lib/wasm/go_js_wasm_exec"},
 	{name: "golang.org/toolchain@*/lib/wasm/go_wasip1_wasm_exec"},
@@ -108,8 +114,6 @@ var modRules = []testRule{
 	{name: "golang.org/toolchain@*/pkg/tool/*/compile", goos: "darwin"},
 	{name: "golang.org/toolchain@*/pkg/tool/*/compile", goos: "windows", exclude: true},
 	{name: "golang.org/toolchain@*/pkg/tool/*/compile.exe", goos: "windows"},
-	{name: "golang.org/toolchain@*/pkg/tool/*/pack", exclude: true},
-	{name: "golang.org/toolchain@*/pkg/tool/*/pack.exe", exclude: true},
 
 	// go.mod are renamed to _go.mod.
 	{name: "**/go.mod", exclude: true},

@@ -8,7 +8,6 @@ package net
 
 import (
 	"context"
-	"internal/testenv"
 	"testing"
 )
 
@@ -71,7 +70,6 @@ func TestCgoLookupPTRWithCancel(t *testing.T) {
 
 func TestCgoLookupCNAME(t *testing.T) {
 	mustHaveExternalNetwork(t)
-	testenv.SkipFlakyNet(t)
 	defer dnsWaitGroup.Wait()
 	if _, err := cgoLookupCNAME(t.Context(), "www.iana.org."); err != nil {
 		t.Error(err)

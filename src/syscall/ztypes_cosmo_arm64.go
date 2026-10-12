@@ -1,6 +1,5 @@
-// Copyright 2024 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 // Type definitions for Cosmopolitan Libc on arm64.
 // Cosmopolitan uses Linux-style structures.
@@ -102,15 +101,6 @@ type Rlimit struct {
 
 type _Gid_t uint32
 
-// Stat_t follows the arm64 Linux kernel's struct stat (asm-generic,
-// 128 bytes: Mode at offset 16, 32-bit Nlink/Blksize), matching
-// upstream ztypes_linux_arm64.go. This layout previously copied amd64's
-// (Mode at 24, 64-bit Nlink), and since the KERNEL writes the buffer on
-// Linux hosts, every field between Ino and Rdev came back scrambled on
-// arm64 hosts - file-type checks saw Mode==0 while Size/Ino/timestamps
-// happened to coincide between the two layouts and masked the bug. The
-// darwin emulation writes the same layout (see linuxStat in
-// internal/runtime/syscall/cosmo).
 type Stat_t struct {
 	Dev               uint64
 	Ino               uint64
@@ -532,8 +522,7 @@ type InotifyEvent struct {
 }
 
 // This is struct user_pt_regs, the arm64 layout, as ztypes_linux_arm64.go
-// declares it. The kernel writes PTRACE_GETREGSET into this buffer, so the
-// shape must be the one the HOST architecture defines.
+// declares it.
 type PtraceRegs struct {
 	Regs   [31]uint64
 	Sp     uint64
@@ -620,9 +609,7 @@ const RNDGETENTCNT = 0x80045200
 
 const PERF_IOC_FLAG_GROUP = 0x1
 
-// Termios is the linux port's shape (ztypes_linux_arm64.go): Cc holds 32
-// slots although the kernel fills 19, so Ispeed and Ospeed sit where a
-// program written for linux expects them.
+// Termios is the linux port's shape (ztypes_linux_arm64.go).
 type Termios struct {
 	Iflag     uint32
 	Oflag     uint32

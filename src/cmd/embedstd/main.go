@@ -1,22 +1,13 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
-// Embedstd writes the blob a go binary carries its standard library in:
-// the compiled archive of every standard package for cosmo/amd64 and
-// cosmo/arm64, the assembly headers under pkg/include, and a manifest per
-// target naming each package, its imports and its build ID. The linker's
-// -apeappend flag puts the blob past an APE's load span, and
-// internal/cosmo/embedded reads it back. The go command running it, from
-// its GOROOT source tree, is the one whose archives are embedded.
-//
-// Usage:
-//
-//	go tool embedstd [-V] [-go word]... -o blob
-//
-// The go command that builds the archives is this executable, or the command
-// line the -go flags spell one word at a time, for a program that links the
-// go command under a subcommand of its own.
+// Embedstd writes the blob a go binary carries its standard library in: the
+// compiled archive of every standard package for cosmo/amd64 and cosmo/arm64.
+// This also covers js/wasm and wasip1/wasm. The assembly headers under
+// pkg/include, and a manifest per target naming each package, its imports and
+// its build ID. The linker's -apeappend flag puts the blob past an APE's load
+// span, and internal/cosmo/embedded reads it back. The go command running it,
+// from its GOROOT source tree, is the one whose archives are embedded.
 package embedstd
 
 import (
@@ -40,6 +31,9 @@ var flagSet = flag.NewFlagSet("embedstd", flag.ExitOnError)
 
 var output = flagSet.String("o", "", "write the blob to `file`")
 
+// cgoOn builds std with cgo on, so the blob carries runtime/cgo compiled by the cosmocc compiler of each architecture.
+var cgoOn = flagSet.Bool("cgo", true, "build std with cgo on; the cosmocc compiler of each architecture must be on PATH")
+
 // goWords is the go command line, a word per -go flag; empty is this executable.
 var goWords []string
 
@@ -50,13 +44,20 @@ func init() {
 	})
 }
 
-// targets are the standard libraries one APE carries.
-var targets = []struct{ goos, goarch string }{
-	{"cosmo", "amd64"},
-	{"cosmo", "arm64"},
+// targets are the standard libraries one APE carries. cgo says the target's
+// std is built with cgo when -cgo is on; a wasm target has no C compiler.
+var targets = []struct {
+	goos, goarch string
+	cgo          bool
+}{
+	{"cosmo", "amd64", true},
+	{"cosmo", "arm64", true},
+	{"js", "wasm", false},
+	{"wasip1", "wasm", false},
 }
 
-// listed is the part of a go list -json record the manifest keeps.
+// listed is the part of a go list -json record the manifest keeps, with the
+// errors -e lets through.
 type listed struct {
 	ImportPath string
 	Name       string
@@ -64,6 +65,14 @@ type listed struct {
 	Export     string
 	BuildID    string
 	Standard   bool
+	Error      *listError
+	DepsErrors []*listError
+}
+
+// listError is a go list -json error record.
+type listError struct {
+	ImportStack []string
+	Err         string
 }
 
 // Main runs embedstd with args, the command line after the program name,
@@ -74,7 +83,7 @@ func Main(args []string) int {
 	log.SetFlags(0)
 	log.SetPrefix("embedstd: ")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: go tool embedstd [-V] [-go word]... -o blob\n")
+		fmt.Fprintf(os.Stderr, "usage: go tool embedstd [-V] [-cgo=false] [-go word]... -o blob\n")
 		flag.PrintDefaults()
 		os.Exit(2)
 	}
@@ -93,7 +102,11 @@ func Main(args []string) int {
 	var writer embedded.Writer
 	for _, target := range targets {
 		name := target.goos + "_" + target.goarch
-		packages := listStd(goCmd, target.goos, target.goarch)
+		cgo := *cgoOn && target.cgo
+		if cgo {
+			requireCompiler(goCmd, target.goos, target.goarch)
+		}
+		packages := listStd(goCmd, target.goos, target.goarch, cgo)
 		manifest := embedded.Manifest{Target: name}
 		for _, pkg := range packages {
 			entry := embedded.Package{ImportPath: pkg.ImportPath, Name: pkg.Name, Imports: pkg.Imports, BuildID: pkg.BuildID}
@@ -129,7 +142,7 @@ func Main(args []string) int {
 
 // addHeaders puts the assembly headers of the go command into the blob.
 //
-// A go command that carries its own standard library has no GOROOT directory:
+// A go command that carries its own standard library has no GOROOT directory.
 // GOROOT names the executable, and pkg/include is an entry of the blob that
 // executable carries. This tool runs inside that executable, so its own blob
 // is where those headers come from. A go command with a GOROOT on disk keeps
@@ -175,14 +188,31 @@ func gorootOf(goCmd []string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// listStd builds the standard library for a target and answers every
-// package in dependency order, with its archive and build ID.
-func listStd(goCmd []string, goos, goarch string) []listed {
-	// -e: a handful of standard packages hold nothing but tests, and the
-	// listing stops at the first of them without it. crypto/internal/
-	// fips140test is one. They compile to no archive, so they carry none
-	// here either, and the blob is the same either way.
-	args := []string{"list", "-e", "-export", "-deps", "-json=ImportPath,Name,Imports,Export,BuildID,Standard", "std"}
+// requireCompiler stops before any build when the C compiler of a target is
+// not on PATH. The listing below tolerates a package that fails, and a blob
+// with no runtime/cgo would otherwise pass as whole.
+func requireCompiler(goCmd []string, goos, goarch string) {
+	cmd := goCommand(goCmd, "env", "CC")
+	cmd.Env = append(os.Environ(), "GOOS="+goos, "GOARCH="+goarch, "CGO_ENABLED=1")
+	out, err := cmd.Output()
+	if err != nil {
+		log.Fatalf("asking the go command for the %s/%s C compiler: %v", goos, goarch, err)
+	}
+	compiler := strings.Fields(strings.TrimSpace(string(out)))
+	if len(compiler) == 0 {
+		log.Fatalf("the go command names no C compiler for %s/%s", goos, goarch)
+	}
+	if _, err := exec.LookPath(compiler[0]); err != nil {
+		log.Fatalf("cgo is on and the %s/%s C compiler %q is not on PATH; put it there or pass -cgo=false", goos, goarch, compiler[0])
+	}
+}
+
+// listStd builds the standard library for a target, with cgo on or off, and
+// answers every package in dependency order. That listStd is with its
+// archive and build ID.
+func listStd(goCmd []string, goos, goarch string, cgo bool) []listed {
+	// -e: a handful of standard packages hold nothing but tests.
+	args := []string{"list", "-e", "-export", "-deps", "-json=ImportPath,Name,Imports,Export,BuildID,Standard,Error,DepsErrors", "std"}
 	var progress *fileLines
 	if os.Getenv(progressEnv) == "1" {
 		// -x echoes each tool command, and a command line names the files it reads. It is not in any cache key.
@@ -190,8 +220,12 @@ func listStd(goCmd []string, goos, goarch string) []listed {
 		progress = &fileLines{target: goos + "/" + goarch, out: os.Stderr}
 	}
 	cmd := goCommand(goCmd, args...)
+	cgoEnabled := "0"
+	if cgo {
+		cgoEnabled = "1"
+	}
 	// -trimpath, so a program built with it against these archives.
-	cmd.Env = append(os.Environ(), "GOOS="+goos, "GOARCH="+goarch, "GOFLAGS=-trimpath", "CGO_ENABLED=0")
+	cmd.Env = append(os.Environ(), "GOOS="+goos, "GOARCH="+goarch, "GOFLAGS=-trimpath", "CGO_ENABLED="+cgoEnabled)
 	cmd.Stderr = os.Stderr
 	if progress != nil {
 		cmd.Stderr = progress
@@ -213,6 +247,13 @@ func listStd(goCmd []string, goos, goarch string) []listed {
 		if !pkg.Standard {
 			log.Fatalf("%s/%s: %s is not a standard package", goos, goarch, pkg.ImportPath)
 		}
+		// -e keeps a package that failed in the listing, with no archive. Only a test-only package may have none.
+		if pkg.Error != nil && !strings.Contains(pkg.Error.Err, "no non-test Go files") {
+			log.Fatalf("%s/%s: %s: %s", goos, goarch, pkg.ImportPath, strings.TrimSpace(pkg.Error.Err))
+		}
+		if len(pkg.DepsErrors) > 0 {
+			log.Fatalf("%s/%s: %s: a dependency failed: %s", goos, goarch, pkg.ImportPath, strings.TrimSpace(pkg.DepsErrors[0].Err))
+		}
 		sort.Strings(pkg.Imports)
 		packages = append(packages, pkg)
 	}
@@ -221,9 +262,9 @@ func listStd(goCmd []string, goos, goarch string) []listed {
 
 // canonicalArchive answers the archive with a build ID derived from its own
 // bytes, and that ID. The go command stamps an archive with an ID that hashes
-// the compiler binary, so two compilers of one source stamp two IDs into the
-// same object code. A blob built by each compiler in turn must converge, so
-// the ID the blob carries names the content alone.
+// the compiler binary, so compilers of one source stamp IDs. Into the same
+// object code. A blob built by each compiler in turn must converge, so the ID
+// the blob carries names the content alone.
 func canonicalArchive(pkg listed, archive []byte) ([]byte, string) {
 	id, err := buildid.ReadFile(pkg.Export)
 	if err != nil {
@@ -243,7 +284,7 @@ func canonicalArchive(pkg listed, archive []byte) ([]byte, string) {
 	return archive, canonical
 }
 
-// contentID spells hash in the shape of id: the same number of parts, each of
+// contentID spells hash in the shape of id. The same number of parts, each of
 // the same length, so the rewrite fits the bytes it replaces.
 func contentID(id string, hash [32]byte) string {
 	word := buildid.HashToString(hash)

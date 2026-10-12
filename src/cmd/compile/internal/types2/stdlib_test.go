@@ -302,6 +302,8 @@ func TestStdTest(t *testing.T) {
 		"embedvers.go",   // tests //go:embed
 		"linkname2.go",   // types2 doesn't check validity of //go:xxx directives
 		"linkname3.go",   // types2 doesn't check validity of //go:xxx directives
+
+		"regexpprecompile_err.go", // the compiler, not types2, compiles regexp patterns
 	)
 }
 

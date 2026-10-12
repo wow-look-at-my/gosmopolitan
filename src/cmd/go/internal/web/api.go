@@ -77,6 +77,44 @@ func (e *HTTPError) Unwrap() error {
 	return e.Err
 }
 
+// BannedDomain is golang.org. The go command sends no request to it or to a
+// host under it, on any path and after any redirect. No setting changes this.
+const BannedDomain = "golang.org"
+
+// IsBannedHost reports whether host is BannedDomain or a host under it.
+func IsBannedHost(host string) bool {
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	return host == BannedDomain || strings.HasSuffix(host, "."+BannedDomain)
+}
+
+// interceptedHost reports whether a test interceptor sends a host to a local
+// test server. http.go sets it. The bootstrap build intercepts nothing.
+var interceptedHost = func(host string) bool { return false }
+
+// IsRefusedHost reports whether a request to host is refused: the host is
+// banned, and no test interceptor sends it to a local test server instead.
+func IsRefusedHost(host string) bool {
+	return IsBannedHost(host) && !interceptedHost(host)
+}
+
+// RefuseBannedURL answers an error when target names a host that IsRefusedHost refuses.
+func RefuseBannedURL(target *url.URL) error {
+	if IsBannedHost(target.Hostname()) && !interceptedHost(target.Host) && !interceptedHost(target.Hostname()) {
+		return fmt.Errorf("refusing %s: the go command never contacts %s or a host under it", target.Redacted(), BannedDomain)
+	}
+	return nil
+}
+
+// RefuseBannedRemote is RefuseBannedURL for a repository URL in text form.
+// A remote with no readable host is refused, because its host is unknown.
+func RefuseBannedRemote(remote string) error {
+	target, err := url.Parse(remote)
+	if err != nil {
+		return fmt.Errorf("refusing %q: cannot read its host: %v", remote, err)
+	}
+	return RefuseBannedURL(target)
+}
+
 // GetBytes returns the body of the requested resource, or an error if the
 // response status was not http.StatusOK.
 //
@@ -183,20 +221,40 @@ func (r *Response) formatErrorDetail() string {
 // Get returns a non-nil error only if the request did not receive a response
 // under any applicable scheme. (A non-2xx response does not cause an error.)
 func Get(security SecurityMode, u *url.URL) (*Response, error) {
-	return get(security, u, nil, "")
+	return get(security, u, nil)
+}
+
+// PinOptions bounds one GetPinnedWith request.
+type PinOptions struct {
+	// AllowHost accepts every host the request may touch. The first URL counts as a hop, and so does each redirect.
+	AllowHost func(host string) bool
+	// CredentialURL attaches the GOAUTH credential for that URL instead of the one for u.
+	CredentialURL string
+	// Bearer is the whole credential when it is set. GOAUTH is not asked.
+	// net/http keeps an Authorization header across a redirect only to the
+	// original host or a subdomain of it.
+	Bearer string
+	// BasicAuth is presented as HTTP basic authentication and takes precedence
+	// over CredentialURL. GOAUTH is not asked. Redirects keep it by the same
+	// host-or-subdomain rule as Bearer.
+	BasicAuth *url.Userinfo
+	// NoRedirect returns a redirect as the response and does not follow it.
+	NoRedirect bool
 }
 
 // GetPinned is like Get with SecureOnly, but every hop must stay on a host
-// that allowHost accepts. The first URL counts as a hop, and so does each
-// redirect. A hop to any other host fails the request before it is sent.
-//
-// A non-empty credentialURL attaches the GOAUTH credential for that URL
-// instead of the one for u. A relay that forwards Authorization uses it.
+// that allowHost accepts. A hop to any other host fails the request before
+// it is sent. credentialURL is PinOptions.CredentialURL.
 func GetPinned(u *url.URL, allowHost func(host string) bool, credentialURL string) (*Response, error) {
-	if !allowHost(u.Hostname()) {
+	return GetPinnedWith(u, PinOptions{AllowHost: allowHost, CredentialURL: credentialURL})
+}
+
+// GetPinnedWith is GetPinned with every option of PinOptions.
+func GetPinnedWith(u *url.URL, opts PinOptions) (*Response, error) {
+	if opts.AllowHost == nil || !opts.AllowHost(u.Hostname()) {
 		return nil, fmt.Errorf("refusing to fetch %s: host not allowed", u.Redacted())
 	}
-	return get(SecureOnly, u, allowHost, credentialURL)
+	return get(SecureOnly, u, &opts)
 }
 
 // OpenBrowser attempts to open the requested URL in a web browser.

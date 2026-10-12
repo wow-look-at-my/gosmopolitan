@@ -1,19 +1,20 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package testing
 
 import (
 	"os"
+	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
 // TestForkStaysParallel: Fork gives the test a process, not a serial hold. The
-// child allows parallelism like any other run, so two subtests that ask for it
+// child allows parallelism like any other run, so subtests that ask for it
 // must reach a rendezvous only concurrent code can reach.
 func TestForkStaysParallel(t *T) {
 	if !canFork() {
@@ -93,12 +94,6 @@ func TestForkRunsTheBodyInAChildProcess(t *T) {
 // TestForkChildSelectsItsTargetByFlag: a child runs one test because
 // forkArgs anchors -test.run to it, NOT because anything reads the fork
 // marker to filter the test list.
-//
-// The distinction is the whole reason this test exists. The marker is an
-// environment variable, so every subprocess a test starts inherits it, and a
-// filter keyed on it silences that subprocess's own -test.run. Selection
-// belongs on the command line, where it reaches exactly the process the
-// caller meant.
 func TestForkChildSelectsItsTargetByFlag(t *T) {
 	args := forkArgs("TestOuter", []string{"-test.v"})
 
@@ -135,10 +130,10 @@ func TestForkFromASubtest(t *T) {
 }
 
 // TestForkSubtestsGetTheirOwnChild: the subtests of a forked test share that
-// child with each other, so a subtest asking for a process of its own must get
-// one. Each ends up the target of a child of its own, and the run terminates:
-// the marker names one test, and every test it runs under stays in place
-// rather than forking its own parent.
+// child with each other, so a subtest asking for a process of its own. Must
+// get one. Each ends up the target of a child of its own, and the run
+// terminates. The marker names one test, and every test it runs under stays in
+// place rather than forking its own parent.
 func TestForkSubtestsGetTheirOwnChild(t *T) {
 	if !canFork() {
 		t.Skip("this run cannot fork, so Fork takes the barrier")
@@ -177,10 +172,9 @@ func TestAllocsPerRunInAForkedSubtest(t *T) {
 // forkAllocSink keeps the measured allocation from being optimized away.
 var forkAllocSink []byte
 
-// TestForkReportsTheChildsFailure is the negative control on the rule that the
-// child's exit status is the verdict. A test cannot fail itself to prove it, so
-// it drives runForked directly and checks that a failing child comes back as an
-// error naming the test, with the child's output attached.
+// TestForkReportsTheChildsFailure is the. A test cannot fail itself to prove
+// it. It drives runForked directly and checks that a failing child comes
+// back as an error naming the test, with the child's output attached.
 func TestForkReportsTheChildsFailure(t *T) {
 	if !canFork() {
 		t.Skip("this run cannot fork, so Fork takes the barrier")
@@ -190,9 +184,7 @@ func TestForkReportsTheChildsFailure(t *T) {
 		return
 	}
 
-	// A name no test has. The child then selects nothing, and a run that tests
-	// nothing fails in this fork, so the child exits non-zero -- which is the
-	// outcome Fork has to notice.
+	// A name no test has.
 	fake := &T{common: common{name: "TestForkNoSuchTest"}}
 	out, err := fake.runForked()
 	if err == nil {
@@ -208,8 +200,7 @@ func TestForkReportsTheChildsFailure(t *T) {
 
 // TestSetenvForks: Setenv changes the process, and a child is how the test gets
 // one of its own. The barrier would give the same isolation and stop the suite
-// to do it, so the test asserts the variable is set AND that nothing was
-// stopped.
+// to do it. The test asserts the variable is set AND that nothing was stopped.
 func TestSetenvForks(t *T) {
 	if !canFork() {
 		t.Skip("this run cannot fork, so Setenv takes the barrier")
@@ -272,9 +263,9 @@ func TestSetenvInAChildStaysInPlace(t *T) {
 }
 
 // TestForkArgs: the child inherits the run's arguments and replaces only the
-// selection. The -target case is the one that matters -- cmd/internal/testdir
+// selection. The -target case is the one that matters. Cmd/internal/testdir
 // reads it to decide what to compile for, so a child that loses it tests the
-// host and reports that as the answer.
+// host and reports. That as the answer.
 func TestForkArgs(t *T) {
 	for _, tc := range []struct {
 		name string
@@ -307,9 +298,7 @@ func TestForkArgs(t *T) {
 			want: []string{"positional", "-test.short", "-test.run=^TestFoo$", "-test.count=1"},
 		},
 		{
-			// The whole reason the run's pattern is read rather than dropped:
-			// the child must compile what the run named, not every subtest
-			// under it. This is the shape that ran the testdir suite dry.
+			// The whole reason the run's pattern is read rather than dropped: the child must compile what the run named.
 			name: "the run's filter on the subtests below survives",
 			argv: []string{"-test.run=TestFoo/wasmexport", "-target=js/wasm"},
 			want: []string{"-target=js/wasm", "-test.run=^TestFoo$/wasmexport", "-test.count=1"},
@@ -335,8 +324,7 @@ func TestForkRunValue(t *T) {
 		{"Test", "Test", "^Test$"},
 		{"Test", "Test/wasmexport", "^Test$/wasmexport"},
 		{"Test", "Test/wasmexport/deeper", "^Test$/wasmexport/deeper"},
-		// The forked test already names every element the run did, so there is
-		// no tail left to carry.
+		// The forked test already names every element the run did, so there is no tail left to carry.
 		{"Test/wasmexport", "Test/wasmexport", "^Test$/^wasmexport$"},
 	} {
 		if got := forkRunValue(tc.name, tc.run); got != tc.want {
@@ -352,10 +340,7 @@ func TestAllocsPerRunForks(t *T) {
 	if !canFork() {
 		t.Skip("this run cannot fork, so AllocsPerRun takes the barrier")
 	}
-	// No barrier here, deliberately: sharing the process IS the condition under
-	// test. Parallel makes it so when parallelByDefault is off, and is a no-op
-	// when it is on. The sink is a local for the same reason, so the analyzer
-	// that asks for one has nothing to ask about.
+	// No barrier here, deliberately: sharing the process IS the condition under test.
 	t.Parallel()
 	if os.Getenv(forkTargetEnv) == "" {
 		AllocsPerRun(1, func() {})
@@ -381,7 +366,7 @@ func TestAllocsPerRunUnderSerialDoesNotFork(t *T) {
 	}
 }
 
-// TestAllocsPerRunRefusesBesideASibling: a fork gives the test a process, not
+// TestAllocsPerRunRefusesBesideASibling. A fork gives the test a process, not
 // the process to itself, so the subtests of a forked test still run at the
 // same time. A second fork would land in the same place, so the measurement
 // refuses here and names the method that stops them.
@@ -412,6 +397,145 @@ func TestAllocsPerRunRefusesBesideASibling(t *T) {
 		}()
 		AllocsPerRun(1, func() {})
 	})
+}
+
+func TestForkTestLogGivesTheChildItsOwnFile(t *T) {
+	args := []string{"bin", "-test.v", "-test.testlogfile=/work/b001/testlog.txt", "-test.run=^TestX$"}
+	file, err := forkTestLog(args, "/work/b001/testlog.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(filepath.Dir(file))
+	if file == "/work/b001/testlog.txt" || !strings.HasPrefix(file, os.TempDir()) {
+		t.Fatalf("the child's log is %q, want a file of its own under %q", file, os.TempDir())
+	}
+	want := []string{"bin", "-test.v", "-test.testlogfile=" + file, "-test.run=^TestX$"}
+	if !slices.Equal(args, want) {
+		t.Errorf("args = %q, want %q", args, want)
+	}
+
+	split := []string{"bin", "--test.testlogfile", "/work/b001/testlog.txt"}
+	file, err = forkTestLog(split, "/work/b001/testlog.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(filepath.Dir(file))
+	if split[2] != file {
+		t.Errorf("the flag's own argument is %q, want %q", split[2], file)
+	}
+}
+
+func TestForkTestLogWithoutALogLeavesTheArgs(t *T) {
+	args := []string{"bin", "-test.v"}
+	file, err := forkTestLog(args, "")
+	if err != nil || file != "" {
+		t.Fatalf("forkTestLog = %q, %v; want no file", file, err)
+	}
+	if !slices.Equal(args, []string{"bin", "-test.v"}) {
+		t.Errorf("args = %q, want them as they were", args)
+	}
+}
+
+// recordedLog takes test log events as internal/testlog's Interface.
+type recordedLog struct{ events []string }
+
+func (log *recordedLog) Getenv(key string) { log.events = append(log.events, "getenv "+key) }
+func (log *recordedLog) Stat(file string)  { log.events = append(log.events, "stat "+file) }
+func (log *recordedLog) Open(file string)  { log.events = append(log.events, "open "+file) }
+func (log *recordedLog) Chdir(dir string)  { log.events = append(log.events, "chdir "+dir) }
+func (log *recordedLog) Parse(op, file string) {
+	log.events = append(log.events, "parse "+op+" "+file)
+}
+func (log *recordedLog) Lookup(kind, file, query string) {
+	log.events = append(log.events, "lookup "+kind+" "+strconv.Quote(query)+" "+file)
+}
+
+func TestTakeForkLogRecordsWhatTheChildRead(t *T) {
+	scratch := t.TempDir()
+	start := filepath.Join(scratch, "pkg")
+	moved := filepath.Join(scratch, "elsewhere")
+	file := filepath.Join(scratch, "testlog.txt")
+	child := "# test log\n" +
+		"getenv HOME\n" +
+		"open testdata/in.txt\n" +
+		"chdir " + moved + "\n" +
+		"stat out.txt\n" +
+		"open " + filepath.Join(scratch, "abs.txt") + "\n" +
+		"parse open hosts\n" +
+		"lookup hostsname \"a \\\"b\\\"\" /etc/hosts\n" +
+		"lookup x509dir \"all\" certs\n"
+	if err := os.WriteFile(file, []byte(child), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	var log recordedLog
+	if err := takeForkLog(file, start, &log); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"getenv HOME",
+		"open " + filepath.Join(start, "testdata/in.txt"),
+		"stat " + moved,
+		"stat " + filepath.Join(moved, "out.txt"),
+		"open " + filepath.Join(scratch, "abs.txt"),
+		"parse open " + filepath.Join(moved, "hosts"),
+		"lookup hostsname \"a \\\"b\\\"\" /etc/hosts",
+		"lookup x509dir \"all\" " + filepath.Join(moved, "certs"),
+	}
+	if !slices.Equal(log.events, want) {
+		t.Errorf("recorded %q, want %q", log.events, want)
+	}
+}
+
+func TestTakeForkLogRefusesALogItCannotRead(t *T) {
+	scratch := t.TempDir()
+	for _, tc := range []struct{ name, content string }{
+		{"not a test log", "getenv HOME\n"},
+		{"a line with no name", "# test log\nopen\n"},
+		{"an unknown operation", "# test log\nunlink /x\n"},
+		{"a parse with no file", "# test log\nparse open\n"},
+		{"a lookup with no file", "# test log\nlookup hostsname \"a\"\n"},
+		{"a lookup with an unquoted query", "# test log\nlookup hostsname a /etc/hosts\n"},
+	} {
+		file := filepath.Join(scratch, strings.ReplaceAll(tc.name, " ", "-"))
+		if err := os.WriteFile(file, []byte(tc.content), 0o666); err != nil {
+			t.Fatal(err)
+		}
+		if err := takeForkLog(file, scratch, &recordedLog{}); err == nil {
+			t.Errorf("%s: takeForkLog took %q", tc.name, tc.content)
+		}
+	}
+	if err := takeForkLog(filepath.Join(scratch, "absent"), scratch, &recordedLog{}); err == nil {
+		t.Error("takeForkLog took a log the child never wrote")
+	}
+}
+
+// TestWriteTestLogReplacesTheFileWhole: a child that ran with the same
+// -test.testlogfile left a longer log there. The run's own log replaces all
+// of it rather than writing over its start.
+func TestWriteTestLogReplacesTheFileWhole(t *T) {
+	file := filepath.Join(t.TempDir(), "testlog.txt")
+	child := "# test log\nopen /a/much/longer/path/than/the/run/reads\nopen /another\n"
+	if err := os.WriteFile(file, []byte(child), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	own := "# test log\ngetenv HOME\n"
+	if err := writeTestLog(file, []byte(own)); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != own {
+		t.Errorf("the test log reads %q, want %q", got, own)
+	}
+	entries, err := os.ReadDir(filepath.Dir(file))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Errorf("the directory holds %d files, want the log alone", len(entries))
+	}
 }
 
 func TestForkRunPattern(t *T) {

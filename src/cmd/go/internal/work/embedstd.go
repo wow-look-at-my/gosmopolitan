@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package work
 
@@ -19,14 +18,14 @@ import (
 )
 
 // embeddedStdAction finishes the compile action of a standard package in
-// embedded mode: the archive already exists inside this binary, so the
-// action has nothing to run and answers the archive's name and the build ID
+// embedded mode: the archive already exists inside this binary. The action
+// has nothing to run and answers the archive's name and the build ID
 // recorded for it. A reader outside this process, which a -export listing
-// serves, gets the archive as a build cache file instead.
-// A package the manifest never names answers nil and compiles here like any
-// other, rather than claiming an archive that is not in it. cmd is such a
-// package set. That package needs a tree to compile from, and a binary with
-// neither the archive nor a tree says which package it wanted.
+// serves, gets the archive as a build cache file instead. A package the
+// manifest never names answers nil and compiles here like any other, rather
+// than claiming an archive that is not in it. cmd is such a package set.
+// That package needs a tree to compile from, and a binary with neither the
+// archive nor a tree says which package it wanted.
 func (builder *Builder) embeddedStdAction(act *Action, p *load.Package) *Action {
 	pkg := cfg.EmbeddedStdPackage(p.ImportPath)
 	outcome := embeddedStdLookup(pkg)
@@ -45,8 +44,7 @@ func (builder *Builder) embeddedStdAction(act *Action, p *load.Package) *Action 
 	act.built = act.Target
 	act.buildID = pkg.BuildID
 	if builder.NeedExport {
-		// No build runs for this action, so the listing's answer is filled
-		// in here, where a compile's cache hit would fill it.
+		// No build runs for this action, so the listing's answer is filled in here.
 		act.built = embeddedStdFile(p.ImportPath, pkg)
 		p.Export = act.built
 		p.BuildID = act.buildID
@@ -55,9 +53,8 @@ func (builder *Builder) embeddedStdAction(act *Action, p *load.Package) *Action 
 }
 
 // buildIDActionBytes decodes the ACTION field of a build id -- the part
-// before the slash -- which cmd/go writes as the leading bytes of the action
-// id that produced the object, base64.RawURLEncoding'd. It answers nil when
-// the build id carries no decodable action.
+// before the slash -- which cmd/go writes as the leading bytes of the
+// action. Id that produced the object, base64.RawURLEncoding'd.
 func buildIDActionBytes(buildID string) []byte {
 	action, _, ok := strings.Cut(buildID, "/")
 	if !ok {
@@ -72,14 +69,6 @@ func buildIDActionBytes(buildID string) []byte {
 
 // embeddedStdKey answers the cache key for an embedded std archive, with the
 // archive's OWN action bytes at the front.
-//
-// A shared cache certifies an entry by checking the object's build id against
-// the key it arrived under, so a key that is a plain content hash can never
-// match an archive compiled in another build, and every embedded std package
-// is refused on write and scored corrupt on read. Leading with the archive's
-// action makes that check pass for the same reason it passes for a compile
-// output: the key names the action the object came from. The rest of the key
-// stays the content hash, so two archives never share one.
 func embeddedStdKey(content [cache.HashSize]byte, buildID string) [cache.HashSize]byte {
 	action := buildIDActionBytes(buildID)
 	if len(action) == 0 || len(action) >= cache.HashSize {
@@ -92,7 +81,7 @@ func embeddedStdKey(content [cache.HashSize]byte, buildID string) [cache.HashSiz
 
 // embeddedStdFile answers a file holding the embedded archive of a
 // standard package, written into the build cache the first time a process
-// that cannot read this binary asks for it.
+// that cannot read. This binary asks for it.
 func embeddedStdFile(importPath string, pkg *embedded.Package) string {
 	hash := cache.NewHash("embedded std archive")
 	fmt.Fprintf(hash, "%s %s %s\n", cfg.StdTarget(), importPath, pkg.BuildID)
@@ -113,8 +102,8 @@ func embeddedStdFile(importPath string, pkg *embedded.Package) string {
 }
 
 // fileForOutsideReader answers built as a path another process can open:
-// built itself for a file, and the build cache copy for an archive inside
-// this binary.
+// built itself for a file, and the build cache copy for an archive.
+// Inside this binary.
 func fileForOutsideReader(p *load.Package, built string) string {
 	if !cfg.EmbeddedStd || !embedded.IsSelf(built) {
 		return built
@@ -126,11 +115,7 @@ func fileForOutsideReader(p *load.Package, built string) string {
 	return embeddedStdFile(p.ImportPath, pkg)
 }
 
-// embeddedStdOutcome says what a manifest lookup leaves embeddedStdAction to
-// do. The two failing cases are separate answers on purpose: a package the
-// manifest never names needs a tree, and a package it names with no archive
-// needs nothing at all. Reading both as "absent" is what stopped `go list
-// std` under a binary that carries no tree.
+// embeddedStdOutcome says what a manifest lookup leaves embeddedStdAction to do.
 type embeddedStdOutcome int
 
 const (
@@ -150,10 +135,7 @@ func embeddedStdLookup(pkg *embedded.Package) embeddedStdOutcome {
 }
 
 // servesArchive reports that the manifest entry carries a compiled archive to
-// read. A standard package of test files alone, crypto/internal/fips140test
-// among them, compiles to none, and embedstd records the entry with an empty
-// archive name. Asking the blob for that name finds no entry and stops the go
-// command, which is how `go list std` died under a binary carrying one.
+// read.
 func servesArchive(pkg *embedded.Package) bool {
 	return pkg != nil && pkg.Archive != ""
 }

@@ -144,6 +144,9 @@ func defaultContext() build.Context {
 	if buildcfg.DefaultCGO_ENABLED == "1" {
 		defaultCgoEnabled = true
 	} else if buildcfg.DefaultCGO_ENABLED == "0" {
+	} else if ctxt.GOOS == "cosmo" {
+		// Cosmo is always a cross build. Its cgo default follows the cosmocc compiler.
+		defaultCgoEnabled = platform.CgoSupported(ctxt.GOOS, ctxt.GOARCH) && cosmoCgoDefault(ctxt.GOARCH)
 	} else if runtime.GOARCH == ctxt.GOARCH && runtime.GOOS == ctxt.GOOS {
 		defaultCgoEnabled = platform.CgoSupported(ctxt.GOOS, ctxt.GOARCH)
 		// Use built-in default cgo setting for GOOS/GOARCH.
@@ -361,7 +364,7 @@ func EnvFile() (string, bool, error) {
 // RemovedEnv names the configuration keys this toolchain refuses to honor.
 // GOBIN sent installed binaries somewhere other than the toolchain's own bin
 // directory. GOTOOLCHAIN handed the build to a different go command. GOPROXY
-// and GOSUMDB replaced the module mirror and the checksum database. The go
+// and GOSUMDB replaced the module source and the checksum database. The go
 // command now always uses DefaultGOPROXY and DefaultGOSUMDB.
 //
 // The go command reads none of them. Getenv answers "" for each, KnownEnv omits
@@ -374,11 +377,12 @@ func EnvFile() (string, bool, error) {
 // sees.
 var RemovedEnv = []string{"GOBIN", "GOPROXY", "GOSUMDB", "GOTOOLCHAIN"}
 
-// DefaultGOPROXY and DefaultGOSUMDB are the module mirror and the checksum
-// database. They are the values upstream's go.env sets.
+// DefaultGOPROXY fetches every module from its origin. DefaultGOSUMDB turns
+// the checksum database off. The go command never contacts golang.org or a
+// host under it, so go.sum is the only record of a module's hash.
 const (
-	DefaultGOPROXY = "https://proxy.golang.org,direct"
-	DefaultGOSUMDB = "sum.golang.org"
+	DefaultGOPROXY = "direct"
+	DefaultGOSUMDB = "off"
 )
 
 func initEnvCache() {

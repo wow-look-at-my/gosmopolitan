@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package work
 
@@ -16,14 +15,9 @@ import (
 	"cmd/internal/buildid"
 )
 
-// The merge that assembles an APE out of its payloads is a command outside
-// the action graph, so the build cache never saw it. Its inputs are the two
-// payloads, the linker, the appended blob and the merge flags, and its
-// outputs are the APE and the debug sidecars the linker writes beside it.
-// Keyed by the inputs, a repeated merge is a copy out of the cache.
+// The merge that assembles an APE out of its payloads is a command outside the action graph.
 
-// cosmoMergeSidecars names the sidecars a merge may write beside its output,
-// by the cache subkey each is stored under.
+// cosmoMergeSidecars names the sidecars a merge may write beside its output, by the cache subkey each is stored under.
 var cosmoMergeSidecars = []string{".dbg"}
 
 // cosmoMergeID computes the cache key of a merge: the linker's ID, the

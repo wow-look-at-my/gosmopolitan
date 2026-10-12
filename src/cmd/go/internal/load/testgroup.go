@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package load
 
@@ -21,10 +20,7 @@ import (
 	"cmd/internal/objabi"
 )
 
-// testUnitBarriers name the symbols a walk of the binary must not follow when
-// it asks what one package's tests reach. Each of them names every package in
-// the binary, so a walk through one reaches them all and its content moves
-// whenever any of them does.
+// testUnitBarriers name the symbols a walk of the binary must not follow when it asks what one package's tests reach.
 var testUnitBarriers = []string{"main.units", "go:testinittasks", "runtime.testinittasks"}
 
 // testUnitRoots names the symbols one package's tests start from: the
@@ -81,12 +77,10 @@ type TestGroupMember struct {
 	WithTests *Package
 	ExtTests  *Package
 
-	// GODEBUG is the default GODEBUG this package's test binary would get
-	// on its own, from the main module and the package's //go:debug lines.
+	// GODEBUG is the default GODEBUG this package's test binary would get on its own.
 	GODEBUG string
 
-	// Binary is the file name, without an executable suffix, of this
-	// package's copy of the binary under go test -c.
+	// Binary is the file name, without an executable suffix, of this package's copy of the binary under go test -c.
 	Binary string
 }
 
@@ -100,25 +94,26 @@ func TestGODEBUG(ld *modload.Loader, pkg *Package) string {
 	return defaultGODEBUG(ld, main, pkgBuild.Directives, pkgBuild.TestDirectives, pkgBuild.XTestDirectives)
 }
 
-// TestGroupMain builds ONE main package holding the tests of several packages.
+// TestGroupMain builds ONE main package holding the tests of several
+// packages.
 //
-// The go command still starts the binary once per package and says which one
-// with -test.unit, so every per-package result, output and cache entry stays
-// what it was. What the packages share is the compile of the generated main and
-// the link. A binary per package pays both over and over, and a wasm runtime
-// pays a whole module compile for each one.
+// The go command still starts the binary once per package. The go command
+// says which with -test.unit, so every per-package result, output and cache
+// entry stays what it was. What the packages share is the compile of the
+// generated main and the link. A binary per package pays both over and over,
+// and a wasm runtime pays a whole module compile for each.
 //
-// A member's test variant keeps the import path of the package it tests, so a
-// group can only hold packages that do not reach each other. Two packages at
-// one path cannot sit in one link. The plain copy of B that another member's
+// A member's test variant keeps the import path of the package it tests. A
+// group can only hold packages that do not reach each other. Packages at one
+// path cannot sit in one link. The plain copy of B that another member's
 // tests import is exactly such a second copy.
 
 // A test result depends on the code that runs it, and that code is generated
-// here rather than compiled from any package's sources. A cache key without it
-// serves results the running binary never produced.
+// here rather than compiled from any package's sources. A cache key without
+// it serves results the running binary never produced.
 //
 // The generated main's own compile cannot supply this, because it holds every
-// package in the binary. Rendering this one alone names the template and this
+// package in the binary. Rendering this alone names the template and this
 // package's tests, and says nothing about a sibling.
 func unitDigest(unit testUnit, cover *TestCover) (string, error) {
 	alone := unit
@@ -141,8 +136,8 @@ func unitDigest(unit testUnit, cover *TestCover) (string, error) {
 }
 
 // realiasFuncs rewrites each function's import name as if its package were the
-// only one in the binary, so a digest does not move when a package's position
-// in the group moves.
+// only one in the binary. A digest does not move when a package's position in
+// the group moves.
 func realiasFuncs(funcs []testFunc, alias, xalias string) []testFunc {
 	out := make([]testFunc, len(funcs))
 	copy(out, funcs)
@@ -157,11 +152,7 @@ func realiasFuncs(funcs []testFunc, alias, xalias string) []testFunc {
 	return out
 }
 
-// darwinTextSegprot is the host linker flag that gives a test binary's __TEXT
-// segment the protections the internal linker gives it, rwx at most and r-x
-// to start, so a test reading them sees one answer whichever linker its
-// binary needed. Every test binary carries it, so a package's link settings,
-// and the key of its cached results, do not depend on what shares its binary.
+// darwinTextSegprot is the host linker flag that gives a test binary's __TEXT segment the protections the internal linker gives it.
 const darwinTextSegprot = "-Wl,-segprot,__TEXT,rwx,rx"
 
 // withExtldflag adds one host linker flag to ldflags. The linker keeps only
@@ -229,9 +220,6 @@ func TestGroupMain(ld *modload.Loader, ctx context.Context, opts PackageOpts, me
 		deps = append(deps, "internal/coverage/cfile")
 	}
 	// Program startup initializes what the generated main itself runs on.
-	// Each member, and whatever only members import, is initialized when
-	// the binary is started for that member's tests, the way a binary of
-	// its own would be.
 	if len(members) > 1 {
 		testMain.Internal.TestStartup = str.StringList(deps)
 	}
@@ -334,11 +322,8 @@ func TestGroupMain(ld *modload.Loader, ctx context.Context, opts PackageOpts, me
 			if cover.Local {
 				member.WithTests.Internal.Cover.Mode = cover.Mode
 			}
-			// The variant is linked in place of the package and keeps its
-			// symbols, so both are instrumented alike. Every package that
-			// imports it then inlines instrumented code, as it would
-			// compiled against the variant. A run reports coverage only of
-			// the packages it selects, so another package's run is unchanged.
+			// The variant is linked in place of the package and keeps its symbols, so
+			// both are instrumented alike.
 			if member.WithTests.Internal.TestVariantOf != nil {
 				member.Package.Internal.Cover.Mode = member.WithTests.Internal.Cover.Mode
 			}
@@ -355,10 +340,7 @@ func TestGroupMain(ld *modload.Loader, ctx context.Context, opts PackageOpts, me
 	testMain.Internal.testmainData = data
 	testMain.Internal.TestUnitSpec = testUnitSpec(units)
 
-	// Key by UnitID, never by ImportPath. ImportPath is what testdeps reports,
-	// and it is EMPTY for command-line-arguments and for a package outside a
-	// module. The caller reads this map by the package's real path, so an empty
-	// key hands it no digest and the test cache aborts the build.
+	// Key by UnitID, never by ImportPath.
 	digests := make(map[string]string, len(units))
 	for _, unit := range units {
 		digest, err := unitDigest(unit, cover)
@@ -372,8 +354,8 @@ func TestGroupMain(ld *modload.Loader, ctx context.Context, opts PackageOpts, me
 }
 
 // GroupMembers partitions packages into the binaries their tests share: one
-// per PGO profile and per value of the GODEBUG settings a program reads only
-// as it starts. A profile is compiled into every package a binary links, the
+// per PGO profile and per value of the GODEBUG settings a program reads only.
+// As it starts. A profile is compiled into every package a binary links, the
 // runtime included. A binary applies the rest of a package's default GODEBUG
 // when it is started for that package. Every package still runs, and every one
 // still reports on its own.
@@ -395,7 +377,7 @@ func GroupMembers(members []TestGroupMember) [][]TestGroupMember {
 
 // attachProfile compiles every package in testMain's binary with the PGO
 // profile its members share, the way a main package's own dependencies are.
-// A package only the tests import was loaded without one, so it gets a copy
+// A package only the tests import was loaded without one. It gets a copy
 // that carries the profile, and each importer is pointed at the copy.
 func attachProfile(testMain *Package, profile, forTest string) {
 	copies := map[*Package]*Package{}
@@ -454,17 +436,15 @@ func startupGODEBUG(godebug string) string {
 
 // shareMember prepares one package of a binary holding several packages'
 // tests. Nothing is recompiled against its test variants. The variant with
-// the package's own test files is linked in place of the package, and keeps
-// the symbol indices every other package refers to it by (-testvariant).
-// Both variants defer what their _test.go files initialize until the tests
-// of this package run (-testinit), so neither touches another package's run.
+// the package's own test files is linked in place of the package. The
+// variant keeps the symbol indices every other package refers to it by
+// (-testvariant).
 func shareMember(member TestGroupMember) {
 	pkg := member.Package
 	if withTests := member.WithTests; withTests != nil && withTests != pkg {
 		withTests.Internal.TestInit = pkg.ImportPath
-		// Only a package something else can import is replaced. A command
-		// is never imported, and neither is a package whose only Go files
-		// are tests.
+		// Only a package something else can import is replaced. A command is never
+		// imported, and neither is a package whose only Go files are tests.
 		if pkg.Name != "main" && pkg.Error == nil && len(pkg.GoFiles)+len(pkg.CgoFiles) > 0 {
 			withTests.Internal.TestVariantOf = pkg
 		}
@@ -483,9 +463,8 @@ func TestCycle(pkg, withTests *Package) *PackageError {
 	return testImportCycle(withTests, pkg)
 }
 
-// aliasFor answers the import name a test function is reached through once its
-// package is one unit among several. loadTestFuncs writes the name a single
-// package uses, and every unit past the first needs its own.
+// aliasFor answers the import name a test function is reached through once
+// its package is one unit among several. loadTestFuncs writes.
 func aliasFor(name string, idx int) string {
 	return testAlias(idx, name == testAlias(0, true))
 }
