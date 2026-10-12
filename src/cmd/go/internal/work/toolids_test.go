@@ -78,8 +78,8 @@ func TestLinkedToolIDsFollowActionDepsWithoutPackageDeps(t *testing.T) {
 func TestLinkActionIDCoversLinkedToolIDs(t *testing.T) {
 	var builder Builder
 	builder.toolIDCache.Do("link", func() string { return "linktool" })
-	first := builder.linkActionID(toolGraph("m1", "s1"))
-	if moved := builder.linkActionID(toolGraph("m1", "s2")); moved == first {
+	first := builder.linkActionID(toolGraph("m1", "s1", "r1"))
+	if moved := builder.linkActionID(toolGraph("m1", "s2", "r1")); moved == first {
 		t.Errorf("a linked tool changed and the link action ID stayed %x", first)
 	}
 }

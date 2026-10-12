@@ -106,12 +106,19 @@ grep -q "ok callback" "$work/cgoprobe.out"
 
 # wasm_build builds hello for GOOS $1 on wasm through the carried std, compiling no standard package, byte for byte the source tree's build.
 wasm_build() {
-	GOOS="$1" GOARCH=wasm embedded build -x -trimpath -ldflags=-buildid= -o "$work/embedded/hello.$1.wasm" . 2>"$work/build-$1.log"
+	if ! GOOS="$1" GOARCH=wasm embedded build -x -trimpath -ldflags=-buildid= -o "$work/embedded/hello.$1.wasm" . 2>"$work/build-$1.log"; then
+		cat "$work/build-$1.log" >&2
+		exit 1
+	fi
 	if grep -E "compile .* -p (fmt|runtime|os) " "$work/build-$1.log"; then
 		echo "a standard package was compiled from source for $1/wasm" >&2
 		exit 1
 	fi
-	grep -q "self:std/$1_wasm/" "$work/build-$1.log"
+	# A link served out of the build cache writes no importcfg, as above.
+	if grep -qE "/link( |$)" "$work/build-$1.log" && ! grep -q "self:std/$1_wasm/" "$work/build-$1.log"; then
+		echo "the $1/wasm link names no embedded package" >&2
+		exit 1
+	fi
 	(cd "$work/hello" && GOOS="$1" GOARCH=wasm go build -trimpath -ldflags=-buildid= -o "$work/source/hello.$1.wasm" .)
 	cmp "$work/embedded/hello.$1.wasm" "$work/source/hello.$1.wasm"
 }
