@@ -147,6 +147,7 @@ func main() {
 	timed("dupfile", checkDupFile)
 	timed("executable", checkExecutable)
 	timed("bootimage", checkBootImage)
+	timed("loadspan", checkLoadSpan)
 	timed("files", checkFiles)
 	timed("seekreadat", checkSeekReadAt)
 	timed("readdir", checkReadDir)
