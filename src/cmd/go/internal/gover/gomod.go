@@ -11,7 +11,7 @@ import (
 
 var nl = []byte("\n")
 
-// GoModLookup takes go.mod or go.work content,
+// GoModLookup takes go.mod content,
 // finds the first line in the file starting with the given key,
 // and returns the value associated with that key.
 //
