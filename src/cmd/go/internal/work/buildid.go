@@ -257,7 +257,7 @@ func (b *Builder) toolID(name string) string {
 		if linkedHere(name, path) && objabi.FullVersionCarriesBuildID() {
 			// The tool is this binary, so its -V=full line is known here. A
 			// run of it starts the whole toolchain binary for that one line.
-			id = contentID(objabi.ToolBuildID(name))
+			id = toolIDFromField("buildID=" + objabi.ToolBuildID(name))
 		} else {
 			cmdline := str.StringList(path, "-V=full")
 			cmd := exec.Command(cmdline[0], cmdline[1:]...)
@@ -340,17 +340,23 @@ func parseToolID(name string, isVetTool bool, line string) (id string, ok bool) 
 		return "", false
 	}
 	if strings.HasPrefix(f[len(f)-1], "buildID=") {
-		// An unstamped tool prints an empty ID. Report it as empty, never as
-		// the constant "buildID=": toolID hashes the file for it.
-		if f[len(f)-1] == "buildID=" {
-			return "", true
-		}
-		// Use the content ID part of the tool's own build ID.
-		return contentID(f[len(f)-1]), true
+		return toolIDFromField(f[len(f)-1]), true
 	}
 	// For a release, the output is like: "compile version go1.9.1 X:framepointer".
 	// Use the whole line.
 	return strings.TrimSpace(line), true
+}
+
+// toolIDFromField answers the tool ID for the "buildID=<id>" field of a
+// -V=full line. An unstamped tool prints an empty ID, which is reported as
+// empty, never as the constant "buildID=": toolID hashes the file for it.
+// Otherwise it is the content ID part of the field. An ID with no separator
+// keeps the "buildID=" prefix, and the tool IDs already in caches carry it.
+func toolIDFromField(field string) string {
+	if field == "buildID=" {
+		return ""
+	}
+	return contentID(field)
 }
 
 // gccToolID returns the unique ID to use for a tool that is invoked
