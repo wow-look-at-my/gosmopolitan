@@ -31,10 +31,11 @@ const cpusetWords = 16
 // for the host it runs on.
 const prioProcess = 0
 
-// priorityNice is the value the priority check moves a child to. Raising a
-// nice value needs no privilege anywhere, so the check never depends on being
-// root.
-const priorityNice = 5
+// priorityLowest is the highest nice value.
+const priorityLowest = 19
+
+// priorityHigher is a nice value below priorityLowest.
+const priorityHigher = 5
 
 // procControlSettle is how long a stopped child is given to finish any write
 // already in flight before its output is watched for silence.
@@ -85,17 +86,20 @@ func checkProcControl() {
 	}
 	pid := child.Process.Pid
 
-	if why := procControlPriority(pid); why != "" {
-		fail(name, "%s", why)
-		return
-	}
-	notes = append(notes, fmt.Sprintf("priority on pid %d moved", pid))
-
+	// The stop check comes first because it needs the child to make progress on
+	// a deadline.
 	if why := procControlStop(pid, ticks); why != "" {
 		fail(name, "%s", why)
 		return
 	}
 	notes = append(notes, "a stopped process stopped and resumed")
+
+	priority, why := procControlPriority(pid)
+	if why != "" {
+		fail(name, "%s", why)
+		return
+	}
+	notes = append(notes, priority)
 
 	ok(name, strings.Join(notes, "; "))
 }
@@ -134,25 +138,41 @@ func procControlAffinity() (string, string) {
 	return fmt.Sprintf("the CPU mask round-tripped as cpu %d", want), ""
 }
 
-// procControlPriority moves a spawned child's priority and reads it back.
-func procControlPriority(pid int) string {
+// procControlPriority moves a spawned child's priority and reads it back. It
+// returns a note for the report, or the reason a call failed. The probe can
+// already run at the lowest priority, because dats runs a parallel command
+// there. The child then has no raise left, so a refused lower is the proof.
+// A host that ignores the call refuses nothing and moves nothing.
+func procControlPriority(pid int) (string, string) {
 	before, err := syscall.Getpriority(prioProcess, pid)
 	if err != nil {
-		return fmt.Sprintf("getpriority: %v", err)
+		return "", fmt.Sprintf("getpriority: %v", err)
 	}
-	if err := syscall.Setpriority(prioProcess, pid, priorityNice); err != nil {
-		return fmt.Sprintf("setpriority: %v", err)
+	if err := syscall.Setpriority(prioProcess, pid, priorityLowest); err != nil {
+		return "", fmt.Sprintf("setpriority(%d): %v", priorityLowest, err)
 	}
 	after, err := syscall.Getpriority(prioProcess, pid)
 	if err != nil {
-		return fmt.Sprintf("getpriority after set: %v", err)
+		return "", fmt.Sprintf("getpriority after set: %v", err)
+	}
+	if after != before {
+		return fmt.Sprintf("priority on pid %d moved from %d to %d", pid, before, after), ""
+	}
+	err = syscall.Setpriority(prioProcess, pid, priorityHigher)
+	if errors.Is(err, syscall.EACCES) || errors.Is(err, syscall.EPERM) {
+		return fmt.Sprintf("pid %d is at the lowest priority, and a move up was refused: %v", pid, err), ""
+	}
+	if err != nil {
+		return "", fmt.Sprintf("setpriority(%d): %v", priorityHigher, err)
+	}
+	after, err = syscall.Getpriority(prioProcess, pid)
+	if err != nil {
+		return "", fmt.Sprintf("getpriority after set: %v", err)
 	}
 	if after == before {
-		// Either convention a host may report the value in has to show a
-		// move here: the two differ by the whole span of the check.
-		return fmt.Sprintf("the priority stayed at %d", after)
+		return "", fmt.Sprintf("the priority stayed at %d", after)
 	}
-	return ""
+	return fmt.Sprintf("priority on pid %d moved from %d to %d", pid, before, after), ""
 }
 
 // procControlStop suspends a child, watches for silence, resumes it, and

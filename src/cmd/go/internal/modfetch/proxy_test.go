@@ -79,7 +79,7 @@ func TestDefaultNeverAsksProxyGolangOrg(t *testing.T) {
 	for _, spec := range list {
 		assert.NotContains(t, spec.url, bannedProxyHost)
 	}
-	for _, base := range []string{"https://proxy.golang.org", "https://proxy.golang.org/", "http://proxy.golang.org/x"} {
+	for _, base := range []string{"https://proxy.golang.org", "https://proxy.golang.org/", "http://proxy.golang.org/x", "https://golang.org/mod", "https://Sum.Golang.Org:443/", "https://golang.org./x"} {
 		_, err := newProxyRepo(base, "golang.org/x/sync")
 		assert.ErrorContains(t, err, bannedProxyHost, "%s must be refused", base)
 	}

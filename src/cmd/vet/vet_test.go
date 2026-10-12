@@ -116,7 +116,6 @@ func TestVet(t *testing.T) {
 	// TODO(adonovan): delete when go1.21 goes away.
 	t.Run("loopclosure", func(t *testing.T) {
 		cmd := testenv.Command(t, testenv.GoToolPath(t), "vet", "-vettool="+vetPath(t), ".")
-		cmd.Env = append(os.Environ(), "GOWORK=off")
 		cmd.Dir = "testdata/rangeloop"
 		cmd.Stderr = new(strings.Builder) // all vet output goes to stderr
 		cmd.Run()                         // ignore error
@@ -147,7 +146,6 @@ func TestVet(t *testing.T) {
 	// So again we use a testdata go.mod file to "downgrade".
 	t.Run("stdversion", func(t *testing.T) {
 		cmd := testenv.Command(t, testenv.GoToolPath(t), "vet", "-vettool="+vetPath(t), ".")
-		cmd.Env = append(os.Environ(), "GOWORK=off")
 		cmd.Dir = "testdata/stdversion"
 		cmd.Stderr = new(strings.Builder) // all vet output goes to stderr
 		cmd.Run()                         // ignore error

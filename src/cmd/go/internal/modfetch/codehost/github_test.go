@@ -37,8 +37,8 @@ func TestParseGitHubRemote(t *testing.T) {
 		want   githubRepo
 		isOK   bool
 	}{
-		{"https://github.com/wow-look-at-my/slopfix", githubRepo{"wow-look-at-my", "slopfix"}, true},
-		{"https://github.com/wow-look-at-my/slopfix.git", githubRepo{"wow-look-at-my", "slopfix"}, true},
+		{"https://github.com/wow-look-at-my/slopfix", githubRepo{owner: "wow-look-at-my", name: "slopfix"}, true},
+		{"https://github.com/wow-look-at-my/slopfix.git", githubRepo{owner: "wow-look-at-my", name: "slopfix"}, true},
 		{"http://github.com/owner/repo", githubRepo{}, false},
 		{"https://github.com.evil.example/owner/repo", githubRepo{}, false},
 		{"https://evil.example/github.com/owner/repo", githubRepo{}, false},
@@ -60,7 +60,7 @@ func TestParseGitHubRemote(t *testing.T) {
 
 func TestGitHubArchiveSources(t *testing.T) {
 	const hash = "0123456789abcdef0123456789abcdef01234567"
-	repo := githubRepo{"wow-look-at-my", "slopfix"}
+	repo := githubRepo{owner: "wow-look-at-my", name: "slopfix"}
 	proxied := func(inner string) string { return "https://proxy.pazer.ai/?url=" + url.QueryEscape(inner) }
 	cases := []struct {
 		ref  string
@@ -288,7 +288,7 @@ type fakeGitHub struct {
 	infoRefsStatus int
 	// infoRefsCredential is the Authorization an info/refs request must carry.
 	infoRefsCredential string
-	// lastInfoRefsCredential is the Authorization of every info/refs request, in order.
+	// infoRefsAuth is the Authorization of every info/refs request, in order.
 	infoRefsAuth []string
 	// apiStatus fails every direct api.github.com request with this code.
 	apiStatus int
@@ -918,7 +918,7 @@ func fakeGitHubRepo(t *testing.T, ctx context.Context, dir string) *gitRepo {
 	previous := githubRemote
 	githubRemote = func(name string) (githubRepo, bool) {
 		if name == remote {
-			return githubRepo{"owner", "repo"}, true
+			return githubRepo{owner: "owner", name: "repo"}, true
 		}
 		return previous(name)
 	}

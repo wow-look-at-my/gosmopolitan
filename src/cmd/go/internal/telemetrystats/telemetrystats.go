@@ -7,7 +7,6 @@
 package telemetrystats
 
 import (
-	"cmd/go/internal/base"
 	"cmd/go/internal/cfg"
 	"cmd/go/internal/modload"
 	"cmd/internal/telemetry/counter"
@@ -27,8 +26,6 @@ func incrementConfig() {
 	s := modload.NewLoader()
 	if !s.WillBeEnabled() {
 		counter.Inc("go/mode:gopath")
-	} else if workfile := s.FindGoWork(base.Cwd()); workfile != "" {
-		counter.Inc("go/mode:workspace")
 	} else {
 		counter.Inc("go/mode:module")
 	}
