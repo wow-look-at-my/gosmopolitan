@@ -33,8 +33,9 @@ stdout '^example.com/a$'
 # A go.work file with no go.mod beside it does not make a module.
 env GOWORK=
 cd ..
-! go list -m
-stderr 'go.mod file not found'
+go list -m
+stdout '^command-line-arguments$'
+! stdout 'example.com'
 
 -- go.work --
 go 1.24
