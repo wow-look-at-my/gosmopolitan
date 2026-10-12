@@ -42,8 +42,8 @@ const (
 	// In starvation mode ownership of the mutex is directly handed off from
 	// the unlocking goroutine to the waiter at the front of the queue.
 	// New arriving goroutines don't try to acquire the mutex even if it appears
-	// to be unlocked, and don't try to spin. Instead they queue themselves at
-	// the tail of the wait queue.
+	// to be unlocked. Instead they queue themselves at the tail of the wait
+	// queue.
 	//
 	// If a waiter receives ownership of the mutex and sees that either
 	// (1) it is the last waiter in the queue, or (2) it waited for less than 1 ms,
@@ -92,28 +92,14 @@ func (m *Mutex) TryLock() bool {
 	return true
 }
 
+// lockSlow never spins: a goroutine that finds m held queues on m.sema, and
+// the runtime parks it until Unlock wakes it.
 func (m *Mutex) lockSlow() {
 	var waitStartTime int64
 	starving := false
 	awoke := false
-	iter := 0
 	old := m.state
 	for {
-		// Don't spin in starvation mode, ownership is handed off to waiters
-		// so we won't be able to acquire the mutex anyway.
-		if old&(mutexLocked|mutexStarving) == mutexLocked && runtime_canSpin(iter) {
-			// Active spinning makes sense.
-			// Try to set mutexWoken flag to inform Unlock
-			// to not wake other blocked goroutines.
-			if !awoke && old&mutexWoken == 0 && old>>mutexWaiterShift != 0 &&
-				atomic.CompareAndSwapInt32(&m.state, old, old|mutexWoken) {
-				awoke = true
-			}
-			runtime_doSpin()
-			iter++
-			old = m.state
-			continue
-		}
 		new := old
 		// Don't try to acquire starving mutex, new arriving goroutines must queue.
 		if old&mutexStarving == 0 {
@@ -170,7 +156,6 @@ func (m *Mutex) lockSlow() {
 				break
 			}
 			awoke = true
-			iter = 0
 		} else {
 			old = m.state
 		}
