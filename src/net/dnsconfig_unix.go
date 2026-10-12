@@ -9,8 +9,7 @@
 package net
 
 import (
-	"internal/bytealg"
-	"internal/stringslite"
+	"internal/netconf"
 	"net/netip"
 	"time"
 )
@@ -38,103 +37,21 @@ func dnsReadConfig(filename string) *dnsConfig {
 		conf.err = err
 		return conf
 	}
-	for line, ok := file.readLine(); ok; line, ok = file.readLine() {
-		if len(line) > 0 && (line[0] == ';' || line[0] == '#') {
-			// comment.
-			continue
-		}
-		f := getFields(line)
-		if len(f) < 1 {
-			continue
-		}
-		switch f[0] {
-		case "nameserver": // add one name server
-			if len(f) > 1 && len(conf.servers) < 3 { // small, but the standard limit
-				// One more check: make sure server name is
-				// just an IP address. Otherwise we need DNS
-				// to look it up.
-				if _, err := netip.ParseAddr(f[1]); err == nil {
-					conf.servers = append(conf.servers, JoinHostPort(f[1], "53"))
-				}
-			}
-
-		case "domain": // set search path to just this domain
-			if len(f) > 1 {
-				conf.search = []string{ensureRooted(f[1])}
-			}
-
-		case "search": // set search path to given servers
-			conf.search = make([]string, 0, len(f)-1)
-			for i := 1; i < len(f); i++ {
-				name := ensureRooted(f[i])
-				if name == "." {
-					continue
-				}
-				conf.search = append(conf.search, name)
-			}
-
-		case "options": // magic options
-			for _, s := range f[1:] {
-				switch {
-				case stringslite.HasPrefix(s, "ndots:"):
-					n, _, _ := dtoi(s[6:])
-					if n < 0 {
-						n = 0
-					} else if n > 15 {
-						n = 15
-					}
-					conf.ndots = n
-				case stringslite.HasPrefix(s, "timeout:"):
-					n, _, _ := dtoi(s[8:])
-					if n < 1 {
-						n = 1
-					}
-					conf.timeout = time.Duration(n) * time.Second
-				case stringslite.HasPrefix(s, "attempts:"):
-					n, _, _ := dtoi(s[9:])
-					if n < 1 {
-						n = 1
-					}
-					conf.attempts = n
-				case s == "rotate":
-					conf.rotate = true
-				case s == "single-request" || s == "single-request-reopen":
-					// Linux option:
-					// http://man7.org/linux/man-pages/man5/resolv.conf.5.html
-					// "By default, glibc performs IPv4 and IPv6 lookups in parallel [...]
-					//  This option disables the behavior and makes glibc
-					//  perform the IPv6 and IPv4 requests sequentially."
-					conf.singleRequest = true
-				case s == "use-vc" || s == "usevc" || s == "tcp":
-					// Linux (use-vc), FreeBSD (usevc) and OpenBSD (tcp) option:
-					// http://man7.org/linux/man-pages/man5/resolv.conf.5.html
-					// "Sets RES_USEVC in _res.options.
-					//  This option forces the use of TCP for DNS resolutions."
-					// https://www.freebsd.org/cgi/man.cgi?query=resolv.conf&sektion=5&manpath=freebsd-release-ports
-					// https://man.openbsd.org/resolv.conf.5
-					conf.useTCP = true
-				case s == "trust-ad":
-					conf.trustAD = true
-				case s == "edns0":
-					// We use EDNS by default.
-					// Ignore this option.
-				case s == "no-reload":
-					conf.noReload = true
-				default:
-					conf.unknownOpt = true
-				}
-			}
-
-		case "lookup":
-			// OpenBSD option:
-			// https://www.openbsd.org/cgi-bin/man.cgi/OpenBSD-current/man5/resolv.conf.5
-			// "the legal space-separated values are: bind, file, yp"
-			conf.lookup = f[1:]
-
-		default:
-			conf.unknownOpt = true
-		}
+	parsed := netconf.ReadResolv(file.file)
+	for _, server := range parsed.Servers {
+		conf.servers = append(conf.servers, JoinHostPort(server, "53"))
 	}
+	conf.search = parsed.Search
+	conf.ndots = parsed.Ndots
+	conf.timeout = parsed.Timeout
+	conf.attempts = parsed.Attempts
+	conf.rotate = parsed.Rotate
+	conf.unknownOpt = parsed.UnknownOpt
+	conf.lookup = parsed.Lookup
+	conf.singleRequest = parsed.SingleRequest
+	conf.useTCP = parsed.UseTCP
+	conf.trustAD = parsed.TrustAD
+	conf.noReload = parsed.NoReload
 	if len(conf.servers) == 0 {
 		conf.servers = unreadableConfServers()
 	}
@@ -182,10 +99,7 @@ func dnsDefaultSearch() []string {
 		// best effort
 		return nil
 	}
-	if i := bytealg.IndexByteString(hn, '.'); i >= 0 && i < len(hn)-1 {
-		return []string{ensureRooted(hn[i+1:])}
-	}
-	return nil
+	return netconf.DefaultSearch(hn)
 }
 
 func ensureRooted(s string) string {

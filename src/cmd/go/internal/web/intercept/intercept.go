@@ -66,6 +66,20 @@ var (
 	testInterceptors []Interceptor
 )
 
+// Intercepts reports whether an installed interceptor sends requests for
+// host to a test server. Only test code installs interceptors.
+func Intercepts(host string) bool {
+	if !TestHooksEnabled {
+		return false
+	}
+	for _, each := range testInterceptors {
+		if each.FromHost == host {
+			return true
+		}
+	}
+	return false
+}
+
 // URL returns the Interceptor to be used for a given URL.
 func URL(u *url.URL) (*Interceptor, bool) {
 	if !TestHooksEnabled {

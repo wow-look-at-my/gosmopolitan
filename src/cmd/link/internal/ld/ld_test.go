@@ -153,13 +153,14 @@ func TestLargeTextSectionSplitting(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 
-	// NB: the use of -ldflags=-debugtextsize=1048576 tells the linker to
-	// split text sections at a size threshold of 1M instead of the
+	// NB: the use of -ldflags=-debugtextsize=4194304 tells the linker to
+	// split text sections at a size threshold of 4M instead of the
 	// architected limit of 67M or larger. The choice of building cmd/go
 	// is arbitrary; we just need something sufficiently large that uses
-	// external linking.
+	// external linking. cmd/go carries every tool, so a 1M threshold
+	// gives Mach-O more text sections than its __TEXT segment holds.
 	exe := filepath.Join(dir, "go.exe")
-	out, err := testenv.Command(t, testenv.GoToolPath(t), "build", "-o", exe, "-ldflags=-linkmode=external -debugtextsize=1048576", "cmd/go/main").CombinedOutput()
+	out, err := testenv.Command(t, testenv.GoToolPath(t), "build", "-o", exe, "-ldflags=-linkmode=external -debugtextsize=4194304", "cmd/go/main").CombinedOutput()
 	if err != nil {
 		t.Fatalf("build failure: %s\n%s\n", err, string(out))
 	}

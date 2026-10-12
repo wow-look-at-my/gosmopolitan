@@ -403,8 +403,6 @@ func runGet(ctx context.Context, cmd *base.Command, args []string) {
 		updateTools(moduleLoader, ctx, r, queries, &opts)
 	}
 
-	// If a workspace applies, checkPackageProblems will switch to the workspace
-	// using modload.EnterWorkspace when doing the final load, and then switch back.
 	r.checkPackageProblems(moduleLoader, ctx, pkgPatterns)
 
 	// Everything succeeded. Update go.mod.
@@ -421,13 +419,6 @@ func runGet(ctx context.Context, cmd *base.Command, args []string) {
 
 	newReqs := reqsFromGoMod(modload.ModFile(moduleLoader))
 	r.reportChanges(oldReqs, newReqs)
-
-	if gowork := moduleLoader.FindGoWork(base.Cwd()); gowork != "" {
-		wf, err := modload.ReadWorkFile(gowork)
-		if err == nil && modload.UpdateWorkGoVersion(wf, moduleLoader.MainModules.GoVersion(moduleLoader)) {
-			modload.WriteWorkFile(gowork, wf)
-		}
-	}
 }
 
 func updateTools(ld *modload.Loader, ctx context.Context, r *resolver, queries []*query, opts *modload.WriteOpts) {
@@ -545,10 +536,6 @@ type resolver struct {
 	work *par.Queue
 
 	matchInModuleCache par.ErrCache[matchInModuleKey, []string]
-
-	// workspace is used to check whether, in workspace mode, any of the workspace
-	// modules would contain a package.
-	workspace *workspace
 }
 
 type versionReason struct {
@@ -582,7 +569,6 @@ func newResolver(ld *modload.Loader, ctx context.Context, queries []*query) *res
 		buildListVersion: initialVersion,
 		initialVersion:   initialVersion,
 		nonesByPath:      map[string]*query{},
-		workspace:        loadWorkspace(ld.FindGoWork(base.Cwd())),
 	}
 
 	for _, q := range queries {
@@ -1308,11 +1294,6 @@ func (r *resolver) loadPackages(ld *modload.Loader, ctx context.Context, pattern
 			// We already added candidates during loading.
 			continue
 		}
-		if r.workspace != nil && r.workspace.hasPackage(pkgPath) {
-			// Don't try to resolve imports that are in the resolver's associated workspace. (#73654)
-			continue
-		}
-
 		if _, ok := errors.AsType[*modload.ImportMissingError](err); !ok {
 			if _, ok := errors.AsType[*modload.AmbiguousImportError](err); !ok {
 				// The package, which is a dependency of something we care about, has some
@@ -1624,27 +1605,6 @@ func (r *resolver) chooseArbitrarily(cs pathSet) (isPackage bool, m module.Versi
 func (r *resolver) checkPackageProblems(ld *modload.Loader, ctx context.Context, pkgPatterns []string) {
 	defer base.ExitIfErrors()
 
-	// Enter workspace mode, if the current main module would belong to it, when
-	// doing the workspace load. We want to check that the workspace loads properly
-	// and doesn't have missing or ambiguous imports (rather than checking the module
-	// by itself) because the module may have unreleased dependencies in the workspace.
-	// We'll also report issues for retracted and deprecated modules using the workspace
-	// info, but switch back to single module mode when fetching sums so that we update
-	// the single module's go.sum file.
-	var exitWorkspace func()
-	if r.workspace != nil && r.workspace.hasModule(ld.MainModules.Versions()[0].Path) {
-		var err error
-		exitWorkspace, err = modload.EnterWorkspace(ld, ctx)
-		if err != nil {
-			// A TooNewError can happen for
-			// go get go@newversion when all the required modules
-			// are old enough but the go command itself is not new
-			// enough. See the related comment on the SwitchOrFatal
-			// in runGet when WriteGoMod returns an error.
-			toolchain.SwitchOrFatal(ld, ctx, err)
-		}
-	}
-
 	// Gather information about modules we might want to load retractions and
 	// deprecations for. Loading this metadata requires at least one version
 	// lookup per module, and we don't want to load information that's neither
@@ -1763,16 +1723,6 @@ func (r *resolver) checkPackageProblems(ld *modload.Loader, ctx context.Context,
 			}
 			deprecations[i].message = modload.ShortMessage(deprecation, "")
 		})
-	}
-
-	// exit the workspace if we had entered it earlier. We want to add the sums
-	// to the go.sum file for the module we're running go get from.
-	if exitWorkspace != nil {
-		// Wait for retraction and deprecation checks (that depend on the global
-		// modload state containing the workspace) to finish before we reset the
-		// state back to single module mode.
-		<-r.work.Idle()
-		exitWorkspace()
 	}
 
 	// Load sums for updated modules that had sums before. When we update a
@@ -2106,52 +2056,3 @@ func isNoSuchPackageVersion(err error) bool {
 	return ok
 }
 
-// workspace represents the set of modules in a workspace.
-// It can be used
-type workspace struct {
-	modules map[string]string // path -> modroot
-}
-
-// loadWorkspace loads infomation about a workspace using a go.work
-// file path.
-func loadWorkspace(workFilePath string) *workspace {
-	if workFilePath == "" {
-		// Return the empty workspace checker. All HasPackage checks will return false.
-		return nil
-	}
-
-	_, modRoots, err := modload.LoadWorkFile(workFilePath)
-	if err != nil {
-		return nil
-	}
-
-	w := &workspace{modules: make(map[string]string)}
-	for _, modRoot := range modRoots {
-		modFile := filepath.Join(modRoot, "go.mod")
-		_, f, err := modload.ReadModFile(modFile, nil)
-		if err != nil {
-			continue // Error will be reported in the final load of the workspace.
-		}
-		w.modules[f.Module.Mod.Path] = modRoot
-	}
-
-	return w
-}
-
-// hasPackage reports whether there is a workspace module that could
-// provide the package with the given path.
-func (w *workspace) hasPackage(pkgpath string) bool {
-	for modPath, modroot := range w.modules {
-		if modload.PkgIsInLocalModule(pkgpath, modPath, modroot) {
-			return true
-		}
-	}
-	return false
-}
-
-// hasModule reports whether there is a workspace module with the given
-// path.
-func (w *workspace) hasModule(modPath string) bool {
-	_, ok := w.modules[modPath]
-	return ok
-}

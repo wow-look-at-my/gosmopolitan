@@ -377,11 +377,12 @@ func EnvFile() (string, bool, error) {
 // sees.
 var RemovedEnv = []string{"GOBIN", "GOPROXY", "GOSUMDB", "GOTOOLCHAIN"}
 
-// DefaultGOPROXY fetches every module from its origin. The go command never
-// asks proxy.golang.org. DefaultGOSUMDB is the checksum database.
+// DefaultGOPROXY fetches every module from its origin. DefaultGOSUMDB turns
+// the checksum database off. The go command never contacts golang.org or a
+// host under it, so go.sum is the only record of a module's hash.
 const (
 	DefaultGOPROXY = "direct"
-	DefaultGOSUMDB = "sum.golang.org"
+	DefaultGOSUMDB = "off"
 )
 
 func initEnvCache() {

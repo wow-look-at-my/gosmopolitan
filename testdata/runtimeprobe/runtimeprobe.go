@@ -103,6 +103,11 @@ func main() {
 		// Child mode for checkCtrlBreak: await a group-targeted SIGQUIT.
 		ctrlwaitChild()
 		return
+	case "proccontrol":
+		// Child mode for checkProcControl: tick forever, so a stop is visible
+		// as silence and a resume as more ticks.
+		procControlChild()
+		return
 	}
 	startWatchdog()
 	// timed localizes latency stalls without weakening any verdict:
@@ -184,6 +189,8 @@ func main() {
 	timed("preempt", checkPreempt)
 	timed("cpuprof", checkCPUProf)
 	timed("ctrlbreak", checkCtrlBreak)
+	// With the signal family: the stop/continue half of it is a signal.
+	timed("proccontrol", checkProcControl)
 	timed("waitsig", checkWaitSig)
 	if failed {
 		os.Exit(1)
