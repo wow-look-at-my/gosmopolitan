@@ -95,11 +95,11 @@ APE: no apeld-linux-amd64 on this host, and nowhere to unpack the embedded one: 
 
 On Linux the loader maps the payload itself, so `/proc/self/exe` names the loader. The loader passes the APE's open descriptor as `AT_EXECFD`, and `os.Executable` reads the path from `/proc/self/fd/<n>`. A program that re-execs itself, or reads its own file, gets an openable path. `/proc/self/maps` names the APE.
 
-The memfd fallback leaves `/proc/self/exe` reading `/memfd:<name>`. `os.Executable` recognises that and resolves `argv[0]`, which the loader sets to the APE's own path.
+The memfd fallback leaves `/proc/self/exe` reading `/memfd:<name>`. `os.Executable` recognises that and resolves `argv[0]`, which the loader sets to the APE's own path. The memfd holds only this payload's PT_LOAD ranges, at their APE offsets. The rest of it is a hole, which takes no memory.
 
 Anything that reads `/proc/self/exe` directly sees the loader, or the memfd name.
 
-Each start of the memfd path copies the whole APE. For a toolchain binary of 868 MB that was 0.45 s per process. Mapping costs 0.03 s.
+Each start of the memfd path copies the payload's load span. For a toolchain binary of 868 MB a whole-file copy was 0.45 s per process. Mapping costs 0.03 s.
 
 On macOS nothing changes. The loader maps the payload itself, and `os.Executable()` resolves `argv[0]`.
 
