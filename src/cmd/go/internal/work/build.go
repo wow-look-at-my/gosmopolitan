@@ -453,7 +453,6 @@ var pkgsFilter = func(pkgs []*load.Package) []*load.Package { return pkgs }
 
 func runBuild(ctx context.Context, cmd *base.Command, args []string) {
 	moduleLoader := modload.NewLoader()
-	moduleLoader.InitWorkfile()
 	BuildInit(moduleLoader)
 	b := NewBuilder("", moduleLoader.VendorDirOrEmpty)
 	defer func() {
@@ -703,7 +702,6 @@ func runInstall(ctx context.Context, cmd *base.Command, args []string) {
 		}
 	}
 
-	moduleLoader.InitWorkfile()
 	BuildInit(moduleLoader)
 	pkgs := load.PackagesAndErrors(moduleLoader, ctx, load.PackageOpts{AutoVCS: true}, args)
 	if cfg.ModulesEnabled && !moduleLoader.HasModRoot() {
