@@ -1257,6 +1257,16 @@ var vcsPaths = []*vcsPath{
 		check:      noVCSSuffix,
 	},
 
+	// gopkg.in is a redirector in front of GitHub. The path names the GitHub
+	// repository, so the fetch goes to GitHub and never to gopkg.in. The root
+	// stays the gopkg.in path, which is the module path every go.mod declares.
+	{
+		pathPrefix: "gopkg.in",
+		regexp:     lazyregexp.New(`^(?P<root>gopkg\.in/(?:(?P<user>[A-Za-z0-9][-A-Za-z0-9]*)/)?(?P<pkg>[A-Za-z][-.A-Za-z0-9]*)\.v(?:0|[1-9][0-9]*)(?:-unstable)?)(/[\w.\-]+)*$`),
+		vcs:        "git",
+		check:      gopkgInRepo,
+	},
+
 	// Bitbucket
 	{
 		pathPrefix: "bitbucket.org",
@@ -1305,6 +1315,17 @@ var vcsPaths = []*vcsPath{
 		regexp:         lazyregexp.New(`(?P<root>(?P<repo>([a-z0-9.\-]+\.)+[a-z0-9.\-]+(:[0-9]+)?(/~?[\w.\-]+)+?)\.(?P<vcs>fossil|git|hg|svn))(/~?[\w.\-]+)*$`),
 		schemelessRepo: true,
 	},
+}
+
+// gopkgInRepo sets the GitHub repository of a gopkg.in path. gopkg.in/pkg.vN
+// is github.com/go-pkg/pkg, and gopkg.in/user/pkg.vN is github.com/user/pkg.
+func gopkgInRepo(match map[string]string) error {
+	owner := match["user"]
+	if owner == "" {
+		owner = "go-" + match["pkg"]
+	}
+	match["repo"] = "https://github.com/" + owner + "/" + match["pkg"]
+	return nil
 }
 
 // noVCSSuffix checks that the repository name does not

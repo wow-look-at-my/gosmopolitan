@@ -57,6 +57,39 @@ func TestRepoRootForImportPath(t *testing.T) {
 			"github.com/user/unicode/испытание",
 			nil,
 		},
+		// gopkg.in resolves to GitHub without a request to gopkg.in.
+		{
+			"gopkg.in/yaml.v3",
+			&RepoRoot{
+				VCS:  vcsGit,
+				Repo: "https://github.com/go-yaml/yaml",
+			},
+		},
+		{
+			"gopkg.in/check.v1/sub/pkg",
+			&RepoRoot{
+				VCS:  vcsGit,
+				Repo: "https://github.com/go-check/check",
+			},
+		},
+		{
+			"gopkg.in/natefinch/lumberjack.v2",
+			&RepoRoot{
+				VCS:  vcsGit,
+				Repo: "https://github.com/natefinch/lumberjack",
+			},
+		},
+		{
+			"gopkg.in/src-d/go-git.v4",
+			&RepoRoot{
+				VCS:  vcsGit,
+				Repo: "https://github.com/src-d/go-git",
+			},
+		},
+		{
+			"gopkg.in/yaml",
+			nil,
+		},
 		// IBM DevOps Services tests
 		{
 			"hub.jazz.net/git/user1/pkgname",
@@ -221,6 +254,18 @@ func TestRepoRootForImportPath(t *testing.T) {
 		if got.VCS.Name != want.VCS.Name || got.Repo != want.Repo {
 			t.Errorf("RepoRootForImportPath(%q) = VCS(%s) Repo(%s), want VCS(%s) Repo(%s)", test.path, got.VCS, got.Repo, want.VCS, want.Repo)
 		}
+	}
+}
+
+// A gopkg.in root is the gopkg.in path, not the GitHub path, so module paths
+// and go.sum lines stay as every go.mod already writes them.
+func TestGopkgInRoot(t *testing.T) {
+	got, err := RepoRootForImportPath("gopkg.in/yaml.v3/internal/sub", IgnoreMod, web.SecureOnly)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Root != "gopkg.in/yaml.v3" || got.Repo != "https://github.com/go-yaml/yaml" {
+		t.Errorf("Root %q Repo %q, want gopkg.in/yaml.v3 and https://github.com/go-yaml/yaml", got.Root, got.Repo)
 	}
 }
 
