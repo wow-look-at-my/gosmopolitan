@@ -1257,15 +1257,6 @@ var vcsPaths = []*vcsPath{
 		check:      noVCSSuffix,
 	},
 
-	// gopkg.in redirects to GitHub by a fixed rule. The rule resolves here, so
-	// the module takes the GitHub archive path and no request goes to gopkg.in.
-	{
-		pathPrefix: "gopkg.in",
-		regexp:     lazyregexp.New(`^(?P<root>gopkg\.in/(?:(?P<user>[\w\-]+)/)?(?P<pkg>[\w\-]+)\.v[0-9]+(?:-unstable)?)(/[\w.\-]+)*$`),
-		vcs:        "git",
-		check:      gopkgInRepo,
-	},
-
 	// Bitbucket
 	{
 		pathPrefix: "bitbucket.org",
@@ -1308,6 +1299,15 @@ var vcsPaths = []*vcsPath{
 		repo:       "https://{root}",
 	},
 
+	// gopkg.in redirects to GitHub by a fixed rule, so its paths resolve
+	// with no request to gopkg.in. The empty prefix lets a path outside the
+	// rule fall through to the meta tag lookup.
+	{
+		regexp: lazyregexp.New(`^(?P<root>gopkg\.in/(?:(?P<user>[a-zA-Z0-9][-a-zA-Z0-9]*)/)?(?P<pkg>[a-zA-Z][-.a-zA-Z0-9]*?)\.v(?:0|[1-9][0-9]*)(?:-unstable)?)(/[\w.\-]+)*$`),
+		vcs:    "git",
+		check:  gopkgInRepo,
+	},
+
 	// General syntax for any server.
 	// Must be last.
 	{
@@ -1316,9 +1316,9 @@ var vcsPaths = []*vcsPath{
 	},
 }
 
-// gopkgInRepo sets the GitHub repository gopkg.in serves a path from.
-// gopkg.in/user/pkg.vN is github.com/user/pkg, and gopkg.in/pkg.vN is
-// github.com/go-pkg/pkg.
+// gopkgInRepo sets the GitHub repository a gopkg.in path names.
+// gopkg.in/pkg.vN is github.com/go-pkg/pkg. gopkg.in/user/pkg.vN is
+// github.com/user/pkg.
 func gopkgInRepo(match map[string]string) error {
 	owner := match["user"]
 	if owner == "" {
