@@ -1,18 +1,10 @@
 // apeld: boot an APE on Linux. Freestanding, raw syscalls only.
 //
-<<<<<<< HEAD
 // The APE's program headers hold absolute file offsets, so each PT_LOAD
 // segment maps straight from the APE file. Nothing is copied and nothing
 // touches the disk. The loader then rebuilds the start stack the kernel
 // would give the payload and jumps to its entry. AT_EXECFD names the APE,
 // because /proc/self/exe names this loader.
-=======
-// The APE's program headers hold absolute file offsets. Only the file ranges
-// of this payload's PT_LOAD segments go into the memfd, at the same offsets.
-// The rest of the memfd is a hole that takes no memory. The first bytes are
-// the payload's own ELF header, with e_phoff rebased to the payload's file
-// offset. The kernel then execs the memfd directly. Nothing touches the disk.
->>>>>>> origin/master
 //
 // The host arch selects the payload. This binary is compiled per arch, so
 // the selector is a compile-time constant.
@@ -35,16 +27,10 @@ static inline i64 sc6(i64 n, i64 a, i64 b, i64 c, i64 d, i64 e, i64 f) {
 	                 : "rcx", "r11", "memory");
 	return r;
 }
-<<<<<<< HEAD
-enum { SYS_write = 1, SYS_pread = 17, SYS_pwrite = 18, SYS_mmap = 9,
+enum { SYS_write = 1, SYS_lseek = 8, SYS_pread = 17, SYS_pwrite = 18, SYS_mmap = 9,
 	SYS_sendfile = 40, SYS_exit = 60, SYS_openat = 257, SYS_unlinkat = 263,
 	SYS_prctl = 157, SYS_memfd_create = 319, SYS_execveat = 322,
 	SYS_close = 3, SYS_fcntl = 72 };
-=======
-enum { SYS_write = 1, SYS_lseek = 8, SYS_pread = 17, SYS_pwrite = 18, SYS_sendfile = 40,
-	SYS_exit = 60, SYS_openat = 257, SYS_memfd_create = 319, SYS_execveat = 322,
-	SYS_unlinkat = 263 };
->>>>>>> origin/master
 #elif defined(__aarch64__)
 #define EM_HOST 183
 static inline i64 sc6(i64 n, i64 a, i64 b, i64 c, i64 d, i64 e, i64 f) {
@@ -61,16 +47,10 @@ static inline i64 sc6(i64 n, i64 a, i64 b, i64 c, i64 d, i64 e, i64 f) {
 	                 : "memory");
 	return x0;
 }
-<<<<<<< HEAD
-enum { SYS_write = 64, SYS_pread = 67, SYS_pwrite = 68, SYS_mmap = 222,
+enum { SYS_write = 64, SYS_lseek = 62, SYS_pread = 67, SYS_pwrite = 68, SYS_mmap = 222,
 	SYS_sendfile = 71, SYS_exit = 93, SYS_openat = 56, SYS_unlinkat = 35,
 	SYS_prctl = 167, SYS_memfd_create = 279, SYS_execveat = 281,
 	SYS_close = 57, SYS_fcntl = 25 };
-=======
-enum { SYS_write = 64, SYS_lseek = 62, SYS_pread = 67, SYS_pwrite = 68, SYS_sendfile = 71,
-	SYS_exit = 93, SYS_openat = 56, SYS_memfd_create = 279, SYS_execveat = 281,
-	SYS_unlinkat = 35 };
->>>>>>> origin/master
 #else
 #error "unsupported arch"
 #endif
@@ -121,16 +101,25 @@ __attribute__((noreturn)) static void die(const char *msg) {
 	__builtin_unreachable();
 }
 
-// bootcopy copies the APE into a memfd and execs that. A memfd runs where
-// the APE's own mount forbids an executable mapping, as noexec does.
-__attribute__((noreturn)) static void bootcopy(i64 fd, const char *name, u64 off, unsigned char *ehdr, char **pargv, char **envp) {
+// bootcopy copies the payload's PT_LOAD ranges into a memfd and execs that.
+// A memfd runs where the APE's own mount forbids an executable mapping, as
+// noexec does. Each range keeps its APE offset, so the rest of the memfd is a
+// hole that takes no memory. Each range widens to 64K, the largest page a
+// kernel maps a segment with.
+__attribute__((noreturn)) static void bootcopy(i64 fd, const char *name, u64 off, unsigned char *ehdr, phdr *ph, u32 phnum, char **pargv, char **envp) {
 	i64 mfd = sc3(SYS_memfd_create, name, MFD_CLOEXEC, 0);
 	if (mfd < 0) die("memfd_create failed");
-	// sendfile copies until the source is drained. A zero return is EOF.
-	for (i64 pos = 0;;) {
-		i64 n = sc4(SYS_sendfile, mfd, fd, &pos, 1 << 30);
-		if (n < 0) die("copy failed");
-		if (n == 0) break;
+	for (u32 idx = 0; idx < phnum; idx++) {
+		if (ph[idx].type != PT_LOAD) continue;
+		i64 pos = ph[idx].offset & -(u64)PAYLOAD_ALIGN;
+		u64 end = (ph[idx].offset + ph[idx].filesz + PAYLOAD_ALIGN - 1) & -(u64)PAYLOAD_ALIGN;
+		if (sc3(SYS_lseek, mfd, pos, 0) != pos) die("seek failed");
+		// sendfile moves pos. A zero return is EOF.
+		while ((u64)pos < end) {
+			i64 n = sc4(SYS_sendfile, mfd, fd, &pos, end - pos);
+			if (n < 0) die("copy failed");
+			if (n == 0) break;
+		}
 	}
 	u64 *phoff = (u64 *)(ehdr + 32);
 	*phoff += off;
@@ -160,7 +149,6 @@ __attribute__((noreturn, used)) static void run(i64 argc, char **argv) {
 	// The descriptor stays open: AT_EXECFD hands it to the payload.
 	i64 fd = sc4(SYS_openat, AT_FDCWD, path, O_RDONLY | O_CLOEXEC, 0);
 	if (fd < 0) die("cannot open program");
-<<<<<<< HEAD
 	if (fd < 3) {
 		i64 high = sc3(SYS_fcntl, fd, F_DUPFD_CLOEXEC, 3);
 		if (high < 0) die("cannot move the program descriptor");
@@ -187,57 +175,6 @@ __attribute__((noreturn, used)) static void run(i64 argc, char **argv) {
 	phdr ph[MAX_PHDRS];
 	i64 phlen = (i64)eh.phnum * sizeof(phdr);
 	if (sc4(SYS_pread, fd, ph, phlen, off + eh.phoff) != phlen) die("cannot read program headers");
-=======
-
-	// The memfd name is what /proc/self/exe reads back, so use the basename.
-	const char *name = path;
-	for (const char *p = path; *p; p++)
-		if (*p == '/') name = p + 1;
-	i64 mfd = sc3(SYS_memfd_create, name, MFD_CLOEXEC, 0);
-	if (mfd < 0) die("memfd_create failed");
-
-	// Find the payload for this arch on a 64K boundary.
-	union {
-		unsigned char b[64];
-		struct {
-			u32 magic;
-			unsigned char ident[12];
-			u16 type, machine;
-			u32 version;
-			u64 entry, phoff, shoff;
-			u32 flags;
-			u16 ehsize, phentsize, phnum;
-		} h;
-	} eh;
-	u64 off = PAYLOAD_ALIGN;
-	for (;; off += PAYLOAD_ALIGN) {
-		if (sc4(SYS_pread, fd, eh.b, 64, off) != 64) die("no payload for this machine");
-		if (eh.h.magic == 0x464c457f && eh.h.machine == EM_HOST) break;
-	}
-	eh.h.phoff += off;
-
-	// Copy each PT_LOAD file range, widened to 64K: the largest page a kernel
-	// maps a segment with. Other payloads and appended data stay out.
-	struct {
-		u32 type, flags;
-		u64 offset, vaddr, paddr, filesz, memsz, align;
-	} ph;
-	for (u64 idx = 0; idx < eh.h.phnum; idx++) {
-		if (sc4(SYS_pread, fd, &ph, sizeof ph, eh.h.phoff + idx * eh.h.phentsize) != sizeof ph)
-			die("cannot read program headers");
-		if (ph.type != 1) continue;
-		i64 pos = ph.offset & -(u64)PAYLOAD_ALIGN;
-		u64 end = (ph.offset + ph.filesz + PAYLOAD_ALIGN - 1) & -(u64)PAYLOAD_ALIGN;
-		if (sc3(SYS_lseek, mfd, pos, 0) != pos) die("seek failed");
-		// sendfile moves pos. A zero return is EOF.
-		while ((u64)pos < end) {
-			i64 n = sc4(SYS_sendfile, mfd, fd, &pos, end - pos);
-			if (n < 0) die("copy failed");
-			if (n == 0) break;
-		}
-	}
-	if (sc4(SYS_pwrite, mfd, eh.b, 64, 0) != 64) die("cannot write boot header");
->>>>>>> origin/master
 
 	// The environment ends in a null, and the auxv follows it.
 	char **e = envp;
@@ -272,7 +209,7 @@ __attribute__((noreturn, used)) static void run(i64 argc, char **argv) {
 		u64 mend = p->vaddr + p->memsz;
 		if (p->filesz) {
 			if (mapfailed(sc6(SYS_mmap, start, lead + p->filesz, prot, MAP_PRIVATE | MAP_FIXED, fd, p->offset - lead)))
-				bootcopy(fd, name, off, (unsigned char *)&eh, pargv, envp);
+				bootcopy(fd, name, off, (unsigned char *)&eh, ph, eh.phnum, pargv, envp);
 		}
 		u64 zend = (fend + pagesz - 1) & ~(pagesz - 1);
 		if (mend > fend && p->filesz) {
