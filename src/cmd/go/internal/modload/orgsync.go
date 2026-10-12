@@ -16,13 +16,13 @@ import (
 )
 
 // An org module follows a branch head, so a new commit can require a new
-// module in the middle of a run. A readonly command records it when it is the whole change.
+// module in the middle of a run.
 
 // orgSyncing reports whether this invocation may record what org modules
 // declare. An explicit -mod flag keeps its upstream meaning.
 func orgSyncing(ld *Loader) bool {
 	return cfg.BuildMod == "readonly" && !cfg.BuildModExplicit &&
-		ld.HasModRoot() && !ld.inWorkspaceMode() && orgResolvable()
+		ld.HasModRoot() && orgResolvable()
 }
 
 // orgDeclaredCache maps a module path to the version org modules require.

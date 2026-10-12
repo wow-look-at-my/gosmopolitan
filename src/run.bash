@@ -49,17 +49,5 @@ GOARCH=$GOHOSTARCH
 export GOOS
 export GOARCH
 
-# no core files, please
-ulimit -c 0
-
-# Raise soft limits to hard limits for NetBSD/OpenBSD.
-# We need at least ~300 MB of bss.
-[ "$(ulimit -H -d)" = "unlimited" ] || ulimit -S -d $(ulimit -H -d)
-
-# Thread count limit on NetBSD 7.
-if ulimit -T &> /dev/null; then
-	[ "$(ulimit -H -T)" = "unlimited" ] || ulimit -S -T $(ulimit -H -T)
-fi
-
-export GOPATH=/nonexist-gopath
+# dist test sets GOPATH, PATH and the resource limits itself.
 exec ../bin/go tool dist test "$@"
