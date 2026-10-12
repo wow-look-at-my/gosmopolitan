@@ -128,10 +128,6 @@ func run(ctx context.Context, cmd *base.Command, args []string) {
 	// Compute flags for the vet/fix tool (e.g. cmd/{vet,fix}).
 	toolFlags, pkgArgs := toolFlags(cmd, args)
 
-	// The vet/fix commands do custom flag processing;
-	// initialize workspaces after that.
-	moduleLoader.InitWorkfile()
-
 	if cfg.DebugTrace != "" {
 		var close func() error
 		var err error

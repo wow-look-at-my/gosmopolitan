@@ -26,17 +26,17 @@ import (
 //	func semawakeup(mp *m)
 //		Wake up mp, which is or will soon be sleeping on its semaphore.
 
-// The mutex state consists of four flags and a pointer. The flag at bit 0,
+// The mutex state consists of three flags and a pointer. The flag at bit 0,
 // mutexLocked, represents the lock itself. Bit 1, mutexSleeping, is a hint that
 // the pointer is non-nil. The fast paths for locking and unlocking the mutex
-// are based on atomic 8-bit swap operations on the low byte; bits 2 through 7
+// are based on atomic 8-bit swap operations on the low byte; bits 2 through 8
 // are unused.
 //
-// Bit 8, mutexSpinning, is a try-lock that grants a waiting M permission to
-// spin on the state word. Most other Ms must attempt to spend their time
-// sleeping to reduce traffic on the cache line. This is the "spin bit" for
-// which the implementation is named. (The anti-starvation mechanism also grants
-// temporary permission for an M to spin.)
+// A waiting M never spins or yields. An M that finds the lock held pushes
+// itself onto the stack of waiting Ms and sleeps on its semaphore, which tells
+// the OS it is waiting. The holder's unlock2 pops one M and wakes it. Spinning
+// in user space only burns the CPU the holder needs when the holder has been
+// descheduled, which is the common case on an overcommitted host.
 //
 // Bit 9, mutexStackLocked, is a try-lock that grants an unlocking M permission
 // to inspect the list of waiting Ms and to pop an M off of that stack.
@@ -51,20 +51,11 @@ import (
 // otherwise.
 
 const (
-	active_spin     = 4  // referenced in proc.go for sync.Mutex implementation
-	active_spin_cnt = 30 // referenced in proc.go for sync.Mutex implementation
-)
-
-const (
 	mutexLocked      = 0x001
 	mutexSleeping    = 0x002
-	mutexSpinning    = 0x100
 	mutexStackLocked = 0x200
 	mutexMMask       = 0x3FF
 	mutexMOffset     = gc.MallocHeaderSize // alignment of heap-allocated Ms (those other than m0)
-
-	mutexActiveSpinCount = 4
-	mutexActiveSpinSize  = 30
 
 	mutexTailWakePeriod = 16
 
@@ -104,7 +95,7 @@ func lockVerifyMSize() {
 	if size&mutexMMask != 0 {
 		print("M structure uses sizeclass ", size, "/", hex(size), " bytes; ",
 			"incompatible with mutex flag mask ", hex(mutexMMask), "\n")
-		throw("runtime.m memory alignment too small for spinbit mutex")
+		throw("runtime.m memory alignment too small for runtime mutex")
 	}
 }
 
@@ -123,32 +114,6 @@ func mutexWaitListHead(v uintptr) muintptr {
 		return m0bits
 	} else {
 		return muintptr(highBits + mutexMOffset)
-	}
-}
-
-// mutexPreferLowLatency reports if this mutex prefers low latency at the risk
-// of performance collapse. If so, we can allow all waiting threads to spin on
-// the state word rather than go to sleep.
-//
-// TODO: We could have the waiting Ms each spin on their own private cache line,
-// especially if we can put a bound on the on-CPU time that would consume.
-//
-// TODO: If there's a small set of mutex values with special requirements, they
-// could make use of a more specialized lock2/unlock2 implementation. Otherwise,
-// we're constrained to what we can fit within a single uintptr with no
-// additional storage on the M for each lock held.
-//
-//go:nosplit
-func mutexPreferLowLatency(l *mutex) bool {
-	switch l {
-	default:
-		return false
-	case &sched.lock:
-		// We often expect sched.lock to pass quickly between Ms in a way that
-		// each M has unique work to do: for instance when we stop-the-world
-		// (bringing each P to idle) or add new netpoller-triggered work to the
-		// global run queue.
-		return true
 	}
 }
 
@@ -180,57 +145,25 @@ func lock2(l *mutex) {
 	semacreate(gp.m)
 
 	var startTime int64
-	// On uniprocessors, no point spinning.
-	// On multiprocessors, spin for mutexActiveSpinCount attempts.
-	spin := 0
-	if numCPUStartup > 1 {
-		spin = mutexActiveSpinCount
-	}
-
-	var weSpin, atTail, haveTimers bool
+	var haveTimers bool
 	v := atomic.Loaduintptr(&l.key)
-tryAcquire:
-	for i := 0; ; i++ {
+	for {
 		if v&mutexLocked == 0 {
-			if weSpin {
-				next := (v &^ mutexSpinning) | mutexSleeping | mutexLocked
-				if next&^mutexMMask == 0 {
-					// The fast-path Xchg8 may have cleared mutexSleeping. Fix
-					// the hint so unlock2 knows when to use its slow path.
-					next = next &^ mutexSleeping
-				}
-				if atomic.Casuintptr(&l.key, v, next) {
-					gp.m.mLockProfile.end(startTime)
-					return
-				}
-			} else {
-				prev8 := atomic.Xchg8(k8, mutexLocked|mutexSleeping)
-				if prev8&mutexLocked == 0 {
-					gp.m.mLockProfile.end(startTime)
-					return
-				}
+			next := v | mutexSleeping | mutexLocked
+			if next&^mutexMMask == 0 {
+				// The fast-path Xchg8 may have cleared mutexSleeping. Fix
+				// the hint so unlock2 knows when to use its slow path.
+				next = next &^ mutexSleeping
+			}
+			if atomic.Casuintptr(&l.key, v, next) {
+				gp.m.mLockProfile.end(startTime)
+				return
 			}
 			v = atomic.Loaduintptr(&l.key)
-			continue tryAcquire
+			continue
 		}
 
-		if !weSpin && v&mutexSpinning == 0 && atomic.Casuintptr(&l.key, v, v|mutexSpinning) {
-			v |= mutexSpinning
-			weSpin = true
-		}
-
-		if weSpin || atTail || mutexPreferLowLatency(l) {
-			if i < spin {
-				procyield(mutexActiveSpinSize)
-				v = atomic.Loaduintptr(&l.key)
-				continue tryAcquire
-			}
-		}
-
-		// Go to sleep
-		if v&mutexLocked == 0 {
-			throw("runtime·lock: sleeping while lock is available")
-		}
+		// The lock is held: sleep until an unlock2 wakes this M.
 
 		// Collect times for mutex profile (seen in unlock2 only via mWaitList),
 		// and for "/sync/mutex/wait/total:seconds" metric (to match).
@@ -244,16 +177,10 @@ tryAcquire:
 
 		// Pack a (partial) pointer to this M with the current lock state bits
 		next := (uintptr(unsafe.Pointer(gp.m)) &^ mutexMMask) | v&mutexMMask | mutexSleeping
-		if weSpin { // If we were spinning, prepare to retire
-			next = next &^ mutexSpinning
-		}
 
 		if atomic.Casuintptr(&l.key, v, next) {
-			weSpin = false
 			// We've pushed ourselves onto the stack of waiters. Wait.
 			semasleep(-1)
-			atTail = gp.m.mWaitList.next == 0 // we were at risk of starving
-			i = 0
 		}
 
 		gp.m.mWaitList.next = 0
@@ -349,12 +276,6 @@ func unlock2Wake(l *mutex, haveStackLock bool, endTicks int64) {
 		goto useStackLock
 	}
 
-	if !(antiStarve || // avoiding starvation may require a wake
-		v&mutexSpinning == 0 || // no spinners means we must wake
-		mutexPreferLowLatency(l)) { // prefer waiters be awake as much as possible
-		return
-	}
-
 	for {
 		if v&^mutexMMask == 0 || v&mutexStackLocked != 0 {
 			// No waiting Ms means nothing to do.
@@ -418,13 +339,10 @@ useStackLock:
 		mp := mutexWaitListHead(v).ptr()
 		wakem := committed
 		if committed == nil {
-			if v&mutexSpinning == 0 || mutexPreferLowLatency(l) {
-				wakem = mp
-			}
+			wakem = mp
 			if antiStarve {
 				// Wake the M at the bottom of the stack of waiters. (This is
 				// O(N) with the number of waiters.)
-				wakem = mp
 				prev := mp
 				for {
 					next := wakem.mWaitList.next.ptr()
@@ -452,10 +370,8 @@ useStackLock:
 
 		next := headM | flags
 		if atomic.Casuintptr(&l.key, v, next) {
-			if wakem != nil {
-				// Claimed an M. Wake it.
-				semawakeup(wakem)
-			}
+			// Claimed an M. Wake it.
+			semawakeup(wakem)
 			return
 		}
 

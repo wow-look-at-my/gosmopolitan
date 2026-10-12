@@ -60,7 +60,7 @@ sendmsg/recvmsg with SCM_RIGHTS fd passing: msghdr/cmsghdr layouts differ - Linu
 
 SIGPROF CPU profiling: runtime/pprof and -test.cpuprofile deliver real samples on macOS hosts, over setitimer(ITIMER_PROF) through dlsym. The pthread parking wrappers record m.libcall* so samples inside pthread_cond_wait attribute to the Go call site. The runtimeprobe cpuprof check is mandatory here. SIGPIPE stays suppressed per-socket via SO_NOSIGPIPE, matching Go's EPIPE-error semantics.
 
-As of wave 9 the darwin netpoller is a kqueue port of upstream netpoll_kqueue.go (kqueue/kevent via dlsym). M parking is upstream os_darwin.go's pthread_mutex+pthread_cond design. The wave-9 "still missing on macOS hosts" backlog is closed - sendmsg/recvmsg and SIGPROF profiling were its last entries.
+As of wave 9 the darwin netpoller is a kqueue port of upstream netpoll_kqueue.go (kqueue/kevent via dlsym). M parking is upstream `os_darwin.go`'s `pthread_mutex`+`pthread_cond` design. The wave-9 "still missing on macOS hosts" backlog is closed - sendmsg/recvmsg and SIGPROF profiling were its last entries.
 
 A profile taken on an arm64 macOS host names its own mapping one page above the image base. `cmd/pprof -disasm` then resolves no function.
 
@@ -86,7 +86,7 @@ The remaining known macOS gap is AllThreadsSyscall (Linux-only rt-signal machine
 
 macOS Intel status: not a platform this toolchain emits. `cosmoape`'s table drops darwin/amd64. As a result, the linker writes no Mach-O header and `GOCOSMOPLATFORMS=darwin/amd64` is refused. XNU reads the Mach-O header at offset 0, which an APE cannot carry there. Starting on that host needs a copy of the whole program in a writable place, and every platform here starts without writing anything. The runtime's amd64 XNU surface stays in the tree and stays untested. Bringing the platform back means answering the offset-0 problem, not just adding a table row.
 
-Signal installation closed the same day. `darwinSigaction` translates the Linux `sigactiont` and issues the raw `__sigaction` syscall with `runtime·cosmoXnuSigtramp` as its `sa_tramp`. The `syscall` package's own `rt_sigaction` emulation (`internal/runtime/syscall/cosmo`) carries its own trampoline. `darwinSigprocmask` translates `how` and bridges the sigset width (8-byte Linux, 4-byte Apple) in both directions, signal by signal. Thread creation joined the closed list via bsdthread_create, and parking via a polled wait since XNU has no futex.
+Signal installation closed the same day. `darwinSigaction` translates the Linux `sigactiont` and issues the raw `__sigaction` syscall with `runtime·cosmoXnuSigtramp` as its `sa_tramp`. The `syscall` package's own `rt_sigaction` emulation (`internal/runtime/syscall/cosmo`) carries its own trampoline. `darwinSigprocmask` translates `how` and bridges the sigset width (8-byte Linux, 4-byte Apple) in both directions, signal by signal. Thread creation joined the closed list via bsdthread_create, and parking via the raw `__ulock_wait`/`__ulock_wake` syscalls, XNU's futex.
 
 Signal delivery is closed too: `sigctxt` dispatches on the host and reads XNU's `user_ucontext64`, whose mcontext sits behind a pointer at offset 48. Apple's SIGFPE `si_code` values are remapped to Linux's for sigpanic.
 

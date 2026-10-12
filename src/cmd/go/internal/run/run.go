@@ -85,8 +85,6 @@ func runRun(ctx context.Context, cmd *base.Command, args []string) {
 		moduleLoader.RootMode = modload.NoRoot
 		moduleLoader.AllowMissingModuleImports()
 		modload.Init(moduleLoader)
-	} else {
-		moduleLoader.InitWorkfile()
 	}
 
 	work.BuildInit(moduleLoader)

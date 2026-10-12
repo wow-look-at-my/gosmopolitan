@@ -25,19 +25,19 @@ When a GODEBUG setting is not listed in the environment variable. Its value is d
 
 The [GODEBUG History](#history) gives the exact defaults for each Go toolchain version. For example, Go 1.21 introduces the `panicnil` setting, controlling whether `panic(nil)` is allowed. It defaults to `panicnil=0`, making `panic(nil)` a run-time error. Using `panicnil=1` restores the behavior of Go 1.20 and earlier.
 
-When compiling a work module or workspace that declares an older Go version, the Go toolchain amends its defaults to match that older Go. For example, when a Go 1.21 toolchain compiles a program, if the work module's `go.mod` or the workspace's `go.work` says `go` `1.20`, then the.
+When compiling a work module that declares an older Go version, the Go toolchain amends its defaults to match that older Go. For example, when a Go 1.21 toolchain compiles a program, if the work module's `go.mod` says `go` `1.20`, then the.
 
 As an exception, GODEBUGs introduced for security releases will have the new behavior apply to all versions.
 
 Because this method of setting GODEBUG defaults was introduced only in Go 1.21, programs listing versions of Go earlier than Go 1.20 are configured.
 
-To override these defaults, starting in Go 1.23, the work module's `go.mod` or the workspace's `go.work` can list one or more `godebug` lines:
+To override these defaults, starting in Go 1.23, the work module's `go.mod` can list one or more `godebug` lines:
 
 	godebug ( default=go1.21 panicnil=1 asynctimerchan=0 )
 
 The special key `default` indicates a Go version to take unspecified settings from. This allows setting the GODEBUG defaults separately from the Go language version in the module. In this example. The program is asking for Go 1.21 semantics and then asking for the old pre-Go 1.21 `panic(nil)` behavior and the new.
 
-Only the work module's `go.mod` is consulted for `godebug` directives. Any directives in required dependency modules are ignored. It is an error to list a `godebug` with an unrecognized setting. (Toolchains older than Go 1.23 reject all `godebug` lines, since they do not understand `godebug` at all.) When a workspace is in use, `godebug` directives in `go.mod` files are ignored, and `go.work` will be consulted for `godebug` directives instead.
+Only the work module's `go.mod` is consulted for `godebug` directives. Any directives in required dependency modules are ignored. It is an error to list a `godebug` with an unrecognized setting. (Toolchains older than Go 1.23 reject all `godebug` lines, since they do not understand `godebug` at all.) This toolchain reads no `go.work` file.
 
 The defaults from the `go` and `godebug` lines apply to all main packages that are built. For more fine-grained control, starting in Go 1.21, a main package's source files can include one or more `//go:debug` directives at the top of. The `godebug` lines in the previous example can be written:
 

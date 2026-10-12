@@ -14,7 +14,7 @@ import (
 )
 
 // cgoProbeChecks are the check names testdata/cgoprobe emits; keep in sync.
-var cgoProbeChecks = []string{"add", "printf", "errno", "callback", "thread", "concurrent"}
+var cgoProbeChecks = []string{"add", "printf", "errno", "callback", "thread", "concurrent", "dlerror"}
 
 // TestCgoProbe runs testdata/cgoprobe, a fat APE whose payloads carry C code
 // linked against libcosmo. On Windows libcosmo starts at the PE entry and
