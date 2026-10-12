@@ -44,6 +44,8 @@ A child holds a `brokerCache`. It has no `DiskCache`, no key index, and no conne
 
 That leaves one writer for the directory. So the trim has a single owner. The invariant `Cache.Close` describes is then enforceable rather than hoped for.
 
+The owner holds the only connection to the store. Against a TLS endpoint that connection is HTTP/2, so the whole build costs one TLS handshake. The first request runs alone, because the transport dials a connection for each request that arrives before it learns the protocol. Every answer is read to its end before the client closes or cancels it, so an HTTP/1.1 endpoint keeps its connections too. Sessions stay in memory for one build and are never stored across go commands. Depth: `connreuse_test.go` in `cacheclient`.
+
 The environment decides the shape:
 
 - `GO_BUILDCACHE_BROKER` names a live owner's hello queue. A process that finds it set becomes a child, once the owner answers with the directory it writes into. A process that finds it unset becomes the owner. A name outlives the process that made it. So the owner's reply is what decides, not the name.
@@ -84,8 +86,8 @@ A hit served over the network reads exactly like one off local disk unless the c
 
 A run with `CI` set and no configuration is an error rather than a quiet local build. A build that silently stops sharing is how a cache regression hides. A store that is configured but cannot be reached is a slower build rather than a broken one. It says so on stderr.
 
-`GOCACHEDEBUG` makes the cache describe itself: which process owns it, what each tier answered, and what it moved.
+The cache describes itself as it runs: which process owns it, what each tier answered, and what it moved.
 
-A cache in trouble always reports. What `GOCACHEDEBUG` turns back on is the routine success reporting, which is the index size on every go command and a summary per batch.
+The routine success reporting is always on: the index size on every go command, and a summary per batch. A cache in trouble reports as well.
 
 `GOCACHELOG` names a file that takes those notices in place of stderr. A go command's output is DATA to whoever ran it, and tests across this tree run `go list` and read the answer. A routine line on that stream becomes a package name, a directory, or a file path somebody then opens. `dist test` sets the variable and prints the file at the end, so an outage reaches the build's output and never a test's.

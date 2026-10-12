@@ -7,6 +7,7 @@
 
 #include <errno.h>
 #include <pthread.h>
+#include <signal.h>
 #include <string.h>
 #include "libcgo.h"
 
@@ -67,6 +68,31 @@ cosmo_bind_go_tls(void)
 	cosmo_set_gs(&cosmo_go_tls[0]);
 }
 
+// cosmo_foreign_enter returns the GS base that Go reads g through. libcosmo's
+// foreign dlopen resets the thread pointer, and cosmo_foreign_leave puts the
+// base back.
+static uintptr_t
+cosmo_foreign_enter(void)
+{
+	uintptr_t base = 0;
+	long ret;
+
+	if (__hostos & (COSMO_HOST_WINDOWS | COSMO_HOST_XNU)) {
+		return 0;
+	}
+	// arch_prctl(ARCH_GET_GS, &base)
+	__asm__ volatile("syscall" : "=a"(ret) : "0"(158L), "D"(0x1004L), "S"(&base) : "rcx", "r11", "memory", "cc");
+	return ret == 0 ? base : 0;
+}
+
+static void
+cosmo_foreign_leave(uintptr_t base)
+{
+	if (base != 0) {
+		cosmo_set_gs((uintptr_t *)(base + 0x28));
+	}
+}
+
 // cosmo_host_slots fills the runtime's ntiat. The Go runtime finds every NT
 // function through GetProcAddress and LoadLibraryA.
 static void
@@ -77,6 +103,114 @@ cosmo_host_slots(void **slots)
 		slots[1] = __imp_LoadLibraryA;
 	}
 }
+
+// The FS base of the host libc's thread. Host code reads its TLS through %fs.
+static uintptr_t cosmo_host_fs;
+
+// x_cgo_cosmo_host_fs gives this thread the host FS base before a call into
+// host code. Go and libcosmo leave FS at `GO_HOST_LINUX` on Linux. A
+// nonzero FS is the host's, so the first one seen is recorded.
+__attribute__((visibility("hidden"))) void
+x_cgo_cosmo_host_fs(void)
+{
+	uintptr_t fs = 0;
+	uintptr_t host;
+	long ret;
+
+	if (!(__hostos & COSMO_HOST_LINUX)) {
+		return;
+	}
+	// arch_prctl(ARCH_GET_FS, &fs)
+	__asm__ volatile("syscall" : "=a"(ret) : "0"(158L), "D"(0x1003L), "S"(&fs) : "rcx", "r11", "memory", "cc");
+	if (ret != 0) {
+		fprintf(stderr, "runtime/cgo: arch_prctl(ARCH_GET_FS) failed: %ld\n", ret);
+		abort();
+	}
+	if (fs != 0) {
+		host = 0;
+		__atomic_compare_exchange_n(&cosmo_host_fs, &host, fs, 0, __ATOMIC_RELEASE, __ATOMIC_RELAXED);
+		return;
+	}
+	host = __atomic_load_n(&cosmo_host_fs, __ATOMIC_ACQUIRE);
+	if (host == 0) {
+		return;
+	}
+	// arch_prctl(ARCH_SET_FS, host)
+	__asm__ volatile("syscall" : "=a"(ret) : "0"(158L), "D"(0x1002L), "S"(host) : "rcx", "r11", "memory", "cc");
+	if (ret != 0) {
+		fprintf(stderr, "runtime/cgo: arch_prctl(ARCH_SET_FS) failed: %ld\n", ret);
+		abort();
+	}
+}
+
+// __wrap_foreign_tramp replaces libcosmo's foreign_tramp, the call that every
+// cosmo_dlopen thunk makes into host code. It takes the target in %rax, the
+// arguments as the SysV ABI places them, and up to 0x100 bytes of stack
+// arguments. It blocks signals, gives the thread the host FS base, and keeps
+// GS, which host code never reads and Go reads g through.
+__asm__(
+	".text\n"
+	".globl __wrap_foreign_tramp\n"
+	".hidden __wrap_foreign_tramp\n"
+	".type __wrap_foreign_tramp,@function\n"
+	"__wrap_foreign_tramp:\n"
+	"	push	%rbp\n"
+	"	mov	%rsp,%rbp\n"
+	"	sub	$0x200,%rsp\n"
+	"	movdqu	%xmm0,-0x10(%rbp)\n"
+	"	movdqu	%xmm1,-0x20(%rbp)\n"
+	"	movdqu	%xmm2,-0x30(%rbp)\n"
+	"	movdqu	%xmm3,-0x40(%rbp)\n"
+	"	movdqu	%xmm4,-0x50(%rbp)\n"
+	"	movdqu	%xmm5,-0x60(%rbp)\n"
+	"	movdqu	%xmm6,-0x70(%rbp)\n"
+	"	movdqu	%xmm7,-0x80(%rbp)\n"
+	"	mov	%rdi,-0x88(%rbp)\n"
+	"	mov	%rsi,-0x90(%rbp)\n"
+	"	mov	%rdx,-0x98(%rbp)\n"
+	"	mov	%rcx,-0xa0(%rbp)\n"
+	"	mov	%r8,-0xa8(%rbp)\n"
+	"	mov	%r9,-0xb0(%rbp)\n"
+	"	mov	%rax,-0xb8(%rbp)\n"
+	"	call	__sig_block\n"
+	"	mov	%rax,-0xc0(%rbp)\n"
+	"	call	x_cgo_cosmo_host_fs\n"
+	// Copy the caller's stack arguments to the bottom of this frame.
+	"	xor	%eax,%eax\n"
+	"1:	movdqu	0x10(%rbp,%rax),%xmm0\n"
+	"	movdqu	%xmm0,-0x200(%rbp,%rax)\n"
+	"	add	$0x10,%eax\n"
+	"	cmp	$0x100,%eax\n"
+	"	jne	1b\n"
+	"	movdqu	-0x10(%rbp),%xmm0\n"
+	"	movdqu	-0x20(%rbp),%xmm1\n"
+	"	movdqu	-0x30(%rbp),%xmm2\n"
+	"	movdqu	-0x40(%rbp),%xmm3\n"
+	"	movdqu	-0x50(%rbp),%xmm4\n"
+	"	movdqu	-0x60(%rbp),%xmm5\n"
+	"	movdqu	-0x70(%rbp),%xmm6\n"
+	"	movdqu	-0x80(%rbp),%xmm7\n"
+	"	mov	-0x88(%rbp),%rdi\n"
+	"	mov	-0x90(%rbp),%rsi\n"
+	"	mov	-0x98(%rbp),%rdx\n"
+	"	mov	-0xa0(%rbp),%rcx\n"
+	"	mov	-0xa8(%rbp),%r8\n"
+	"	mov	-0xb0(%rbp),%r9\n"
+	"	mov	-0xb8(%rbp),%rax\n"
+	"	call	*%rax\n"
+	"	movdqu	%xmm0,-0x10(%rbp)\n"
+	"	movdqu	%xmm1,-0x20(%rbp)\n"
+	"	mov	%rax,-0x28(%rbp)\n"
+	"	mov	%rdx,-0x30(%rbp)\n"
+	"	mov	-0xc0(%rbp),%rdi\n"
+	"	call	__sig_unblock\n"
+	"	mov	-0x28(%rbp),%rax\n"
+	"	mov	-0x30(%rbp),%rdx\n"
+	"	movdqu	-0x10(%rbp),%xmm0\n"
+	"	movdqu	-0x20(%rbp),%xmm1\n"
+	"	leave\n"
+	"	ret\n"
+	".size __wrap_foreign_tramp,.-__wrap_foreign_tramp\n");
 
 #elif defined(__aarch64__)
 
@@ -152,6 +286,23 @@ cosmo_bind_go_tls(void)
 		return;
 	}
 	__asm__ volatile("msr tpidr_el0, %0" : : "r"(tib));
+}
+
+// The helper that libcosmo's foreign dlopen loads moves TPIDR_EL0 to glibc's
+// block.
+static uintptr_t
+cosmo_foreign_enter(void)
+{
+	return 0;
+}
+
+static void
+cosmo_foreign_leave(uintptr_t base)
+{
+	(void)base;
+	if (!(__hostos & (COSMO_HOST_WINDOWS | COSMO_HOST_XNU))) {
+		cosmo_bind_go_tls();
+	}
 }
 
 // cosmo_host_slots fills the runtime's cosmoHostSlots. macOS calls go
@@ -230,4 +381,137 @@ __wrap_pthread_create(pthread_t *thread, const pthread_attr_t *attr, void *(*fn)
 		free(start);
 	}
 	return err;
+}
+
+// libcosmo's dlopen, dlsym, dlclose and dlerror are stubs that always fail.
+void *cosmo_dlopen(const char *, int);
+void *cosmo_dlsym(void *, const char *);
+int cosmo_dlclose(void *);
+char *cosmo_dlerror(void);
+
+extern char *__program_executable_name;
+extern char **__argv;
+char *GetProgramExecutableName(void);
+char *realpath(const char *, char *);
+char *getenv(const char *);
+int access(const char *, int);
+
+static pthread_once_t cosmo_progname_once = PTHREAD_ONCE_INIT;
+static char cosmo_progname[4096];
+
+// cosmo_path_lookup finds a bare command name on PATH, as the shell did.
+static int
+cosmo_path_lookup(const char *cmd, char *out, size_t size)
+{
+	char cand[4096];
+	const char *dir = getenv("PATH");
+	while (dir != NULL && *dir != 0) {
+		const char *end = strchr(dir, ':');
+		size_t len = end != NULL ? (size_t)(end - dir) : strlen(dir);
+		size_t need = len + 1 + strlen(cmd) + 1;
+		if (len > 0 && need <= sizeof cand) {
+			memcpy(cand, dir, len);
+			cand[len] = '/';
+			strcpy(cand + len + 1, cmd);
+			if (access(cand, 1) == 0 && realpath(cand, out) != NULL)
+				return 1;
+		}
+		dir = end != NULL ? end + 1 : NULL;
+	}
+	return 0;
+}
+
+// cosmo_find_progname gives libcosmo the program's real path. An APE loader
+// execs a memfd, so /proc/self/exe names "/memfd:<name>". cosmo_dlopen stats
+// the program path, and a path that opens nothing stops it.
+static void
+cosmo_find_progname(void)
+{
+	const char *name = GetProgramExecutableName();
+	if (name != NULL && strncmp(name, "/memfd:", 7) != 0)
+		return;
+	if (__argv == NULL || __argv[0] == NULL)
+		return;
+	if (strchr(__argv[0], '/') != NULL) {
+		if (realpath(__argv[0], cosmo_progname) != NULL)
+			__program_executable_name = cosmo_progname;
+		return;
+	}
+	if (cosmo_path_lookup(__argv[0], cosmo_progname, sizeof cosmo_progname))
+		__program_executable_name = cosmo_progname;
+}
+
+// cosmo_foreign holds the state of one call into host code.
+struct cosmo_foreign {
+	sigset_t mask;
+	uintptr_t base;
+};
+
+// cosmo_foreign_begin blocks every signal on this thread and saves Go's GS
+// base. cosmo_dlopen points GS at libcosmo's thread block, where Go reads no
+// g.
+static void
+cosmo_foreign_begin(struct cosmo_foreign *call)
+{
+	sigset_t all;
+
+	sigfillset(&all);
+	pthread_sigmask(SIG_BLOCK, &all, &call->mask);
+	call->base = cosmo_foreign_enter();
+}
+
+static void
+cosmo_foreign_end(struct cosmo_foreign *call)
+{
+	cosmo_foreign_leave(call->base);
+	pthread_sigmask(SIG_SETMASK, &call->mask, NULL);
+}
+
+void *
+__wrap_dlopen(const char *path, int mode)
+{
+	struct cosmo_foreign call;
+	void *handle;
+
+	cosmo_foreign_begin(&call);
+	pthread_once(&cosmo_progname_once, cosmo_find_progname);
+	handle = cosmo_dlopen(path, mode);
+	cosmo_foreign_end(&call);
+	return handle;
+}
+
+void *
+__wrap_dlsym(void *handle, const char *name)
+{
+	struct cosmo_foreign call;
+	void *sym;
+
+	cosmo_foreign_begin(&call);
+	sym = cosmo_dlsym(handle, name);
+	cosmo_foreign_end(&call);
+	return sym;
+}
+
+int
+__wrap_dlclose(void *handle)
+{
+	struct cosmo_foreign call;
+	int err;
+
+	cosmo_foreign_begin(&call);
+	err = cosmo_dlclose(handle);
+	cosmo_foreign_end(&call);
+	return err;
+}
+
+char *
+__wrap_dlerror(void)
+{
+	struct cosmo_foreign call;
+	char *msg;
+
+	cosmo_foreign_begin(&call);
+	msg = cosmo_dlerror();
+	cosmo_foreign_end(&call);
+	return msg;
 }
