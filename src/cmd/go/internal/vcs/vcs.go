@@ -1257,6 +1257,16 @@ var vcsPaths = []*vcsPath{
 		check:      noVCSSuffix,
 	},
 
+	// gopkg.in is a fixed rewrite onto GitHub, so the repository is resolved
+	// here and gopkg.in itself is never contacted.
+	{
+		pathPrefix: "gopkg.in",
+		regexp:     lazyregexp.New(`^(?P<root>gopkg\.in/(?:(?P<user>[\w\-]+)/)?(?P<pkg>[\w\-.]+?)\.v\d+(?:-unstable)?)(/[\w.\-]+)*$`),
+		vcs:        "git",
+		repo:       "https://github.com/{user}/{pkg}",
+		check:      gopkgInRepo,
+	},
+
 	// Bitbucket
 	{
 		pathPrefix: "bitbucket.org",
@@ -1305,6 +1315,15 @@ var vcsPaths = []*vcsPath{
 		regexp:         lazyregexp.New(`(?P<root>(?P<repo>([a-z0-9.\-]+\.)+[a-z0-9.\-]+(:[0-9]+)?(/~?[\w.\-]+)+?)\.(?P<vcs>fossil|git|hg|svn))(/~?[\w.\-]+)*$`),
 		schemelessRepo: true,
 	},
+}
+
+// gopkgInRepo applies gopkg.in's rule for a path with no user:
+// gopkg.in/pkg.vN lives at github.com/go-pkg/pkg.
+func gopkgInRepo(match map[string]string) error {
+	if match["user"] == "" {
+		match["repo"] = "https://github.com/go-" + match["pkg"] + "/" + match["pkg"]
+	}
+	return nil
 }
 
 // noVCSSuffix checks that the repository name does not
