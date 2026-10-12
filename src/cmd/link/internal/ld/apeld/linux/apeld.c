@@ -236,11 +236,12 @@ __attribute__((noreturn, used)) static void run(i64 argc, char **argv) {
 #if defined(__x86_64__)
 	register u64 rsp __asm__("rdi") = (u64)sp;
 	register u64 rip __asm__("rsi") = eh.entry;
-	__asm__ volatile("mov %0, %%rsp\n\txor %%edx, %%edx\n\tjmp *%1" : : "r"(rsp), "r"(rip) : "memory");
+	__asm__ volatile("mov %0, %%rsp\n\txor %%edx, %%edx\n\txor %%ecx, %%ecx\n\tjmp *%1" : : "r"(rsp), "r"(rip) : "memory");
 #else
 	register u64 nsp __asm__("x9") = (u64)sp;
 	register u64 pc __asm__("x10") = eh.entry;
-	__asm__ volatile("mov sp, %0\n\tmov x0, xzr\n\tbr %1" : : "r"(nsp), "r"(pc) : "memory");
+	// X3 and X15 name the host and the Syslib on a macOS boot. Zero means Linux.
+	__asm__ volatile("mov sp, %0\n\tmov x0, xzr\n\tmov x2, xzr\n\tmov x3, xzr\n\tmov x15, xzr\n\tbr %1" : : "r"(nsp), "r"(pc) : "memory");
 #endif
 	__builtin_unreachable();
 }
