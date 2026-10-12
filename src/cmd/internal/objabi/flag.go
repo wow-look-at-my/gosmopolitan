@@ -237,6 +237,18 @@ func toolBuildID(name string) string {
 	return buildID
 }
 
+// ToolBuildID answers the build ID that "<name> -V=full" prints when this
+// binary links the tool called name. The value is the same in each process
+// of this binary, so the go command reads it here and starts no tool.
+func ToolBuildID(name string) string {
+	return toolBuildID(name)
+}
+
+// FullVersionCarriesBuildID reports whether "-V=full" prints a build ID.
+func FullVersionCarriesBuildID() bool {
+	return strings.Contains(buildcfg.Version, "devel") || strings.Contains(buildcfg.Version, "cosmo")
+}
+
 type versionFlag struct{}
 
 func (versionFlag) IsBoolFlag() bool { return true }
@@ -270,7 +282,7 @@ func (versionFlag) Set(s string) error {
 	// build caches — GOCACHE and any shared tier under it — can never
 	// serve objects compiled by one fork build into another.
 	if s == "full" {
-		if strings.Contains(buildcfg.Version, "devel") || strings.Contains(buildcfg.Version, "cosmo") {
+		if FullVersionCarriesBuildID() {
 			p += " buildID=" + toolBuildID(name)
 		}
 	}

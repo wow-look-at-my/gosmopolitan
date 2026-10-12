@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,6 +23,7 @@ import (
 	"cmd/go/internal/fsys"
 	"cmd/go/internal/str"
 	"cmd/internal/buildid"
+	"cmd/internal/objabi"
 	"cmd/internal/pathcache"
 	"cmd/internal/quoted"
 	"cmd/internal/telemetry/counter"
@@ -251,22 +253,30 @@ func (b *Builder) toolID(name string) string {
 			desc = strings.Join(VetTool, " ")
 		}
 
-		cmdline := str.StringList(path, "-V=full")
-		cmd := exec.Command(cmdline[0], cmdline[1:]...)
-		var stdout, stderr strings.Builder
-		cmd.Stdout = &stdout
-		cmd.Stderr = &stderr
-		if err := cmd.Run(); err != nil {
-			if stderr.Len() > 0 {
-				os.Stderr.WriteString(stderr.String())
+		var id string
+		if linkedHere(name, path) && objabi.FullVersionCarriesBuildID() {
+			// The tool is this binary, so its -V=full line is known here. A
+			// run of it starts the whole toolchain binary for that one line.
+			id = contentID(objabi.ToolBuildID(name))
+		} else {
+			cmdline := str.StringList(path, "-V=full")
+			cmd := exec.Command(cmdline[0], cmdline[1:]...)
+			var stdout, stderr strings.Builder
+			cmd.Stdout = &stdout
+			cmd.Stderr = &stderr
+			if err := cmd.Run(); err != nil {
+				if stderr.Len() > 0 {
+					os.Stderr.WriteString(stderr.String())
+				}
+				base.Fatalf("go: error obtaining buildID for %s: %v", desc, err)
 			}
-			base.Fatalf("go: error obtaining buildID for %s: %v", desc, err)
-		}
 
-		line := stdout.String()
-		id, ok := parseToolID(name, name == "vet", line)
-		if !ok {
-			base.Fatalf("go: parsing buildID from %s -V=full: unexpected output:\n\t%s", desc, line)
+			line := stdout.String()
+			var ok bool
+			id, ok = parseToolID(name, name == "vet", line)
+			if !ok {
+				base.Fatalf("go: parsing buildID from %s -V=full: unexpected output:\n\t%s", desc, line)
+			}
 		}
 		// A binary that stands in for a tool, such as cmd/compile's test
 		// binary, carries no stamped build ID and prints an empty one. An
@@ -286,6 +296,12 @@ func (b *Builder) toolID(name string) string {
 		}
 		return id
 	})
+}
+
+// linkedHere reports whether path starts the tool called name inside this
+// executable, as "<self> tool <name>".
+func linkedHere(name string, path []string) bool {
+	return base.Linked(name) && slices.Equal(path, base.ToolCmd(name))
 }
 
 // toolWord answers the name a tool command line runs: the word after "tool"
