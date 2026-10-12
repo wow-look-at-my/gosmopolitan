@@ -56,7 +56,6 @@ stderr 'doc: no required module provides package example.com/hello; to add it:\n
 
 cd $GOROOT/src
 env GOFLAGS=
-env GOWORK=off
 go doc cryptobyte
 stdout '// import "golang.org/x/crypto/cryptobyte"'
 

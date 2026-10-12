@@ -113,11 +113,11 @@ Reserved names
 
 The following reserved names expand to a set of packages:
 
-- "work" expands to all packages in the main module (or workspace modules).
+- "work" expands to all packages in the main module.
 
 - "tool" expands to the tools defined in the current module's go.mod file.
 
-- "all" expands to all packages in the main module (or workspace modules) and
+- "all" expands to all packages in the main module and
 their dependencies, including dependencies needed by tests of any of those. In
 the legacy GOPATH mode, "all" expands to all packages found in all the GOPATH trees.
 
@@ -423,7 +423,7 @@ modules were introduced in Go 1.11 and never updated to use modules,
 to continue to build.
 
 GOPATH mode is enabled when modules are disabled, either when GO111MODULE=off,
-or when GO111MODULE=auto, and the working directory is not in a module or workspace.
+or when GO111MODULE=auto, and the working directory is not in a module.
 
 In GOPATH mode, packages are located using the GOPATH environment variable,
 which specifies a list of paths to search:
@@ -613,14 +613,6 @@ General-purpose environment variables:
 	GOVCS
 		Lists version control commands that may be used with matching servers.
 		See 'go help vcs'.
-	GOWORK
-		In module aware mode, use the given go.work file as a workspace file.
-		By default or when GOWORK is "auto", the go command searches for a
-		file named go.work in the current directory and then containing directories
-		until one is found. If a valid go.work file is found, the modules
-		specified will collectively be used as the main modules. If GOWORK
-		is "off", or a go.work file is not found in "auto" mode, workspace
-		mode is disabled.
 
 Environment variables for use with cgo:
 
@@ -917,8 +909,7 @@ base64-encoded JSON; with the variable unset, the build uses the local
 cache alone. The go command asks the shared tier only after a local miss,
 and it stores what the tier returns in the local cache before the build
 uses it. A tier that cannot be reached leaves the build on the local cache
-and says so on stderr. Set GOCACHEDEBUG to any non-empty value to also see
-the tier's routine per-request reporting.
+and says so on stderr, as does the tier's routine reporting.
 `,
 }
 

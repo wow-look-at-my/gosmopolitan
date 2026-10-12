@@ -1,0 +1,86 @@
+# A compile is keyed on the export data of its imports. A function body the
+# export data does not carry recompiles only its own package, and the program
+# relinks. A change to the export data recompiles the importers.
+
+env GOCACHE=$WORK/gocache
+
+go build -x -o prog$GOEXE .
+stderr 'compile( |\.exe).* -p example/dep '
+stderr 'compile( |\.exe).* -p example/mid '
+stderr 'compile( |\.exe).* -p main '
+go run .
+stdout '^one$'
+
+cp body/dep.go dep/dep.go
+go build -x -o prog$GOEXE .
+stderr 'compile( |\.exe).* -p example/dep '
+! stderr 'compile( |\.exe).* -p example/mid '
+! stderr 'compile( |\.exe).* -p main '
+stderr 'link( |\.exe)'
+go run .
+stdout '^two$'
+
+cp export/dep.go dep/dep.go
+go build -x -o prog$GOEXE .
+stderr 'compile( |\.exe).* -p example/dep '
+stderr 'compile( |\.exe).* -p example/mid '
+go run .
+stdout '^three$'
+
+-- go.mod --
+module example
+
+go 1.27
+-- main.go --
+package main
+
+import (
+	"fmt"
+
+	"example/mid"
+)
+
+func main() {
+	fmt.Println(mid.Value())
+}
+-- mid/mid.go --
+package mid
+
+import "example/dep"
+
+func Value() string {
+	return dep.Value()
+}
+-- dep/dep.go --
+package dep
+
+func Value() string {
+	return value()
+}
+
+//go:noinline
+func value() string {
+	return "one"
+}
+-- body/dep.go --
+package dep
+
+func Value() string {
+	return value()
+}
+
+//go:noinline
+func value() string {
+	return "two"
+}
+-- export/dep.go --
+package dep
+
+func Value() string {
+	return "three"
+}
+
+//go:noinline
+func value() string {
+	return "two"
+}

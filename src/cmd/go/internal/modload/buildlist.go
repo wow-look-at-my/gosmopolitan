@@ -37,17 +37,12 @@ type Requirements struct {
 	// If pruned, the graph includes only the root modules, the explicit
 	// requirements of those root modules, and the transitive requirements of only
 	// the root modules that do not support pruning.
-	//
-	// If workspace, the graph includes only the workspace modules, the explicit
-	// requirements of the workspace modules, and the transitive requirements of
-	// the workspace modules that do not support pruning.
 	pruning modPruning
 
 	// rootModules is the set of root modules of the graph, sorted and capped to
 	// length. It may contain duplicates, and may contain multiple versions for a
-	// given module path. The root modules of the graph are the set of main
-	// modules in workspace mode, and the main module's direct requirements
-	// outside workspace mode.
+	// given module path. The root modules of the graph are the main module's
+	// direct requirements.
 	//
 	// The roots are always expected to contain an entry for the "go" module,
 	// indicating the Go language version in use.
@@ -108,23 +103,12 @@ func mustHaveGoRoot(roots []module.Version) {
 func newRequirements(ld *Loader, pruning modPruning, rootModules []module.Version, direct map[string]bool) *Requirements {
 	mustHaveGoRoot(rootModules)
 
-	if pruning != workspace {
-		if ld.workFilePath != "" {
-			panic("in workspace mode, but pruning is not workspace in newRequirements")
+	for i, m := range rootModules {
+		if m.Version == "" && ld.MainModules.Contains(m.Path) {
+			panic(fmt.Sprintf("newRequirements called with untrimmed build list: rootModules[%v] is a main module", i))
 		}
-	}
-
-	if pruning != workspace {
-		if ld.workFilePath != "" {
-			panic("in workspace mode, but pruning is not workspace in newRequirements")
-		}
-		for i, m := range rootModules {
-			if m.Version == "" && ld.MainModules.Contains(m.Path) {
-				panic(fmt.Sprintf("newRequirements called with untrimmed build list: rootModules[%v] is a main module", i))
-			}
-			if m.Path == "" || m.Version == "" {
-				panic(fmt.Sprintf("bad requirement: rootModules[%v] = %v", i, m))
-			}
+		if m.Path == "" || m.Version == "" {
+			panic(fmt.Sprintf("bad requirement: rootModules[%v] = %v", i, m))
 		}
 	}
 
@@ -166,12 +150,6 @@ func (rs *Requirements) String() string {
 func (rs *Requirements) initVendor(ld *Loader, ctx context.Context, vendorList []module.Version) {
 	rs.graphOnce.Do(func() {
 		roots := ld.MainModules.Versions()
-		if ld.inWorkspaceMode() {
-			// Use rs.rootModules to pull in the go and toolchain roots
-			// from the go.work file and preserve the invariant that all
-			// of rs.rootModules are in mg.g.
-			roots = rs.rootModules
-		}
 		mg := &ModuleGraph{
 			g: mvs.NewGraph(cmpVersion, roots),
 		}
@@ -213,21 +191,9 @@ func (rs *Requirements) initVendor(ld *Loader, ctx context.Context, vendorList [
 			// graph, but still distinguishes between direct and indirect
 			// dependencies.
 			vendorMod := module.Version{Path: "vendor/modules.txt", Version: ""}
-			if ld.inWorkspaceMode() {
-				for _, m := range ld.MainModules.Versions() {
-					reqs, _, err := rootsFromModFile(ld, ctx, m, ld.MainModules.ModFile(m), omitToolchainRoot)
-					if err != nil {
-						base.Fatal(err)
-					}
-					mg.g.Require(m, append(reqs, vendorMod))
-				}
-				mg.g.Require(vendorMod, vendorList)
-
-			} else {
-				mainModule := ld.MainModules.mustGetSingleMainModule(ld)
-				mg.g.Require(mainModule, append(rs.rootModules, vendorMod))
-				mg.g.Require(vendorMod, vendorList)
-			}
+			mainModule := ld.MainModules.mustGetSingleMainModule(ld)
+			mg.g.Require(mainModule, append(rs.rootModules, vendorMod))
+			mg.g.Require(vendorMod, vendorList)
 		}
 
 		rs.graph.Store(&cachedGraph{mg, nil})
@@ -344,26 +310,15 @@ func readModGraph(ld *Loader, ctx context.Context, pruning modPruning, roots []m
 		})
 	}
 
-	var graphRoots []module.Version
-	if ld.inWorkspaceMode() {
-		graphRoots = roots
-	} else {
-		graphRoots = ld.MainModules.Versions()
-	}
 	var (
 		mu       sync.Mutex // guards mg.g and hasError during loading
 		hasError bool
 		mg       = &ModuleGraph{
-			g: mvs.NewGraph(cmpVersion, graphRoots),
+			g: mvs.NewGraph(cmpVersion, ld.MainModules.Versions()),
 		}
 	)
 
-	if pruning != workspace {
-		if ld.inWorkspaceMode() {
-			panic("pruning is not workspace in workspace mode")
-		}
-		mg.g.Require(ld.MainModules.mustGetSingleMainModule(ld), roots)
-	}
+	mg.g.Require(ld.MainModules.mustGetSingleMainModule(ld), roots)
 
 	type dedupKey struct {
 		m       module.Version
@@ -436,51 +391,6 @@ func readModGraph(ld *Loader, ctx context.Context, pruning modPruning, roots []m
 	}
 	<-loadQueue.Idle()
 
-	// Reload any dependencies of the main modules which are not
-	// at their selected versions at workspace mode, because the
-	// requirements don't accurately reflect the transitive imports.
-	if pruning == workspace {
-		// hasDepsInAll contains the set of modules that need to be loaded
-		// at workspace pruning because any of their dependencies may
-		// provide packages in all.
-		hasDepsInAll := make(map[string]bool)
-		seen := map[module.Version]bool{}
-		for _, m := range roots {
-			hasDepsInAll[m.Path] = true
-		}
-		// This loop will terminate because it will call enqueue on each version of
-		// each dependency of the modules in hasDepsInAll at most once (and only
-		// calls enqueue on successively increasing versions of each dependency).
-		for {
-			needsEnqueueing := map[module.Version]bool{}
-			for p := range hasDepsInAll {
-				m := module.Version{Path: p, Version: mg.g.Selected(p)}
-				if !seen[m] {
-					needsEnqueueing[m] = true
-					continue
-				}
-				reqs, _ := mg.g.RequiredBy(m)
-				for _, r := range reqs {
-					s := module.Version{Path: r.Path, Version: mg.g.Selected(r.Path)}
-					if gover.ModCompare(r.Path, s.Version, r.Version) > 0 && !seen[s] {
-						needsEnqueueing[s] = true
-					}
-				}
-			}
-			// add all needs enqueueing to paths we care about
-			if len(needsEnqueueing) == 0 {
-				break
-			}
-
-			for p := range needsEnqueueing {
-				enqueue(p, workspace)
-				seen[p] = true
-				hasDepsInAll[p.Path] = true
-			}
-			<-loadQueue.Idle()
-		}
-	}
-
 	if hasError {
 		return mg, mg.findError()
 	}
@@ -540,12 +450,7 @@ func (mg *ModuleGraph) findError() error {
 }
 
 func (mg *ModuleGraph) allRootsSelected(ld *Loader) bool {
-	var roots []module.Version
-	if ld.inWorkspaceMode() {
-		roots = ld.MainModules.Versions()
-	} else {
-		roots, _ = mg.g.RequiredBy(ld.MainModules.mustGetSingleMainModule(ld))
-	}
+	roots, _ := mg.g.RequiredBy(ld.MainModules.mustGetSingleMainModule(ld))
 	for _, m := range roots {
 		if mg.Selected(m.Path) != m.Version {
 			return false
@@ -791,31 +696,9 @@ func updateRoots(ld *Loader, ctx context.Context, direct map[string]bool, rs *Re
 		return updateUnprunedRoots(ld, ctx, direct, rs, add)
 	case pruned:
 		return updatePrunedRoots(ld, ctx, direct, rs, pkgs, add, rootsImported)
-	case workspace:
-		return updateWorkspaceRoots(ld, ctx, direct, rs, add)
 	default:
 		panic(fmt.Sprintf("unsupported pruning mode: %v", rs.pruning))
 	}
-}
-
-func updateWorkspaceRoots(ld *Loader, ctx context.Context, direct map[string]bool, rs *Requirements, add []module.Version) (*Requirements, error) {
-	if len(add) != 0 {
-		// add should be empty in workspace mode because workspace mode implies
-		// -mod=readonly, which in turn implies no new requirements. The code path
-		// that would result in add being non-empty returns an error before it
-		// reaches this point: The set of modules to add comes from
-		// resolveMissingImports, which in turn resolves each package by calling
-		// queryImport. But queryImport explicitly checks for -mod=readonly, and
-		// return an error.
-		panic("add is not empty")
-	}
-	newRS := newRequirements(ld, workspace, rs.rootModules, direct)
-	// The root modules are unchanged (only the direct imports change),
-	// so the module graph can be reused to avoid rebuilding it from scratch.
-	if cached := rs.graph.Load(); cached != nil {
-		newRS.graphOnce.Do(func() { newRS.graph.Store(cached) })
-	}
-	return newRS, nil
 }
 
 // tidyPrunedRoots returns a minimal set of root requirements that maintains the
@@ -1486,8 +1369,6 @@ func updateUnprunedRoots(ld *Loader, ctx context.Context, direct map[string]bool
 func convertPruning(ld *Loader, ctx context.Context, rs *Requirements, pruning modPruning) (*Requirements, error) {
 	if rs.pruning == pruning {
 		return rs, nil
-	} else if rs.pruning == workspace || pruning == workspace {
-		panic("attempting to convert to/from workspace pruning and another pruning type")
 	}
 
 	if pruning == unpruned {

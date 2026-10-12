@@ -458,14 +458,24 @@ func TestPingPongHog(t *testing.T) {
 	done := make(chan bool)
 	hogChan, lightChan := make(chan bool), make(chan bool)
 	hogCount, lightCount := 0, 0
+	// The longest wait between two light turns is how long the hog pair held the P.
+	var lightLast time.Time
+	var lightWait time.Duration
 
-	run := func(limit int, counter *int, wake chan bool) {
+	run := func(limit int, counter *int, wake chan bool, light bool) {
 		for {
 			select {
 			case <-done:
 				return
 
 			case <-wake:
+				if light {
+					now := time.Now()
+					if !lightLast.IsZero() && now.Sub(lightLast) > lightWait {
+						lightWait = now.Sub(lightLast)
+					}
+					lightLast = now
+				}
 				for i := 0; i < limit; i++ {
 					*counter++
 				}
@@ -476,12 +486,12 @@ func TestPingPongHog(t *testing.T) {
 
 	// Start two co-scheduled hog goroutines.
 	for i := 0; i < 2; i++ {
-		go run(1e6, &hogCount, hogChan)
+		go run(1e6, &hogCount, hogChan, false)
 	}
 
 	// Start two co-scheduled light goroutines.
 	for i := 0; i < 2; i++ {
-		go run(1e3, &lightCount, lightChan)
+		go run(1e3, &lightCount, lightChan, true)
 	}
 
 	// Start goroutine pairs and wait for a few preemption rounds.
@@ -500,7 +510,7 @@ func TestPingPongHog(t *testing.T) {
 	// (was 5, increased to 20, see issue 52207).
 	const factor = 20
 	if hogCount/factor > lightCount || lightCount/factor > hogCount {
-		t.Fatalf("want hogCount/lightCount in [%v, %v]; got %d/%d = %g", 1.0/factor, factor, hogCount, lightCount, float64(hogCount)/float64(lightCount))
+		t.Fatalf("want hogCount/lightCount in [%v, %v]; got %d/%d = %g; the hog pair held the P for up to %v at a time, and sysmon preempts after 10ms", 1.0/factor, factor, hogCount, lightCount, float64(hogCount)/float64(lightCount), lightWait)
 	}
 }
 

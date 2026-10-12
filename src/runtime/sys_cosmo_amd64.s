@@ -88,6 +88,8 @@
 #define XNU_bsdthread_terminate	0x2000169	// BSD 361
 #define XNU_bsdthread_register	0x200016e	// BSD 366
 #define XNU_pthread_kill	0x2000148	// BSD 328 __pthread_kill
+#define XNU_ulock_wait		0x2000203	// BSD 515
+#define XNU_ulock_wake		0x2000204	// BSD 516
 
 // Mach traps (class 0x1000000), numbered by osfmk/mach/syscall_sw.h.
 #define MACH_thread_self	0x100001b	// thread_self_trap 27
@@ -442,21 +444,22 @@ TEXT runtime·raise(SB),NOSPLIT,$0
 	SYSCALL
 	RET
 raise_darwin:
-	// kill(getpid(), sig, posix=1) with the APPLE signal number. A
-	// signal with no Apple number is dropped: the table answers 0, and
-	// kill(pid, 0) is an existence probe.
-	MOVL	sig+0(FP), SI
-	CMPL	SI, $65
+	// __pthread_kill(thread_self_trap(), sig) with the APPLE signal
+	// number: the signal goes to this thread, as Apple libc raise sends
+	// it, so an unblocked signal is delivered before raise returns. A
+	// signal with no Apple number is dropped: the table answers 0.
+	MOVL	sig+0(FP), R12
+	CMPL	R12, $65
 	JAE	raise_darwin_drop
 	MOVQ	$runtime·cosmoSigL2ATab(SB), R11
-	MOVBLZX	(R11)(SI*1), SI
-	CMPL	SI, $0
+	MOVBLZX	(R11)(R12*1), R12
+	CMPL	R12, $0
 	JEQ	raise_darwin_drop
-	MOVL	$XNU_getpid, AX
+	MOVL	$MACH_thread_self, AX
 	SYSCALL
-	MOVL	AX, DI		// pid
-	MOVL	$1, DX		// posix
-	MOVL	$XNU_kill, AX
+	MOVL	AX, DI		// this thread's mach port
+	MOVL	R12, SI		// Apple signal number
+	MOVL	$XNU_pthread_kill, AX
 	SYSCALL
 raise_darwin_drop:
 	RET
@@ -1014,6 +1017,35 @@ futex_darwin:
 	// macOS doesn't have futex, return ENOSYS
 	MOVL	$-38, AX	// ENOSYS
 	MOVL	AX, ret+40(FP)
+	RET
+
+// func xnuUlockWait(op uint32, addr *uint32, value uint64, timeout uint32) int32
+// XNU hosts only. Returns -errno on failure.
+TEXT runtime·xnuUlockWait(SB),NOSPLIT,$0-36
+	MOVL	op+0(FP), DI
+	MOVQ	addr+8(FP), SI
+	MOVQ	value+16(FP), DX
+	MOVL	timeout+24(FP), R10
+	MOVL	$XNU_ulock_wait, AX
+	SYSCALL
+	JCC	ulock_wait_done
+	NEGQ	AX
+ulock_wait_done:
+	MOVL	AX, ret+32(FP)
+	RET
+
+// func xnuUlockWake(op uint32, addr *uint32, wake uint64) int32
+// XNU hosts only. Returns -errno on failure.
+TEXT runtime·xnuUlockWake(SB),NOSPLIT,$0-28
+	MOVL	op+0(FP), DI
+	MOVQ	addr+8(FP), SI
+	MOVQ	wake+16(FP), DX
+	MOVL	$XNU_ulock_wake, AX
+	SYSCALL
+	JCC	ulock_wake_done
+	NEGQ	AX
+ulock_wake_done:
+	MOVL	AX, ret+24(FP)
 	RET
 
 // int32 clone(int32 flags, void *stk, M *mp, G *gp, void (*fn)(void));
