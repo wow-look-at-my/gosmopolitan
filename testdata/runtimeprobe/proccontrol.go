@@ -86,7 +86,8 @@ func checkProcControl() {
 	}
 	pid := child.Process.Pid
 
-	// The stop check runs first.
+	// The stop check comes first because it needs the child to make progress on
+	// a deadline.
 	if why := procControlStop(pid, ticks); why != "" {
 		fail(name, "%s", why)
 		return

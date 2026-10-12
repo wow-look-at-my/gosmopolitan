@@ -426,7 +426,6 @@ func runList(ctx context.Context, cmd *base.Command, args []string) {
 	}
 
 	moduleLoader := modload.NewLoader()
-	moduleLoader.InitWorkfile()
 
 	if *listFmt != "" && listJson {
 		base.Fatalf("go list -f cannot be used with -json")

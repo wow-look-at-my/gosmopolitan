@@ -9,7 +9,7 @@ A github.com module download tries each source in this order. The first one that
 5. For a private repository: the archive github-state-mirror signs. See "Private repositories" below.
 6. A shallow `git fetch` of the commit, then the full history only when a command needs it.
 
-The go command never asks `https://proxy.golang.org`. `DefaultGOPROXY` is `direct`, and `newProxyRepo` refuses that host from any source, a go-import `mod` tag included.
+The go command never contacts golang.org or a host under it. `web.RefuseBannedURL` refuses each such request and redirect, and no setting turns it off. `DefaultGOPROXY` is `direct`, `DefaultGOSUMDB` is `off`, and `newProxyRepo` refuses a proxy under golang.org from any source, a go-import `mod` tag included. `cmd/go/internal/vcs` maps `golang.org/x/<name>` to `github.com/golang/<name>` and each `google.golang.org` root to its GitHub repository, so those modules take the archive route with no go-import request. `codehost.NewRepo` refuses a repository URL under golang.org before git runs.
 
 A proxy request talks only to proxy.pazer.ai. The proxy must follow GitHub's redirect itself and return the archive. A redirect that it passes back is not followed. The next source is tried.
 
