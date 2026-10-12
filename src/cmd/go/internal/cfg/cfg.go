@@ -365,8 +365,7 @@ func EnvFile() (string, bool, error) {
 // GOBIN sent installed binaries somewhere other than the toolchain's own bin
 // directory. GOTOOLCHAIN handed the build to a different go command. GOPROXY
 // and GOSUMDB replaced the module source and the checksum database. The go
-// command now always uses DefaultGOPROXY and DefaultGOSUMDB. GOWORK named a
-// go.work file. The go command reads no go.work file.
+// command now always uses DefaultGOPROXY and DefaultGOSUMDB.
 //
 // The go command reads none of them. Getenv answers "" for each, KnownEnv omits
 // them so 'go env -w' rejects them like any other name it does not know, and
@@ -376,7 +375,7 @@ func EnvFile() (string, bool, error) {
 // must reach a program the same way an unknown name does, because a build
 // tool has no business editing what the program under `go run` or `go test`
 // sees.
-var RemovedEnv = []string{"GOBIN", "GOPROXY", "GOSUMDB", "GOTOOLCHAIN", "GOWORK"}
+var RemovedEnv = []string{"GOBIN", "GOPROXY", "GOSUMDB", "GOTOOLCHAIN"}
 
 // DefaultGOPROXY fetches every module from its origin. The go command never
 // asks proxy.golang.org. DefaultGOSUMDB is the checksum database.
