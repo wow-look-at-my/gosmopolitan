@@ -146,7 +146,7 @@ jobs:
         exclude:
           - suite-os: windows-latest
 
-    runs-on: ${{ matrix.suite-os }}
+    runs-on: ${{ (github.event.repository.visibility == 'public' || !contains(fromJSON('["ubuntu-latest"]'), matrix.suite-os)) && matrix.suite-os || vars.CI_RUNNER || matrix.suite-os }}
     env:
       # cmd/go's script suite runs in full now that the linked tools resolve, and the darwin runner needs the longer package deadline.
       GO_TEST_TIMEOUT_SCALE: 2
@@ -518,7 +518,7 @@ jobs:
       matrix:
         test-os: [ubuntu-latest, macos-latest, windows-latest]
 
-    runs-on: ${{ matrix.test-os }}
+    runs-on: ${{ (github.event.repository.visibility == 'public' || !contains(fromJSON('["ubuntu-latest"]'), matrix.test-os)) && matrix.test-os || vars.CI_RUNNER || matrix.test-os }}
 
     steps:
       - name: Checkout code (for Go tests)
