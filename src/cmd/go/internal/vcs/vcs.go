@@ -1257,6 +1257,16 @@ var vcsPaths = []*vcsPath{
 		check:      noVCSSuffix,
 	},
 
+	// gopkg.in redirects to GitHub. Its root comes from the path, so a
+	// gopkg.in outage cannot stop the archive fetch codehost makes.
+	{
+		pathPrefix: "gopkg.in",
+		regexp:     lazyregexp.New(`^(?P<root>gopkg\.in/(?:[\w\-]+/)?[\w.\-]+\.v[0-9]+)(/[\w.\-]+)*$`),
+		vcs:        "git",
+		repo:       "https://{root}",
+		check:      noVCSSuffix,
+	},
+
 	// Bitbucket
 	{
 		pathPrefix: "bitbucket.org",
