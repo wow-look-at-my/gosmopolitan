@@ -30,9 +30,24 @@ import (
 	"golang.org/x/mod/semver"
 )
 
-// A githubRepo is a repository on github.com.
+// A githubRepo is a repository on github.com. A gopkg.in path sets head to
+// its major version branch, which gopkg.in serves as HEAD.
 type githubRepo struct {
 	owner, name string
+	head        string
+}
+
+// pointHead points HEAD at the head branch, and removes HEAD when that branch
+// is missing.
+func (repo githubRepo) pointHead(refs map[string]string) map[string]string {
+	if repo.head == "" {
+		return refs
+	}
+	delete(refs, "HEAD")
+	if hash, found := refs["refs/heads/"+repo.head]; found {
+		refs["HEAD"] = hash
+	}
+	return refs
 }
 
 var githubSegment = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
@@ -40,15 +55,54 @@ var githubSegment = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 // githubRemote names the GitHub repository of a git remote.
 var githubRemote = parseGitHubRemote
 
+// gopkgSegment is the last segment of a gopkg.in path: a name and a major version.
+var gopkgSegment = regexp.MustCompile(`^([A-Za-z0-9_.-]+)\.(v[0-9]+)$`)
+
 // parseGitHubRemote returns the repository that remote names. It accepts only
-// https://github.com/<owner>/<repo>, with an optional .git suffix. Any other
-// host is not trusted to serve the same bytes as the git remote.
+// https://github.com/<owner>/<repo>, with an optional .git suffix, and a
+// gopkg.in path. Any other host is not trusted to serve the same bytes as the
+// git remote.
 func parseGitHubRemote(remote string) (githubRepo, bool) {
 	u, err := url.Parse(remote)
-	if err != nil || u.Scheme != "https" || u.Host != "github.com" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+	if err != nil || u.Scheme != "https" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return githubRepo{}, false
 	}
-	parts := strings.Split(strings.TrimPrefix(u.Path, "/"), "/")
+	if u.Host == "gopkg.in" {
+		return parseGopkgRemote(u.Path)
+	}
+	if u.Host != "github.com" {
+		return githubRepo{}, false
+	}
+	return githubRepoAt(strings.Split(strings.TrimPrefix(u.Path, "/"), "/"))
+}
+
+// parseGopkgRemote maps a gopkg.in path to the GitHub repository. That
+// gopkg.in redirects to: /pkg.vN is go-pkg/pkg. /user/pkg.vN is user/pkg.
+// gopkg.in serves the tags of that repository, so its archives hold the same
+// files.
+func parseGopkgRemote(path string) (githubRepo, bool) {
+	parts := strings.Split(strings.TrimSuffix(strings.TrimPrefix(path, "/"), ".git"), "/")
+	match := gopkgSegment.FindStringSubmatch(parts[len(parts)-1])
+	if match == nil {
+		return githubRepo{}, false
+	}
+	var repo githubRepo
+	var isOK bool
+	switch len(parts) {
+	case 1:
+		repo, isOK = githubRepoAt([]string{"go-" + match[1], match[1]})
+	case 2:
+		repo, isOK = githubRepoAt([]string{parts[0], match[1]})
+	}
+	if !isOK {
+		return githubRepo{}, false
+	}
+	repo.head = match[2]
+	return repo, true
+}
+
+// githubRepoAt checks an owner and a repository name.
+func githubRepoAt(parts []string) (githubRepo, bool) {
 	if len(parts) != 2 {
 		return githubRepo{}, false
 	}
@@ -248,13 +302,13 @@ func (r *gitRepo) githubRefs(ctx context.Context) (map[string]string, error) {
 	} {
 		refs, err := r.githubInfoRefs(source)
 		if err == nil {
-			return refs, nil
+			return r.github.pointHead(refs), nil
 		}
 		errs = append(errs, err)
 	}
 	refs, err := r.githubAPIRefs(ctx)
 	if err == nil {
-		return refs, nil
+		return r.github.pointHead(refs), nil
 	}
 	errs = append(errs, err)
 	err = errors.Join(errs...)

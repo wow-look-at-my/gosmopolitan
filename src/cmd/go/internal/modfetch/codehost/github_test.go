@@ -37,8 +37,8 @@ func TestParseGitHubRemote(t *testing.T) {
 		want   githubRepo
 		isOK   bool
 	}{
-		{"https://github.com/wow-look-at-my/slopfix", githubRepo{"wow-look-at-my", "slopfix"}, true},
-		{"https://github.com/wow-look-at-my/slopfix.git", githubRepo{"wow-look-at-my", "slopfix"}, true},
+		{"https://github.com/wow-look-at-my/slopfix", githubRepo{owner: "wow-look-at-my", name: "slopfix"}, true},
+		{"https://github.com/wow-look-at-my/slopfix.git", githubRepo{owner: "wow-look-at-my", name: "slopfix"}, true},
 		{"http://github.com/owner/repo", githubRepo{}, false},
 		{"https://github.com.evil.example/owner/repo", githubRepo{}, false},
 		{"https://evil.example/github.com/owner/repo", githubRepo{}, false},
@@ -49,6 +49,12 @@ func TestParseGitHubRemote(t *testing.T) {
 		{"https://github.com/owner/..", githubRepo{}, false},
 		{"https://github.com/owner/repo?x=1", githubRepo{}, false},
 		{"git@github.com:owner/repo.git", githubRepo{}, false},
+		{"https://gopkg.in/yaml.v3", githubRepo{owner: "go-yaml", name: "yaml", head: "v3"}, true},
+		{"https://gopkg.in/check.v1", githubRepo{owner: "go-check", name: "check", head: "v1"}, true},
+		{"https://gopkg.in/natefinch/lumberjack.v2", githubRepo{owner: "natefinch", name: "lumberjack", head: "v2"}, true},
+		{"https://gopkg.in/yaml", githubRepo{}, false},
+		{"https://gopkg.in/a/b/c.v1", githubRepo{}, false},
+		{"http://gopkg.in/yaml.v3", githubRepo{}, false},
 	}
 	for _, test := range cases {
 		got, isOK := parseGitHubRemote(test.remote)
@@ -58,9 +64,22 @@ func TestParseGitHubRemote(t *testing.T) {
 	}
 }
 
+// A gopkg.in repository's HEAD is its major version branch, not GitHub's default branch.
+func TestGopkgHead(t *testing.T) {
+	repo := githubRepo{owner: "go-check", name: "check", head: "v1"}
+	refs := repo.pointHead(map[string]string{"HEAD": "aaaa", "refs/heads/master": "aaaa", "refs/heads/v1": "bbbb"})
+	if refs["HEAD"] != "bbbb" {
+		t.Errorf("HEAD = %q, want the v1 branch", refs["HEAD"])
+	}
+	refs = repo.pointHead(map[string]string{"HEAD": "aaaa", "refs/heads/master": "aaaa"})
+	if head, found := refs["HEAD"]; found {
+		t.Errorf("HEAD = %q with no v1 branch, want none", head)
+	}
+}
+
 func TestGitHubArchiveSources(t *testing.T) {
 	const hash = "0123456789abcdef0123456789abcdef01234567"
-	repo := githubRepo{"wow-look-at-my", "slopfix"}
+	repo := githubRepo{owner: "wow-look-at-my", name: "slopfix"}
 	proxied := func(inner string) string { return "https://proxy.pazer.ai/?url=" + url.QueryEscape(inner) }
 	cases := []struct {
 		ref  string
@@ -870,7 +889,7 @@ func fakeGitHubRepo(t *testing.T, ctx context.Context, dir string) *gitRepo {
 	previous := githubRemote
 	githubRemote = func(name string) (githubRepo, bool) {
 		if name == remote {
-			return githubRepo{"owner", "repo"}, true
+			return githubRepo{owner: "owner", name: "repo"}, true
 		}
 		return previous(name)
 	}
