@@ -6,7 +6,7 @@ Everywhere else the shell runs, and it hands the file to a native loader. The lo
 
 **A zero-write start needs a loader the host already reaches.** Putting one there takes root, one time. Either root installs the loader file, or root registers the `binfmt_misc` entry. Read the rest of this page with that in mind. A read-only path starts the program only on a machine where one of those is already done.
 
-The privilege buys the machine its loader. It is not what runs the program. `memfd_create` and `execveat` need no privilege at all. Neither does the loader once it runs.
+The privilege buys the machine its loader. It is not what runs the program. The loader maps the payload's segments from the APE file with no privilege at all. A mount can refuse an executable mapping. The loader then copies the APE into a memfd and execs that. `memfd_create` and `execveat` need no privilege either.
 
 An ordinary user on a machine with neither still starts the program. That run unpacks the loader. The file then stays. So an unprepared host offers one small file or a refusal. It never offers a silent zero-write start.
 
@@ -65,7 +65,9 @@ ${APE_LOADERDIR:-/dev/shm /tmp "${o%/*}"}
 
 That last candidate is not a sidecar. `-u` unlinks the file before the program starts. Nothing is distributed. Nothing is left.
 
-A container with nothing writable at all reaches none of them. `memfd` is immune to both `noexec` and a read-only mount, and the loader uses it for the payload. No POSIX shell can create one. So the loader itself still has to start from somewhere. Register the `binfmt_misc` entry on the host. The kernel then starts the APE with no file anywhere.
+A container with nothing writable at all reaches none of them. `memfd` is immune to both `noexec` and a read-only mount. The loader falls back to it when the APE's own mount refuses an executable mapping. No POSIX shell can create one. So the loader itself still has to start from somewhere. Register the `binfmt_misc` entry on the host.
+
+The kernel then starts the APE with no file anywhere.
 
 **The loader removes its own copy before the program starts.** The script execs it as `apeld -u <ape>`. `-u` makes it unlink `argv[0]` as its first act. The loader has to do this. A script cannot delete anything after it execs.
 
@@ -91,15 +93,19 @@ APE: no apeld-linux-amd64 on this host, and nowhere to unpack the embedded one: 
 
 ## What it costs the program
 
-On Linux `/proc/self/exe` reads `/memfd:<name>`, because the loader execs a memfd. That is the anonymous file's name, not a path. `os.Executable` recognises it and resolves `argv[0]` instead, which the loader sets to the APE's own path. A program that re-execs itself, or reads its own file, gets an openable path.
+On Linux the loader maps the payload itself, so `/proc/self/exe` names the loader. The loader passes the APE's open descriptor as `AT_EXECFD`, and `os.Executable` reads the path from `/proc/self/fd/<n>`. A program that re-execs itself, or reads its own file, gets an openable path. `/proc/self/maps` names the APE.
 
-Anything that reads `/proc/self/exe` directly still sees the memfd name. The same goes for `/proc/self/maps`.
+The memfd fallback leaves `/proc/self/exe` reading `/memfd:<name>`. `os.Executable` recognises that and resolves `argv[0]`, which the loader sets to the APE's own path.
+
+Anything that reads `/proc/self/exe` directly sees the loader, or the memfd name.
+
+Each start of the memfd path copies the whole APE. For a toolchain binary of 868 MB that was 0.45 s per process. Mapping costs 0.03 s.
 
 On macOS nothing changes. The loader maps the payload itself, and `os.Executable()` resolves `argv[0]`.
 
 ## Nothing copies the program
 
-No host stages a copy of the binary, and no host writes a header into one. `cosmoape`'s platform table is exactly the set that starts without doing either.
+No host stages a copy of the binary on disk, and no host writes a header into one. Only the Linux noexec fallback copies it, and only into memory. `cosmoape`'s platform table is exactly the set that starts without doing either.
 
 darwin/amd64 is absent from that table. Intel macs are out of support. XNU reads the Mach-O header at offset 0, which an APE cannot carry there. A copy was that platform's only route.
 
