@@ -169,6 +169,8 @@ func coroswitch_m(gp *g) {
 			// The CAS failed: use casgstatus, which will take care of
 			// coordinating with the garbage collector about the state change.
 			casgstatus(gp, _Grunning, _Gwaiting)
+		} else {
+			gStatusChanged(gp)
 		}
 
 		// Clear gp.m.
@@ -230,7 +232,7 @@ func coroswitch_m(gp *g) {
 	// in curg, so that we have a valid curg for allocation (tryRecordGoroutineProfile
 	// may allocate).
 	if goroutineProfile.active {
-		tryRecordGoroutineProfile(gnext, nil, osyield)
+		tryRecordGoroutineProfile(gnext, nil)
 	}
 
 	if !canCAS || !gnext.atomicstatus.CompareAndSwap(_Gwaiting, _Grunning) {
@@ -238,6 +240,8 @@ func coroswitch_m(gp *g) {
 		// coordinating with the garbage collector about the state change.
 		casgstatus(gnext, _Gwaiting, _Grunnable)
 		casgstatus(gnext, _Grunnable, _Grunning)
+	} else {
+		gStatusChanged(gnext)
 	}
 
 	// Donate locked state.

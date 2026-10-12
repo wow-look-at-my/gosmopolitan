@@ -59,6 +59,12 @@ func osArchInit() {
 // cosmoBsdthreadRegister is in sys_cosmo_amd64.s.
 func cosmoBsdthreadRegister() int32
 
+//go:noescape
+func xnuUlockWait(op uint32, addr *uint32, value uint64, timeout uint32) int32
+
+//go:noescape
+func xnuUlockWake(op uint32, addr *uint32, wake uint64) int32
+
 // cosmoBsdthreadStart is in sys_cosmo_amd64.s.
 func cosmoBsdthreadStart()
 

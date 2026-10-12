@@ -6,6 +6,7 @@ package x509
 
 import (
 	"internal/godebug"
+	"internal/testlog"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -171,10 +172,16 @@ func loadOnDiskRoots(certFilePath, certDirPath string) (*CertPool, error) {
 		files = []string{certFilePath}
 	}
 
+	// A read that succeeds is said to be the loader's own, and a test's input is
+	// then what it asked of the pool (see CertPool.sources). A read that fails is
+	// left for the test log to hash as it is.
+	var sources []rootSource
 	var firstErr error
 	for _, file := range files {
 		data, err := os.ReadFile(file)
 		if err == nil {
+			testlog.Parse("open", file)
+			sources = append(sources, rootSource{"x509file", file})
 			roots.AppendCertsFromPEM(data)
 			break
 		}
@@ -201,15 +208,20 @@ func loadOnDiskRoots(certFilePath, certDirPath string) (*CertPool, error) {
 			}
 			continue
 		}
+		testlog.Parse("open", directory)
+		sources = append(sources, rootSource{"x509dir", directory})
 		for _, fi := range fis {
-			data, err := os.ReadFile(filepath.Join(directory, fi.Name()))
+			path := filepath.Join(directory, fi.Name())
+			data, err := os.ReadFile(path)
 			if err == nil {
+				testlog.Parse("open", path)
 				roots.AppendCertsFromPEM(data)
 			}
 		}
 	}
 
-	if roots.len() > 0 || firstErr == nil {
+	roots.sources = sources
+	if firstErr == nil || roots.len() > 0 {
 		return roots, nil
 	}
 
