@@ -34,10 +34,11 @@ type apeLoader struct {
 	tag    string
 }
 
-// Loader regions of the 64K APE header.
+// Loader regions of the 64K APE header. Each Linux loader gets a 2K
+// slot; placeApeLoaders fails the link if one outgrows it.
 const (
 	apeLdLinuxAMD64Offset  = 0x2800
-	apeLdLinuxARM64Offset  = 0x2c00
+	apeLdLinuxARM64Offset  = 0x3000
 	apeLdDarwinARM64Offset = 0x8000
 )
 

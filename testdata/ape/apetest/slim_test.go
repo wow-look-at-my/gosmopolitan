@@ -160,7 +160,7 @@ func TestSlimLoaders(t *testing.T) {
 		magic    []byte
 	}{
 		{"linux/amd64", 0x2800, []byte("\x7fELF")},
-		{"linux/arm64", 0x2c00, []byte("\x7fELF")},
+		{"linux/arm64", 0x3000, []byte("\x7fELF")},
 		{"darwin/arm64", 0x8000, []byte{0x1f, 0x8b}},
 	} {
 		want := sel[tc.platform]

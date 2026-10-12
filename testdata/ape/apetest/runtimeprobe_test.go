@@ -33,7 +33,7 @@ var probeOkChecks = []string{
 	"sendmsg", "netbuffers", "fdpass",
 	"execchild", "lookpath", "execstress", "pipeeof", "cloexec",
 	"hostos", "auxv", "procauxv", "hwcap", "fdpath", "peercred", "dupfile",
-	"executable",
+	"executable", "bootimage",
 	"mkdirtemp", "statdir", "create", "readback", "rename", "statsize",
 	"getwd", "chdir", "wdrestore",
 	"remove", "rmdir",
@@ -166,4 +166,22 @@ func TestRuntimeProbe(t *testing.T) {
 	// else, because a cosmo binary reports GOOS "cosmo" on every host.
 	assert.Contains(t, out, "ok hostos "+runtime.GOOS,
 		"probe must report the host it is running on (%s)", runtime.GOOS)
+
+	// On the memfd loader's host, the probe runs from an image the loader
+	// built. That image must be exactly the span the payload's own program
+	// headers cover: staged bytes below it would crash the process, above
+	// it is the whole-file copy this measures against.
+	if runtime.GOOS == "linux" {
+		data, err := os.ReadFile(bin)
+		require.NoError(t, err)
+		staged, file := parseBootImage(t, out)
+		machine := uint16(62) // EM_X86_64
+		if runtime.GOARCH == "arm64" {
+			machine = 183 // EM_AARCH64
+		}
+		lo, hi := apeBootSpan(t, data, machine)
+		assert.Equal(t, hi-lo, staged,
+			"loader staged %d bytes, want the program-header span [%#x,%#x) of the APE", staged, lo, hi)
+		assert.Less(t, staged, file, "the staged image must leave the rest of the file behind")
+	}
 }
