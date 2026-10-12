@@ -22,6 +22,7 @@ import (
 	"sync"
 
 	"cmd/go/internal/base"
+	"cmd/go/internal/cache"
 	"cmd/go/internal/cfg"
 	"cmd/go/internal/fsys"
 	"cmd/go/internal/gover"
@@ -481,7 +482,8 @@ func (f *Fetcher) downloadZip(ctx context.Context, mod module.Version, zipfile s
 
 // writeFiles writes the source files of mod to $GOMODCACHE/<module>@<version>,
 // as Unzip writes a zip's entries, and records their hash in ziphashfile.
-// No zip is made. The caller holds the version lock.
+// When that hash is a git sum, the h1 sum of the files goes in mod's h1 record,
+// which Sum answers. No zip is made. The caller holds the version lock.
 func (f *Fetcher) writeFiles(ctx context.Context, mod module.Version, files []modzip.File, commit, ziphashfile string) error {
 	valid, err := checkModuleFiles(mod, files)
 	if err != nil {
@@ -493,6 +495,19 @@ func (f *Fetcher) writeFiles(ctx context.Context, mod module.Version, files []mo
 	}
 	if err := checkModSum(f, mod, hash); err != nil {
 		return err
+	}
+	if IsGitSum(hash) {
+		sum, err := moduleFilesSum(mod, valid)
+		if err != nil {
+			return err
+		}
+		record, err := CachePath(ctx, mod, "h1")
+		if err != nil {
+			return err
+		}
+		if err := writeZiphash(record, sum); err != nil {
+			return err
+		}
 	}
 
 	_, err = populateDir(ctx, mod, func(dir string) error {
@@ -1119,27 +1134,153 @@ func checkSumDB(mod module.Version, h string) error {
 	return module.VersionError(modWithoutSuffix, fmt.Errorf("verifying %s: checksum missing from sumdb response"+sumdbAbsent, noun))
 }
 
-// Sum returns the checksum for the downloaded copy of the given module,
-// if present in the download cache.
-func Sum(ctx context.Context, mod module.Version) string {
+// Sum returns the h1 checksum of the given module, the sum a binary's build
+// info and 'go mod download -json' record. It is the same on every machine for
+// the same go.sum and the same module files, whether the module came as a zip
+// or as a GitHub archive: an h1 sum go.sum records, else the h1 sum of the copy
+// in the download cache. It is "" when go.sum records no h1 sum for the module
+// and the download cache holds no copy of it.
+func (f *Fetcher) Sum(ctx context.Context, mod module.Version) string {
 	if cfg.GOMODCACHE == "" {
 		// Do not use current directory.
 		return ""
 	}
+	if sum, ok := f.recordedH1(mod); ok {
+		return sum
+	}
+	ziphash := recordedZipHash(ctx, mod)
+	if !IsGitSum(ziphash) {
+		return ziphash
+	}
+	sum, err := contentSum(ctx, mod, ziphash)
+	if err != nil {
+		base.Fatalf("go: %s@%s: %v", mod.Path, mod.Version, err)
+	}
+	return sum
+}
 
-	ziphash, err := CachePath(ctx, mod, "ziphash")
+// recordedH1 answers the h1 sum go.sum records for mod. It reports false when
+// go.sum records none for it, or records two that differ.
+func (f *Fetcher) recordedH1(mod module.Version) (string, bool) {
+	if orgmod.IsOrg(mod.Path) {
+		return "", false
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	inited, err := f.initGoSum()
+	if err != nil || !inited {
+		return "", false
+	}
+	found := ""
+	consider := func(sums []string) bool {
+		for _, sum := range sums {
+			if !strings.HasPrefix(sum, "h1:") {
+				continue
+			}
+			if found != "" && found != sum {
+				return false
+			}
+			found = sum
+		}
+		return true
+	}
+	if !consider(f.sumState.m[mod]) {
+		return "", false
+	}
+	for _, goSums := range f.sumState.w {
+		if !consider(goSums[mod]) {
+			return "", false
+		}
+	}
+	return found, found != ""
+}
+
+// contentSum answers the h1 sum of the files of mod, whose download cache entry
+// records the git sum gitSum. A GitHub archive leaves an h1 record beside it. A
+// cache entry written before that record existed is hashed: its zip, else its
+// extracted directory without the files its generators added.
+func contentSum(ctx context.Context, mod module.Version, gitSum string) (string, error) {
+	record, err := CachePath(ctx, mod, "h1")
 	if err != nil {
-		return ""
+		return "", err
 	}
-	data, err := lockedfile.Read(ziphash)
+	data, err := lockedfile.Read(record)
+	if err == nil {
+		sum := string(bytes.TrimSpace(data))
+		if !strings.HasPrefix(sum, "h1:") || !isValidSum([]byte(sum)) {
+			return "", fmt.Errorf("malformed h1 record %s: %q", record, sum)
+		}
+		return sum, nil
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		return "", err
+	}
+
+	zipfile, err := CachePath(ctx, mod, "zip")
 	if err != nil {
-		return ""
+		return "", err
 	}
-	data = bytes.TrimSpace(data)
-	if !isValidSum(data) {
-		return ""
+	if _, err := os.Stat(zipfile); err == nil {
+		return dirhash.HashZip(zipfile, dirhash.DefaultHash)
 	}
-	return string(data)
+	dir, err := DownloadDir(ctx, mod)
+	if err != nil {
+		return "", err
+	}
+	added, err := addedFiles(ctx, mod, gitSum)
+	if err != nil {
+		return "", err
+	}
+	return baseDirSum(mod, dir, added)
+}
+
+// addedFiles answers the names, as the module zip names them, of the files the
+// generators of mod added to its extracted directory. A directory that was
+// never completed has no complete record and nothing added.
+func addedFiles(ctx context.Context, mod module.Version, gitSum string) (map[string]bool, error) {
+	complete, err := CachePath(ctx, mod, "complete")
+	if err != nil {
+		return nil, err
+	}
+	if _, err := os.Stat(complete); errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	body, _, err := cache.GetBytes(cache.Default(), overlayKey(mod, gitSum))
+	if err != nil {
+		return nil, fmt.Errorf("its download cache entry has no h1 record, and the files its generators added to its directory are not in the build cache: %v", err)
+	}
+	entry, err := decodeOverlay(body)
+	if err != nil {
+		return nil, err
+	}
+	reader, err := zip.NewReader(bytes.NewReader(entry.zip), int64(len(entry.zip)))
+	if err != nil {
+		return nil, err
+	}
+	added := make(map[string]bool, len(reader.File))
+	for _, file := range reader.File {
+		added[file.Name] = true
+	}
+	return added, nil
+}
+
+// baseDirSum answers the h1 sum of the files in mod's extracted directory dir,
+// leaving out the files added names.
+func baseDirSum(mod module.Version, dir string, added map[string]bool) (string, error) {
+	prefix := mod.Path + "@" + mod.Version
+	files, err := dirhash.DirFiles(dir, prefix)
+	if err != nil {
+		return "", err
+	}
+	var kept []string
+	for _, name := range files {
+		if !added[name] {
+			kept = append(kept, name)
+		}
+	}
+	return dirhash.Hash1(kept, func(name string) (io.ReadCloser, error) {
+		return os.Open(filepath.Join(dir, filepath.FromSlash(strings.TrimPrefix(name, prefix+"/"))))
+	})
 }
 
 // isValidSum returns true if data is the valid contents of a zip hash file.

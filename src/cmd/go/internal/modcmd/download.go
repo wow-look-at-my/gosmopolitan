@@ -362,7 +362,7 @@ func DownloadModule(ctx context.Context, f *modfetch.Fetcher, m *ModuleJSON) err
 	if err != nil {
 		return err
 	}
-	m.Sum = modfetch.Sum(ctx, mod)
+	m.Sum = f.Sum(ctx, mod)
 	m.Dir, err = f.Download(ctx, mod)
 	return err
 }
