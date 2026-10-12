@@ -527,6 +527,33 @@ func (r *gitRepo) statGitHub(ctx context.Context, version, ref, hash string, rec
 	return nil, errors.Join(errs...)
 }
 
+// statGitHubCommit describes rev, a commit hash or a prefix of one, from the
+// archive of that commit. The archive names the full hash. rec gets the route
+// and the transfers. It requires r.mu.
+func (r *gitRepo) statGitHubCommit(ctx context.Context, rev string, rec *Fetch) (*RevInfo, error) {
+	if r.github == nil || r.sha256Hashes {
+		return nil, errors.New("not a github.com repository with SHA-1 hashes")
+	}
+	var errs []error
+	for source := range r.archiveCandidates(ctx, "", rev, rev, rec, &errs) {
+		raw, entries, when, hash, err := r.downloadGitHub(ctx, source, "", rec)
+		if err == nil && !strings.HasPrefix(hash, rev) {
+			err = fmt.Errorf("archive of %s names commit %q", rev, hash)
+		}
+		if err != nil {
+			errs = append(errs, err)
+			rec.AddFailure(source.name(), err)
+			continue
+		}
+		if err := r.keepGitHub(hash, source.ext, raw, entries, when); err != nil {
+			return nil, err
+		}
+		rec.SetRoute(source.route())
+		return r.githubRevInfo(ctx, rev, hash, when, nil), nil
+	}
+	return nil, errors.Join(errs...)
+}
+
 // archiveCandidates yields the sources of archiveSources. Then, for a
 // repository that needs a credential, it yields the archive of rev that
 // github-state-mirror signs. The mirror is asked only after every source

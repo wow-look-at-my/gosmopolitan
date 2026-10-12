@@ -163,7 +163,6 @@ func listTools(ld *modload.Loader, ctx context.Context) {
 		fmt.Println(name)
 	}
 
-	ld.InitWorkfile()
 	modload.LoadModFile(ld, ctx)
 	modTools := slices.Sorted(maps.Keys(ld.MainModules.Tools()))
 	seen := make(map[string]bool) // aliases we've seen already
@@ -253,7 +252,6 @@ func defaultExecName(importPath string) string {
 }
 
 func loadModTool(ld *modload.Loader, ctx context.Context, name string) string {
-	ld.InitWorkfile()
 	modload.LoadModFile(ld, ctx)
 
 	matches := []string{}

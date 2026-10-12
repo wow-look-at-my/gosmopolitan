@@ -709,6 +709,15 @@ func (r *gitRepo) stat(ctx context.Context, rev string) (info *RevInfo, err erro
 		// No matter what went wrong, fall back to a complete fetch.
 	}
 
+	// A commit that no ref names, such as the commit of a pseudo-version,
+	// comes from the archive of that commit.
+	if r.github != nil && ref == "" && r.fetchLevel < fetchAll &&
+		len(rev) >= minHashDigits && len(rev) <= r.hexHashLen() && AllHex(rev) {
+		if info, err := r.statGitHubCommit(ctx, rev, rec); err == nil {
+			return info, nil
+		}
+	}
+
 	// Last resort.
 	// Fetch all heads and tags and hope the hash we want is in the history.
 	startGit()
