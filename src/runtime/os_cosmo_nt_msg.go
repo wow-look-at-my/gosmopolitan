@@ -190,7 +190,10 @@ func ntPutU64At(b []byte, v uint64) {
 	ntPutU32At(b[4:], uint32(v>>32))
 }
 
+<<<<<<< HEAD
 // ntSCMParse walks a Linux cmsg buffer. It collects the SCM_RIGHTS
+=======
+>>>>>>> origin/master
 // payload fds, with the kernel's exact acceptance rules (__scm_send, verified
 // live): headers must satisfy CMSG_OK (Len >= 16 and within the buffer, else
 // EINVAL). Non-SOL_SOCKET levels are silently skipped. SOL_SOCKET types other
