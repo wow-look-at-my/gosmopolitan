@@ -83,17 +83,19 @@ func checkProcControl() {
 	}
 	pid := child.Process.Pid
 
-	if why := procControlPriority(pid); why != "" {
-		fail(name, "%s", why)
-		return
-	}
-	notes = append(notes, fmt.Sprintf("priority on pid %d moved", pid))
-
+	// The stop check comes first because it needs the child to make progress on
+	// a deadline.
 	if why := procControlStop(pid, ticks); why != "" {
 		fail(name, "%s", why)
 		return
 	}
 	notes = append(notes, "a stopped process stopped and resumed")
+
+	if why := procControlPriority(pid); why != "" {
+		fail(name, "%s", why)
+		return
+	}
+	notes = append(notes, fmt.Sprintf("priority on pid %d moved", pid))
 
 	ok(name, strings.Join(notes, "; "))
 }
