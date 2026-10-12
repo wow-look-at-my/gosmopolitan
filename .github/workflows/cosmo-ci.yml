@@ -15,7 +15,7 @@ jobs:
   # Every check that reads the tree and nothing else. It waits on no build, so a violation is named within the minute.
   source-checks:
     timeout-minutes: ${{ github.ref == 'refs/heads/master' && 20 || 10 }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.repository.visibility == 'public' && 'ubuntu-latest' || vars.CI_RUNNER || 'ubuntu-latest' }}
     permissions:
       contents: read
       actions: write
@@ -106,7 +106,7 @@ jobs:
       id-token: write
       contents: read
       actions: write
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.repository.visibility == 'public' && 'ubuntu-latest' || vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -157,7 +157,7 @@ jobs:
         exclude:
           - suite-os: windows-latest
 
-    runs-on: ${{ matrix.suite-os }}
+    runs-on: ${{ (github.event.repository.visibility == 'public' || !contains(fromJSON('["ubuntu-latest"]'), matrix.suite-os)) && matrix.suite-os || vars.CI_RUNNER || matrix.suite-os }}
     env:
       # cmd/go's script suite runs in full now that the linked tools resolve, and the darwin runner needs the longer package deadline.
       GO_TEST_TIMEOUT_SCALE: 2
@@ -458,7 +458,7 @@ jobs:
       id-token: write
       contents: read
       actions: write
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.repository.visibility == 'public' && 'ubuntu-latest' || vars.CI_RUNNER || 'ubuntu-latest' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -529,7 +529,7 @@ jobs:
       matrix:
         test-os: [ubuntu-latest, macos-latest, windows-latest]
 
-    runs-on: ${{ matrix.test-os }}
+    runs-on: ${{ (github.event.repository.visibility == 'public' || !contains(fromJSON('["ubuntu-latest"]'), matrix.test-os)) && matrix.test-os || vars.CI_RUNNER || matrix.test-os }}
 
     steps:
       - name: Checkout code (for Go tests)
@@ -647,7 +647,7 @@ jobs:
       id-token: write
       contents: read
       actions: write
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.repository.visibility == 'public' && 'ubuntu-latest' || vars.CI_RUNNER || 'ubuntu-latest' }}
 
     steps:
       - name: Checkout code
@@ -711,7 +711,7 @@ jobs:
       id-token: write
       contents: read
       actions: write
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.repository.visibility == 'public' && 'ubuntu-latest' || vars.CI_RUNNER || 'ubuntu-latest' }}
     strategy:
       fail-fast: true
       matrix:
@@ -839,7 +839,7 @@ jobs:
     timeout-minutes: ${{ github.ref == 'refs/heads/master' && 20 || 10 }}
     # Switching the wasm legs back on goes with putting them back here: a needed job reporting `skipped` skips this one.
     needs: [source-checks, build, build-linux, suite, cosmo-checks, test]
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.repository.visibility == 'public' && 'ubuntu-latest' || vars.CI_RUNNER || 'ubuntu-latest' }}
     permissions:
       id-token: write # mint the OIDC token buildhost authenticates
       contents: read
@@ -865,7 +865,7 @@ jobs:
   publish-upload:
     timeout-minutes: ${{ github.ref == 'refs/heads/master' && 30 || 15 }}
     needs: publish-create
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.repository.visibility == 'public' && 'ubuntu-latest' || vars.CI_RUNNER || 'ubuntu-latest' }}
     strategy:
       fail-fast: true
       matrix:
@@ -927,7 +927,7 @@ jobs:
   publish-finish:
     timeout-minutes: ${{ github.ref == 'refs/heads/master' && 20 || 10 }}
     needs: [publish-create, publish-upload]
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.repository.visibility == 'public' && 'ubuntu-latest' || vars.CI_RUNNER || 'ubuntu-latest' }}
     permissions:
       id-token: write
       contents: read
@@ -961,7 +961,7 @@ jobs:
     # A cancelled or failed run still has hand-offs to drop; without this the job is skipped and they are orphaned.
     if: always()
     timeout-minutes: ${{ github.ref == 'refs/heads/master' && 20 || 10 }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.repository.visibility == 'public' && 'ubuntu-latest' || vars.CI_RUNNER || 'ubuntu-latest' }}
     permissions:
       contents: read
       actions: write
