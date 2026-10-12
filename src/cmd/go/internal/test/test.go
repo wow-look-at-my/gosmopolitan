@@ -2269,12 +2269,18 @@ func (c *runCache) tryCacheWithID(b *work.Builder, a *work.Action, id string) bo
 		for _, dep := range searchDeps {
 			if dep.Mode == "write coverage meta-data file" {
 				h := cache.NewHash("covermeta")
+				unset := 0
 				for _, metaDep := range dep.Deps {
 					if aid := metaDep.BuildActionID(); aid != "" {
 						fmt.Fprintf(h, "dep %s\n", aid)
+					} else {
+						unset++
 					}
 				}
 				c.covMeta = h.Sum()
+				if cache.DebugTest {
+					fmt.Fprintf(os.Stderr, "testcache: %s: cover meta %x from %d deps, %d without a build ID\n", a.Package.ImportPath, c.covMeta, len(dep.Deps), unset)
+				}
 				break
 			}
 		}
