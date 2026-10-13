@@ -110,14 +110,13 @@ type ModuleJSON struct {
 
 func runDownload(ctx context.Context, cmd *base.Command, args []string) {
 	moduleLoader := modload.NewLoader()
-	moduleLoader.InitWorkfile()
 
 	// Check whether modules are enabled and whether we're in a module.
 	moduleLoader.ForceUseModules = true
 	modload.ExplicitWriteGoMod = true
 	haveExplicitArgs := len(args) > 0
 
-	if moduleLoader.HasModRoot() || modload.WorkFilePath(moduleLoader) != "" {
+	if moduleLoader.HasModRoot() {
 		modload.LoadModFile(moduleLoader, ctx) // to fill MainModules
 
 		if haveExplicitArgs {
@@ -131,11 +130,6 @@ func runDownload(ctx context.Context, cmd *base.Command, args []string) {
 					}
 				}
 			}
-		} else if modload.WorkFilePath(moduleLoader) != "" {
-			// TODO(#44435): Think about what the correct query is to download the
-			// right set of modules. Also see code review comment at
-			// https://go-review.googlesource.com/c/go/+/359794/comments/ce946a80_6cf53992.
-			args = []string{"all"}
 		} else {
 			mainModule := moduleLoader.MainModules.Versions()[0]
 			modFile := moduleLoader.MainModules.ModFile(mainModule)
@@ -221,7 +215,7 @@ func runDownload(ctx context.Context, cmd *base.Command, args []string) {
 		// when we can.
 	}
 
-	if !haveExplicitArgs && modload.WorkFilePath(moduleLoader) == "" {
+	if !haveExplicitArgs {
 		// 'go mod download' is sometimes run without arguments to pre-populate the
 		// module cache. In modules that aren't at go 1.17 or higher, it may fetch
 		// modules that aren't needed to build packages in the main module. This is
@@ -287,12 +281,7 @@ func runDownload(ctx context.Context, cmd *base.Command, args []string) {
 	// transitive requirements. If that invariant holds, then we should have
 	// already upgraded when we loaded the module graph, and should not need
 	// an additional check here. See https://go.dev/issue/45551.)
-	//
-	// We also allow upgrades if in a workspace because in workspace mode
-	// with no arguments we download the module pattern "all",
-	// which may include dependencies that are normally pruned out
-	// of the individual modules in the workspace.
-	if haveExplicitArgs || modload.WorkFilePath(moduleLoader) != "" {
+	if haveExplicitArgs {
 		sw := toolchain.NewSwitcher(moduleLoader)
 		// Add errors to the Switcher in deterministic order so that they will be
 		// logged deterministically.
@@ -336,19 +325,8 @@ func runDownload(ctx context.Context, cmd *base.Command, args []string) {
 	// 'go get mod@version', which may have other side effects. We print this in
 	// some error message hints.
 	//
-	// If we're in workspace mode, update go.work.sum with checksums for all of
-	// the modules we downloaded that aren't already recorded. Since a requirement
-	// in one module may upgrade a dependency of another, we can't be sure that
-	// the import graph matches the import graph of any given module in isolation,
-	// so we may end up needing to load packages from modules that wouldn't
-	// otherwise be relevant.
-	//
-	// TODO(#44435): If we adjust the set of modules downloaded in workspace mode,
-	// we may also need to adjust the logic for saving checksums here.
-	//
-	// Don't save sums for 'go mod download' without arguments unless we're in
-	// workspace mode; see comment above.
-	if haveExplicitArgs || modload.WorkFilePath(moduleLoader) != "" {
+	// Don't save sums for 'go mod download' without arguments; see comment above.
+	if haveExplicitArgs {
 		if err := modload.WriteGoMod(moduleLoader, ctx, modload.WriteOpts{}); err != nil {
 			base.Error(err)
 		}

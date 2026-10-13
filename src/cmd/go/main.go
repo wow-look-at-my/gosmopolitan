@@ -42,7 +42,6 @@ import (
 	"cmd/go/internal/version"
 	"cmd/go/internal/vet"
 	"cmd/go/internal/work"
-	"cmd/go/internal/workcmd"
 	"cmd/internal/telemetry"
 	"cmd/internal/telemetry/counter"
 )
@@ -67,7 +66,6 @@ func init() {
 		tool.CmdTool,
 		version.CmdVersion,
 		vet.CmdVet,
-		workcmd.CmdWork,
 
 		help.HelpBuildConstraint,
 		help.HelpBuildJSON,
@@ -387,7 +385,7 @@ func maybeStartTrace(pctx context.Context) context.Context {
 //
 // We have to handle the -C flag this way for two reasons:
 //
-//  1. Toolchain selection needs to be in the right directory to look for go.mod and go.work.
+//  1. Toolchain selection needs to be in the right directory to look for go.mod.
 //
 //  2. A toolchain switch later on reinvokes the new go command with the same arguments.
 //     The parent toolchain has already done the chdir; the child must not try to do it again.

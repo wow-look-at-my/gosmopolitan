@@ -23,11 +23,6 @@ const (
 	// Note that this default must stay at Go 1.16; it cannot be moved forward.
 	DefaultGoModVersion = "1.16"
 
-	// DefaultGoWorkVersion is the Go version to assume for go.work files
-	// that do not declare a Go version. Workspaces were added in Go 1.18,
-	// so use that.
-	DefaultGoWorkVersion = "1.18"
-
 	// ExplicitIndirectVersion is the Go version at which a
 	// module's go.mod file is expected to list explicit requirements on every
 	// module that provides any package transitively imported by that module.
@@ -75,13 +70,4 @@ func FromGoMod(mf *modfile.File) string {
 		return DefaultGoModVersion
 	}
 	return mf.Go.Version
-}
-
-// FromGoWork returns the go version from the go.mod file.
-// It returns DefaultGoWorkVersion if the go.mod file does not contain a go line or if wf is nil.
-func FromGoWork(wf *modfile.WorkFile) string {
-	if wf == nil || wf.Go == nil {
-		return DefaultGoWorkVersion
-	}
-	return wf.Go.Version
 }
