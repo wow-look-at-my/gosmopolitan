@@ -15,8 +15,6 @@ import (
 	"strings"
 	"sync"
 
-	"cmd/internal/objabi"
-
 	"github.com/wow-look-at-my/go-s3-server/cacheclient/cachedisk"
 )
 
@@ -50,17 +48,25 @@ type Hash struct {
 // go_bootstrap without any experiments, so by stripping experiments
 // go_bootstrap and the final go binary will use the same salt.
 //
-// This fork salts with the go command's own tool ID instead, where it has one.
-// That ID hashes the go command's packages, so it changes when the go command
-// does. The version changes with every published build, and each one started
-// with an empty shared cache.
-var hashSalt = []byte(saltSource())
+// A published build of this fork stamps its version with the CI run, as
+// go1.27.0-cosmo.r<run>, and the salt leaves that stamp out. With it, every
+// publish started with an empty shared cache. A build from source carries no
+// stamp, so it already shares this salt across commits. The compiler and
+// linker IDs come from their content, so a changed tool still gets new keys.
+var hashSalt = []byte(stripPublishStamp(stripExperiment(runtime.Version())))
 
-func saltSource() string {
-	if id := objabi.ToolBuildID("go"); id != "" {
-		return "go command " + id
+// stripPublishStamp removes a trailing ".r<run>" from the version.
+func stripPublishStamp(version string) string {
+	dot := strings.LastIndex(version, ".r")
+	if dot < 0 || dot+2 == len(version) {
+		return version
 	}
-	return stripExperiment(runtime.Version())
+	for _, digit := range version[dot+2:] {
+		if digit < '0' || digit > '9' {
+			return version
+		}
+	}
+	return version[:dot]
 }
 
 // stripExperiment strips any GOEXPERIMENT configuration from the Go
