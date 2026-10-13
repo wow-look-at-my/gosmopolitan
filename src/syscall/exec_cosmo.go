@@ -232,10 +232,10 @@ func forkAndExecInChild(argv0 *byte, argv, envv []*byte, chroot, dir *byte, attr
 		uintptr(unsafe.Pointer(argv0)),
 		uintptr(unsafe.Pointer(&argv[0])),
 		uintptr(unsafe.Pointer(&envv[0])))
-	if err1 == ENOEXEC {
-		// The kernel refused the image. An APE is a shell script, so
-		// hand it to the shell that reads its header. This is what
-		// execvp(3) does with any ENOEXEC file.
+	if err1 == ENOEXEC && hasAPEMagic(argv0) {
+		// The kernel refused an APE. An APE is a shell script, so hand it
+		// to the shell that reads its header. Any other file keeps the
+		// ENOEXEC, as on stock Linux.
 		_, _, err1 = RawSyscall(SYS_EXECVE,
 			uintptr(unsafe.Pointer(&apeShellPath[0])),
 			uintptr(unsafe.Pointer(&shArgv[0])),
@@ -248,6 +248,49 @@ childerror:
 	for {
 		RawSyscall(SYS_EXIT, 253, 0, 0)
 	}
+}
+
+// apeMagics are the first bytes of an APE: the "MZqFpD" header the linker
+// writes, and the "jartsr" header of an APE that does not rewrite itself.
+var apeMagics = [...]string{"MZqFpD", "jartsr"}
+
+// hasAPEMagic reports whether the file at path starts with an APE header.
+// The forked child calls it, so it must not allocate.
+//
+//go:nosplit
+//go:norace
+func hasAPEMagic(path *byte) bool {
+	fdcwd := AT_FDCWD
+	fd, _, errno := RawSyscall6(SYS_OPENAT, uintptr(fdcwd), uintptr(unsafe.Pointer(path)), O_RDONLY|O_CLOEXEC, 0, 0, 0)
+	if errno != 0 {
+		return false
+	}
+	var head [6]byte
+	filled := 0
+	for filled < len(head) {
+		count, _, errno := RawSyscall(SYS_READ, fd, uintptr(unsafe.Pointer(&head[filled])), uintptr(len(head)-filled))
+		if errno != 0 || count == 0 {
+			break
+		}
+		filled += int(count)
+	}
+	RawSyscall(SYS_CLOSE, fd, 0, 0)
+	if filled < len(head) {
+		return false
+	}
+	for _, magic := range apeMagics {
+		same := true
+		for idx := range head {
+			if head[idx] != magic[idx] {
+				same = false
+				break
+			}
+		}
+		if same {
+			return true
+		}
+	}
+	return false
 }
 
 // forkAndExecFailureCleanup cleans up after an exec failure.
