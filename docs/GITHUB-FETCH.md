@@ -54,7 +54,7 @@ The route reads `tar.gz archive via github-state-mirror.pazer.io`, with `and pro
 
 A github.com repository gets no local git repository at first. The archive, the refs and the kept files all live in plain files. The bare repository is made by the first git command, which runs only on the git fallback, or for `RecentTag` history.
 
-The remote must be exactly `https://github.com/<owner>/<repo>` (with or without `.git`). A gopkg.in path already names one: `cmd/go/internal/vcs` maps `gopkg.in/pkg.vN` to `github.com/go-pkg/pkg` and `gopkg.in/user/pkg.vN` to `github.com/user/pkg`, with no request to gopkg.in. Any other host, scheme, port or user name goes straight to git. github.com redirects each archive to `codeload.github.com`. `web.GetPinned` refuses a hop to any host other than those two. An API request may only reach its own host: api.github.com, github-state-mirror.pazer.io or proxy.pazer.ai.
+The remote must be exactly `https://github.com/<owner>/<repo>` (with or without `.git`). A gopkg.in path already names one: `cmd/go/internal/vcs` maps `gopkg.in/pkg.vN` to `github.com/go-pkg/pkg` and `gopkg.in/user/pkg.vN` to `github.com/user/pkg`, with no request to gopkg.in. The redirect table of gopkg.in applies first, as it does on gopkg.in: `gopkgInRedirects` copies it, and it sends `gopkg.in/fsnotify.v1` to `github.com/fsnotify/fsnotify`. Any other host, scheme, port or user name goes straight to git. github.com redirects each archive to `codeload.github.com`. `web.GetPinned` refuses a hop to any host other than those two. An API request may only reach its own host: api.github.com, github-state-mirror.pazer.io or proxy.pazer.ai.
 
 A signed archive URL must be on codeload.github.com.
 
