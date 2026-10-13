@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 
+	"cmd/internal/objabi"
+
 	"github.com/wow-look-at-my/go-s3-server/cacheclient/cachedisk"
 )
 
@@ -47,7 +49,19 @@ type Hash struct {
 // execution. This allows bootstrapping to converge faster: dist builds
 // go_bootstrap without any experiments, so by stripping experiments
 // go_bootstrap and the final go binary will use the same salt.
-var hashSalt = []byte(stripExperiment(runtime.Version()))
+//
+// This fork salts with the go command's own tool ID instead, where it has one.
+// That ID hashes the go command's packages, so it changes when the go command
+// does. The version changes with every published build, and each one started
+// with an empty shared cache.
+var hashSalt = []byte(saltSource())
+
+func saltSource() string {
+	if id := objabi.ToolBuildID("go"); id != "" {
+		return "go command " + id
+	}
+	return stripExperiment(runtime.Version())
+}
 
 // stripExperiment strips any GOEXPERIMENT configuration from the Go
 // version string.
