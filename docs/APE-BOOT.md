@@ -41,6 +41,8 @@ Once the script has a loader it registers it with `binfmt_misc`, under the APE m
 
 From then on `execve` of any APE on that machine starts it directly. No shell runs. Nothing is searched for. Nothing is read off the disk to find the loader. `os/exec`, a build system and a test harness all start an APE like any other program.
 
+The entry matches every APE, not only this toolchain's. A file with no payload the Linux loader can boot, such as a cosmocc tool, goes to `/bin/sh` with its arguments unchanged. That is how the kernel runs it with no entry. `TestApeLoaderRunsAForeignAPEUnderTheShell` pins it.
+
 `F` is what makes this work on a read-only image. The kernel opens the interpreter at registration and keeps the descriptor. The loader then needs no path at all.
 
 Measured: an entry registered with `F` still boots the payload after its interpreter file is deleted. `/tmp`, the program's directory and `/usr/local/lib` were all mounted read-only in a private mount namespace for that run.
