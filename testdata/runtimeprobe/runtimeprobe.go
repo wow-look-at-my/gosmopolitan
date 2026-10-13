@@ -146,6 +146,7 @@ func main() {
 	timed("peercred", checkPeercred)
 	timed("dupfile", checkDupFile)
 	timed("executable", checkExecutable)
+	timed("loadspan", checkLoadSpan)
 	timed("files", checkFiles)
 	timed("seekreadat", checkSeekReadAt)
 	timed("readdir", checkReadDir)

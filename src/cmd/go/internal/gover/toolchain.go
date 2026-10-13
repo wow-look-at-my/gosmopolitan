@@ -56,7 +56,7 @@ func maybeToolchainVersion(name string) string {
 // It is initialized by switchGoToolchain.
 var Startup struct {
 	GOTOOLCHAIN   string // $GOTOOLCHAIN setting
-	AutoFile      string // go.mod or go.work file consulted
+	AutoFile      string // go.mod file consulted
 	AutoGoVersion string // go line found in file
 	AutoToolchain string // toolchain line found in file
 }
