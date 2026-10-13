@@ -15,7 +15,7 @@ A proxy request talks only to proxy.pazer.ai. The proxy must follow GitHub's red
 
 These are the `github` entry that `proxyList` puts ahead of `direct` (`src/cmd/go/internal/modfetch/proxy.go`). A failure there is last, and `direct` is not tried a second time. A module outside github.com skips the entry and goes direct to its origin. The go-import meta tag names the repository, and a repository on github.com takes the archive route again. A gopkg.in path asks no meta tag: `vcs.go` maps it to its GitHub repository by gopkg.in's own rule. It takes the archive route too. gopkg.in answers a GitHub-hosted runner with a 502 frequently enough to fail a build.
 
-An archive can hash differently from the module zip: `export-ignore` and `export-subst` change it. When go.sum records an `h1:` sum the archive does not match. The commit is fetched with no history and zipped by `git archive` with those attributes off (`codehost.WithGitOnly`). The log names the archive as the failed source.
+An archive can hash differently from the module zip: `export-ignore` and `export-subst` change it. When go.sum records an `h1:` sum the archive does not match. `git archive` with those attributes off fetches the commit (`codehost.WithGitOnly`). The log names the archive as the failed source.
 
 ## Which URLs
 
@@ -43,7 +43,11 @@ A request through proxy.pazer.ai carries the GOAUTH credential of the github.com
 
 ## Private repositories
 
-github.com answers nothing about a private repository without a credential. GOAUTH usually has none for it. The direct `info/refs` advertisement carries the credential git's own helpers hold for github.com (`git credential fill`), presented as HTTP basic authentication. That credential is resolved once per process. A build then pays for one helper run, however many origins it resolves. On a machine whose git has one, a private repository's ref list therefore costs one GET. A machine with no git credential sends the request anonymously. The ref list then falls to the routes below. github-state-mirror is the route that needs no git. It is asked first with the GOAUTH credential for api.github.com. Then it is asked once with each token in `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`, `GITHUB_TOKEN` and `GH_TOKEN`, in that order. After those, each other environment value that starts like a GitHub token is tried, in the order of the variable names. The prefixes are `ghp_`, `github_pat_`, `gho_`, `ghu_` and `ghs_`. A web session needs that search: its real tokens sit in variables with their own names, and `GH_TOKEN` holds a proxy placeholder. A token goes to the mirror only. The token the mirror last accepted is tried first after that.
+github.com answers nothing about a private repository without a credential. GOAUTH usually has none for it. The direct `info/refs` advertisement carries the credential git's own helpers hold for github.com (`git credential fill`), presented as HTTP basic authentication. That credential is resolved once per process. A build then pays for one helper run, however many origins it resolves. On a machine whose git has one, a private repository's ref list therefore costs one GET.
+
+A machine with no git credential sends the request anonymously. The ref list then falls to the routes below. github-state-mirror is the route that needs no git. It is asked first with the GOAUTH credential for api.github.com. Then it is asked once with each token in `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`, `GITHUB_TOKEN` and `GH_TOKEN`, in that order. After those, each other environment value that starts like a GitHub token is tried, in the order of the variable names. The prefixes are `ghp_`, `github_pat_`, `gho_`, `ghu_` and `ghs_`.
+
+A web session needs that search: its real tokens sit in variables with their own names, and `GH_TOKEN` holds a proxy placeholder. A token goes to the mirror only. The token the mirror last accepted is tried first after that.
 
 - The ref list comes from the mirror's REST API, as above.
 - The archive comes from `/repos/<owner>/<repo>/tarball/<commit>`, then `zipball`. The mirror answers with a redirect to a codeload.github.com URL that carries its own short-lived token. That redirect is not followed. The signed URL is fetched directly, then through proxy.pazer.ai, with no credential. An error prints `xxxxx` in place of the token.
@@ -52,9 +56,11 @@ The route reads `tar.gz archive via github-state-mirror.pazer.io`, with `and pro
 
 ## No git until git is the only option
 
-A github.com repository gets no local git repository at first. The archive, the refs and the kept files all live in plain files. The bare repository is made by the first git command, which runs only on the git fallback, or for `RecentTag` history.
+A github.com repository gets no local git repository at first. The archive, the refs and the kept files all live in plain files. The first git command makes the bare repository, which runs only on the git fallback, or for `RecentTag` history.
 
-The remote must be exactly `https://github.com/<owner>/<repo>` (with or without `.git`). A gopkg.in path already names one: `cmd/go/internal/vcs` maps `gopkg.in/pkg.vN` to `github.com/go-pkg/pkg` and `gopkg.in/user/pkg.vN` to `github.com/user/pkg`, with no request to gopkg.in. The redirect table of gopkg.in applies first, as it does on gopkg.in: `gopkgInRedirects` copies it, and it sends `gopkg.in/fsnotify.v1` to `github.com/fsnotify/fsnotify`. Any other host, scheme, port or user name goes straight to git. github.com redirects each archive to `codeload.github.com`. `web.GetPinned` refuses a hop to any host other than those two. An API request may only reach its own host: api.github.com, github-state-mirror.pazer.io or proxy.pazer.ai.
+The remote must be exactly `https://github.com/<owner>/<repo>` (with or without `.git`). A gopkg.in path already names one: `cmd/go/internal/vcs` maps `gopkg.in/pkg.vN` to `github.com/go-pkg/pkg` and `gopkg.in/user/pkg.vN` to `github.com/user/pkg`, with no request to gopkg.in. The redirect table of gopkg.in applies first, as it does on gopkg.in: `gopkgInRedirects` copies it. It sends `gopkg.in/fsnotify.v1` to `github.com/fsnotify/fsnotify`. Any other host, scheme, port or user name goes straight to git. github.com redirects each archive to `codeload.github.com`. `web.GetPinned` refuses a hop to any host other than those two.
+
+An API request may only reach its own host: api.github.com, github-state-mirror.pazer.io or proxy.pazer.ai.
 
 A signed archive URL must be on codeload.github.com.
 
@@ -78,4 +84,6 @@ Each fetched module gets one line when it is complete, for every route:
 go: downloading github.com/jbenet/go-context v0.0.0-20150711004518-d14ea06fba99: tar.gz archive, 1.2 MB in 0.40s (3.0 MB/s), 0.62s total
 ```
 
-The route is the module proxy, a `tar.gz` or `zip` archive (direct or `via proxy.pazer.ai`), or `git`. When an earlier source failed, `because` follows the route and names each one with its HTTP status or error, as in `tar.gz archive via proxy.pazer.ai, because github.com tar.gz: 403 Forbidden`. The size is the bytes of every attempt that received data. The git size is the growth of the object store. The total adds the part of a transfer that `Stat` ran before the download began. A module already in the module cache prints nothing. The code is `cmd/go/internal/modfetch/fetchlog.go`.
+The route is the module proxy, a `tar.gz` or `zip` archive (direct or `via proxy.pazer.ai`), or `git`. When an earlier source failed, `because` follows the route and names each one with its HTTP status or error, as in `tar.gz archive via proxy.pazer.ai, because github.com tar.gz: 403 Forbidden`. The size is the bytes of every try that received data. The git size is the growth of the object store. The total adds the part of a transfer that `Stat` ran before the download began. A module already in the module cache prints nothing.
+
+The code is `cmd/go/internal/modfetch/fetchlog.go`.

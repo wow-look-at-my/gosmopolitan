@@ -80,9 +80,9 @@ __attribute__((noreturn)) static void die(const char *msg) {
 }
 
 // shell runs a file with no payload for this machine the way the kernel does
-// with no binfmt_misc entry: as a script under /bin/sh. Every APE is a valid
-// shell script. Root registers this loader for the APE magic system-wide, so a
-// foreign APE reaches it too. argv[1] is the file, and its arguments follow.
+// with no binfmt_misc entry: as a script. That script is under /bin/sh. Every
+// APE is a valid shell script. Root registers this loader for the APE magic
+// system-wide, so a foreign APE reaches it too.
 __attribute__((noreturn)) static void shell(char **argv, char **envp) {
 	argv[0] = (char *)"/bin/sh";
 	sc3(SYS_execve, argv[0], argv, envp);
