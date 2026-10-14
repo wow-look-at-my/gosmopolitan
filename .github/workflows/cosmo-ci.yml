@@ -640,6 +640,7 @@ jobs:
           lfs: true
 
       - uses: wow-look-at-my/actions@secret-server#latest
+      - uses: ./.github/actions/track-submodules
 
       - name: Setup Go bootstrap toolchain
         uses: actions/setup-go@v5
@@ -706,6 +707,7 @@ jobs:
           lfs: true
 
       - uses: wow-look-at-my/actions@secret-server#latest
+      - uses: ./.github/actions/track-submodules
 
       - name: Setup Go bootstrap toolchain
         uses: actions/setup-go@v5
