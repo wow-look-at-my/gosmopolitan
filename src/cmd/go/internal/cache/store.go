@@ -34,6 +34,9 @@ func openCache(dir string) (Cache, error) {
 	if err != nil {
 		return nil, err
 	}
+	if store != nil {
+		publishStore(store)
+	}
 	// A test binary and a `go run` program are started with the environment this command was started with, rather than with this process's own.
 	goCfg.OrigEnv = append(goCfg.OrigEnv[:len(goCfg.OrigEnv):len(goCfg.OrigEnv)], cacheclient.BrokerEnviron()...)
 	// A go command that never runs a build still opens the cache, and a failing
@@ -93,8 +96,16 @@ func openStore(dir string) (*cacheclient.WebBackend, error) {
 		fmt.Fprintf(os.Stderr, "go: shared build cache disabled: %v\n", err)
 		return nil, nil
 	}
-	liveStore.Store(store)
 	return store, nil
+}
+
+// publishStore makes store the SetSharedModule names the module to. The
+// module loader can run while the cache opens.
+func publishStore(store *cacheclient.WebBackend) {
+	liveStore.Store(store)
+	if path := mainModulePath(); path != "" {
+		store.SetModule(path)
+	}
 }
 
 // commandDigest names what this go command builds: its arguments and the
