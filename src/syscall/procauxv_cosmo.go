@@ -17,7 +17,11 @@ func runtime_getAuxv() []uintptr
 // runtime already holds, on every host. macOS serves no /proc.
 func openProcSelfAuxv(path string, flags int) (fd int, err error, ok bool) {
 <<<<<<< HEAD
+<<<<<<< HEAD
 	if path != procSelfAuxv || flags&O_ACCMODE != O_RDONLY {
+=======
+	if path != procSelfAuxv || flags&O_ACCMODE != O_RDONLY || !(cosmo.Darwin() || loaderBooted()) {
+>>>>>>> origin/master
 =======
 	if path != procSelfAuxv || flags&O_ACCMODE != O_RDONLY || !(cosmo.Darwin() || loaderBooted()) {
 >>>>>>> origin/master
