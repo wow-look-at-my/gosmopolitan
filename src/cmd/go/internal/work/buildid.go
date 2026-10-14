@@ -768,7 +768,7 @@ func (b *Builder) useCache(a *Action, actionHash cache.ActionID, target string, 
 	}
 
 	// A compile hit through its lazy record reads no archive.
-	if b.lazyEnabled(a) {
+	if b.lazyEnabled(a) && cache.Retrievable(c, a.actionID) {
 		if record, ok := readLazy(a, c); ok {
 			if printOutput {
 				if err := showStdout(b, c, a, "stdout"); err != nil { // compile output
