@@ -39,10 +39,9 @@ echo "== a cosmo go command carrying it"
 GOOS=cosmo GOCOSMOAPPEND="$work/std.blob" go build -trimpath -o "$work/go.com" cmd/go/main
 ls -la "$work/go.com"
 
-# The Linux loader boots from a memfd that covers only the page span the
-# amd64 payload's program headers reference. The blob must sit past that
-# span, and every embedded run below must still reach it, through the
-# on-disk path rather than the memfd.
+# The Linux loader maps only the page span the amd64 payload's program
+# headers reference. The blob must sit past that span, and every embedded
+# run below must still reach it, through the program's on-disk path.
 go_sz=$(wc -c <"$work/go.com")
 trailer=$((go_sz - 64))
 if [ "$(dd if="$work/go.com" bs=1 skip=$trailer count=8 status=none)" != "GOSTDEMB" ]; then

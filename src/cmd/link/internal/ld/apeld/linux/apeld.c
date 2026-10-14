@@ -1,12 +1,17 @@
-// apeld: boot an APE from a memfd on Linux. Freestanding, raw syscalls only.
+// apeld: boot an APE on Linux by mapping its payload from the file.
+// Freestanding, raw syscalls only.
 //
-// The APE's program headers hold absolute file offsets. Only the span the
-// host payload's program headers reference, from the first PT_LOAD page
-// through the last one, is copied into a memfd. The payload's e_phoff, its
-// program header table, and every p_offset inside the span are rebased by
-// the span's start. Data appended past the payload is not boot-reachable:
-// the payload reads it through the original file path, not the memfd. The
-// kernel then execs the memfd directly. Nothing touches the disk.
+// The APE's program headers hold absolute file offsets. Each PT_LOAD is
+// mapped MAP_PRIVATE straight from the APE at its own offset. Its pages
+// come from the page cache and every process running the same APE shares
+// them. Nothing is copied and nothing is written. The loader then builds
+// the payload's stack below its own, from the kernel's argv, envp and auxv,
+// and jumps to the entry point.
+//
+// /proc/self/exe names this loader, not the APE. AT_EXECFN names the APE,
+// and that is how the payload finds its own file. The entry also gets the
+// path in rdx (amd64) or x2 (arm64), the register the APE boot protocol
+// assigns it.
 //
 // The host arch selects the payload. This binary is compiled per arch, so
 // the selector is a compile-time constant.
@@ -29,9 +34,9 @@ static inline i64 sc6(i64 n, i64 a, i64 b, i64 c, i64 d, i64 e, i64 f) {
 	                 : "rcx", "r11", "memory");
 	return r;
 }
-enum { SYS_write = 1, SYS_pread = 17, SYS_pwrite = 18, SYS_sendfile = 40,
-	SYS_ftruncate = 77, SYS_exit = 60, SYS_openat = 257,
-	SYS_memfd_create = 319, SYS_execveat = 322, SYS_unlinkat = 263 };
+enum { SYS_write = 1, SYS_close = 3, SYS_mmap = 9, SYS_mprotect = 10,
+	SYS_pread = 17, SYS_exit = 60, SYS_prctl = 157, SYS_openat = 257,
+	SYS_unlinkat = 263 };
 #elif defined(__aarch64__)
 #define EM_HOST 183
 static inline i64 sc6(i64 n, i64 a, i64 b, i64 c, i64 d, i64 e, i64 f) {
@@ -48,9 +53,9 @@ static inline i64 sc6(i64 n, i64 a, i64 b, i64 c, i64 d, i64 e, i64 f) {
 	                 : "memory");
 	return x0;
 }
-enum { SYS_write = 64, SYS_pread = 67, SYS_pwrite = 68, SYS_sendfile = 71,
-	SYS_ftruncate = 46, SYS_exit = 93, SYS_openat = 56,
-	SYS_memfd_create = 279, SYS_execveat = 281, SYS_unlinkat = 35 };
+enum { SYS_write = 64, SYS_close = 57, SYS_mmap = 222, SYS_mprotect = 226,
+	SYS_pread = 67, SYS_exit = 93, SYS_prctl = 167, SYS_openat = 56,
+	SYS_unlinkat = 35 };
 #else
 #error "unsupported arch"
 #endif
@@ -63,15 +68,33 @@ enum { SYS_write = 64, SYS_pread = 67, SYS_pwrite = 68, SYS_sendfile = 71,
 
 enum {
 	AT_FDCWD = -100,
-	AT_EMPTY_PATH = 0x1000,
 	O_RDONLY = 0,
 	O_CLOEXEC = 02000000,
-	MFD_CLOEXEC = 1,
+	PROT_READ = 1,
+	PROT_WRITE = 2,
+	PROT_EXEC = 4,
+	MAP_PRIVATE = 0x02,
+	MAP_ANONYMOUS = 0x20,
+	MAP_FIXED_NOREPLACE = 0x100000,
+	PR_SET_NAME = 15,
 	PAYLOAD_ALIGN = 0x10000,
-	PAGE_MASK = 0xfff,
+	ET_EXEC = 2,
 	PT_LOAD = 1,
+	PT_DYNAMIC = 2,
+	PT_INTERP = 3,
+	PF_X = 1,
+	PF_W = 2,
+	PF_R = 4,
 	MAX_PHDRS = 16,
 	PHDR_SIZE = 56,
+	AT_NULL = 0,
+	AT_PHDR = 3,
+	AT_PHENT = 4,
+	AT_PHNUM = 5,
+	AT_PAGESZ = 6,
+	AT_BASE = 7,
+	AT_ENTRY = 9,
+	AT_EXECFN = 31,
 };
 
 // ELF is little-endian here and both hosts are too; explicit loads keep the
@@ -85,13 +108,6 @@ static u32 le32(const unsigned char *p) {
 	return (u32)((u64)p[0] | (u64)p[1] << 8 | (u64)p[2] << 16 | (u64)p[3] << 24);
 }
 
-static void put64(unsigned char *p, u64 v) {
-	for (u64 i = 0; i < 8; i++) {
-		p[i] = (unsigned char)v;
-		v >>= 8;
-	}
-}
-
 // The main body runs in the C ABI; the entry stub below hands it argv.
 __attribute__((noreturn)) static void die(const char *msg) {
 	// Length by hand: no libc.
@@ -101,6 +117,74 @@ __attribute__((noreturn)) static void die(const char *msg) {
 	sc3(SYS_write, 2, msg, n);
 	sc3(SYS_write, 2, "\n", 1);
 	sc1(SYS_exit, 127);
+	__builtin_unreachable();
+}
+
+// place maps exactly at addr. MAP_FIXED_NOREPLACE refuses a range that
+// holds anything, this loader and its stack included.
+static void place(u64 addr, u64 len, i64 prot, i64 flags, i64 fd, u64 off) {
+	i64 got = sc6(SYS_mmap, (i64)addr, (i64)len, prot, flags | MAP_PRIVATE | MAP_FIXED_NOREPLACE, fd, (i64)off);
+	if (got == -17) die("a load segment overlaps memory already mapped");
+	if (got < 0 || (u64)got != addr) die("cannot map a load segment at its address");
+}
+
+// map_load maps one PT_LOAD. The file part maps from the APE itself. The
+// rest of the last file page, when the segment's bss starts inside it, is
+// zeroed in this process's private copy of that one page. Whole bss pages
+// are anonymous.
+static void map_load(i64 fd, const unsigned char *phdr, u64 pg) {
+	u32 flags = le32(phdr + 4);
+	u64 off = le64(phdr + 8), va = le64(phdr + 16), fsz = le64(phdr + 32), msz = le64(phdr + 40);
+	i64 prot = (flags & PF_R ? PROT_READ : 0) | (flags & PF_W ? PROT_WRITE : 0) |
+	           (flags & PF_X ? PROT_EXEC : 0);
+	u64 base = va & -pg;
+	u64 fend = va + fsz, mend = va + msz;
+	u64 bss0 = (fend + pg - 1) & -pg;
+	u64 top = (mend + pg - 1) & -pg;
+	u64 anon = base;
+	if (fsz) {
+		u64 tail = msz > fsz ? (bss0 < mend ? bss0 : mend) - fend : 0;
+		place(base, bss0 - base, prot | (tail ? PROT_WRITE : 0), 0, fd, off & -pg);
+		// volatile keeps the compiler from turning this into a memset call.
+		volatile unsigned char *bss = (volatile unsigned char *)fend;
+		for (u64 idx = 0; idx < tail; idx++) bss[idx] = 0;
+		if (tail && !(prot & PROT_WRITE) && sc3(SYS_mprotect, base, bss0 - base, prot) < 0)
+			die("mprotect failed");
+		anon = bss0;
+	}
+	if (top > anon) place(anon, top - anon, prot, MAP_ANONYMOUS, -1, 0);
+}
+
+// enter hands the payload its stack and the program path, with every other
+// register zero. A zero CL (amd64) or a non-8 x3 (arm64) tells rt0 the host
+// is Linux.
+__attribute__((noreturn)) static void enter(u64 *sp, u64 entry, const char *path) {
+#if defined(__x86_64__)
+	__asm__ volatile(
+	    "mov %0, %%rsp\n\t"
+	    "xor %%eax, %%eax\n\txor %%ebx, %%ebx\n\txor %%ecx, %%ecx\n\t"
+	    "xor %%edi, %%edi\n\txor %%ebp, %%ebp\n\txor %%r8d, %%r8d\n\t"
+	    "xor %%r9d, %%r9d\n\txor %%r10d, %%r10d\n\txor %%r11d, %%r11d\n\t"
+	    "xor %%r12d, %%r12d\n\txor %%r13d, %%r13d\n\txor %%r14d, %%r14d\n\t"
+	    "xor %%r15d, %%r15d\n\tjmp *%%rsi"
+	    :
+	    : "D"(sp), "S"(entry), "d"(path)
+	    : "memory");
+#else
+	register u64 *x0 __asm__("x0") = sp;
+	register const char *x2 __asm__("x2") = path;
+	register u64 x16 __asm__("x16") = entry;
+	__asm__ volatile(
+	    "mov x1, #0\n\tmov x3, #0\n\tmov x4, #0\n\tmov x5, #0\n\tmov x6, #0\n\t"
+	    "mov x7, #0\n\tmov x8, #0\n\tmov x9, #0\n\tmov x10, #0\n\tmov x11, #0\n\t"
+	    "mov x12, #0\n\tmov x13, #0\n\tmov x14, #0\n\tmov x15, #0\n\tmov x17, #0\n\t"
+	    "mov x19, #0\n\tmov x20, #0\n\tmov x21, #0\n\tmov x22, #0\n\tmov x23, #0\n\t"
+	    "mov x24, #0\n\tmov x25, #0\n\tmov x26, #0\n\tmov x27, #0\n\tmov x28, #0\n\t"
+	    "mov x29, #0\n\tmov x30, #0\n\tmov sp, x0\n\tmov x0, #0\n\tbr x16"
+	    :
+	    : "r"(x0), "r"(x2), "r"(x16)
+	    : "memory");
+#endif
 	__builtin_unreachable();
 }
 
@@ -142,63 +226,88 @@ __attribute__((noreturn, used)) static void run(i64 argc, char **argv) {
 		if (eh.h.magic == 0x464c457f && eh.h.machine == EM_HOST) break;
 	}
 
-	// The boot image is the smallest page-aligned span holding the payload's
-	// program header table and every PT_LOAD file range. The payload's
-	// program headers must be phentsize-wide fixed-size records; anything
-	// else is not an ELF this loader knows how to rebase.
+	// The kernel's auxv follows envp. Its page size is the one every
+	// mapping below has to agree with.
+	char **ep = envp;
+	while (*ep) ep++;
+	u64 *auxv = (u64 *)(ep + 1);
+	u64 pg = 0;
+	u64 auxc = 0;
+	for (; auxv[auxc * 2] != AT_NULL; auxc++)
+		if (auxv[auxc * 2] == AT_PAGESZ) pg = auxv[auxc * 2 + 1];
+	if (pg == 0 || (pg & (pg - 1))) die("the kernel passed no page size");
+
+	// The payload must be a static ET_EXEC. Each PT_LOAD must have its file
+	// offset and its address equal modulo. The page size, so that it maps
+	// from the file as it stands. This loader refuses any other payload. It
+	// never copies one.
+	if (eh.h.type != ET_EXEC) die("payload is not ET_EXEC");
 	if (eh.h.phentsize != PHDR_SIZE) die("bad program header size");
 	if (eh.h.phnum == 0 || eh.h.phnum > MAX_PHDRS) die("bad program header count");
 	u64 phabs = off + eh.h.phoff;
 	u64 phsz = (u64)eh.h.phnum * PHDR_SIZE;
 	unsigned char ph[MAX_PHDRS * PHDR_SIZE];
 	if (sc4(SYS_pread, fd, ph, phsz, phabs) != (i64)phsz) die("cannot read program headers");
-	u64 lo = phabs, hi = phabs + phsz;
-	for (u64 i = 0; i < eh.h.phnum; i++) {
-		const unsigned char *e = ph + i * PHDR_SIZE;
-		if (le32(e) != PT_LOAD) continue;
-		u64 po = le64(e + 8), pf = le64(e + 32);
-		if (po + pf < po) die("bad program headers");
-		if (po < lo) lo = po;
-		if (po + pf > hi) hi = po + pf;
+	int entry_ok = 0;
+	// AT_PHDR is where the table sits in the payload's memory. A table
+	// outside every PT_LOAD is handed over as this frame's copy, which
+	// stays live under the payload's stack.
+	u64 phmem = (u64)ph;
+	for (u64 idx = 0; idx < eh.h.phnum; idx++) {
+		const unsigned char *phdr = ph + idx * PHDR_SIZE;
+		u32 type = le32(phdr);
+		if (type == PT_INTERP || type == PT_DYNAMIC) die("payload is dynamic");
+		if (type != PT_LOAD) continue;
+		u64 po = le64(phdr + 8), va = le64(phdr + 16), fsz = le64(phdr + 32), msz = le64(phdr + 40);
+		if (msz == 0) continue;
+		if (fsz > msz || po + fsz < po || va + msz < va) die("bad program headers");
+		if ((po ^ va) & (pg - 1)) die("a load segment's offset and address are not page-congruent");
+		if ((le32(phdr + 4) & PF_X) && eh.h.entry >= va && eh.h.entry < va + msz) entry_ok = 1;
+		if (phabs >= po && phabs + phsz <= po + fsz) phmem = va + (phabs - po);
 	}
-	lo &= ~(u64)PAGE_MASK;
-	hi = (hi + PAGE_MASK) & ~(u64)PAGE_MASK;
+	if (!entry_ok) die("entry point outside an executable segment");
+	for (u64 idx = 0; idx < eh.h.phnum; idx++) {
+		const unsigned char *phdr = ph + idx * PHDR_SIZE;
+		if (le32(phdr) == PT_LOAD && le64(phdr + 40)) map_load(fd, phdr, pg);
+	}
+	sc1(SYS_close, fd);
 
-	// The memfd name is what /proc/self/exe reads back, so use the basename.
+	// comm is the kernel's name for the process in ps and top. It would
+	// otherwise read "apeld" for every program this loader starts.
 	const char *name = path;
-	for (const char *p = path; *p; p++)
-		if (*p == '/') name = p + 1;
-	i64 mfd = sc3(SYS_memfd_create, name, MFD_CLOEXEC, 0);
-	if (mfd < 0) die("memfd_create failed");
+	for (const char *cur = path; *cur; cur++)
+		if (*cur == '/') name = cur + 1;
+	sc2(SYS_prctl, PR_SET_NAME, name);
 
-	// Copy [lo, hi) and nothing else. A non-NULL sendfile offset pins the
-	// source position and advances it. Hitting source EOF short of hi is a
-	// corrupt APE, not a reason to copy more.
-	i64 pos = (i64)lo;
-	u64 left = hi - lo;
-	while (left > 0) {
-		i64 want = left > (1 << 30) ? (1 << 30) : (i64)left;
-		i64 n = sc4(SYS_sendfile, mfd, fd, (i64)&pos, want);
-		if (n < 0) die("copy failed");
-		if (n == 0) die("short copy");
-		left -= (u64)n;
+	// The payload's stack holds argc, then argv without this loader's own
+	// words, then envp, then the kernel's auxv. The auxv entries that
+	// describe the image name the payload's instead. Every string stays
+	// where the kernel put it.
+	u64 nargs = (u64)argc - 1;
+	u64 envc = (u64)(ep - envp);
+	u64 words = 1 + nargs + 1 + envc + 1 + (auxc + 1) * 2;
+	u64 *sp = __builtin_alloca(words * 8 + 16);
+	sp = (u64 *)((u64)sp & -16);
+	u64 *out = sp;
+	*out++ = nargs;
+	for (u64 idx = 0; idx < nargs; idx++) *out++ = (u64)argv[idx + 1];
+	*out++ = 0;
+	for (u64 idx = 0; idx < envc; idx++) *out++ = (u64)envp[idx];
+	*out++ = 0;
+	for (u64 idx = 0; idx <= auxc; idx++) {
+		u64 tag = auxv[idx * 2], val = auxv[idx * 2 + 1];
+		switch (tag) {
+		case AT_PHDR: val = phmem; break;
+		case AT_PHENT: val = PHDR_SIZE; break;
+		case AT_PHNUM: val = eh.h.phnum; break;
+		case AT_BASE: val = 0; break;
+		case AT_ENTRY: val = eh.h.entry; break;
+		case AT_EXECFN: val = (u64)path; break;
+		}
+		*out++ = tag;
+		*out++ = val;
 	}
-	if (sc2(SYS_ftruncate, mfd, (i64)(hi - lo)) < 0) die("ftruncate failed");
-
-	// Rebase into span coordinates: e_phoff and every p_offset that pointed
-	// into [lo, hi). Offsets outside the span (a zero-offset PT_GNU_STACK,
-	// for example) keep their value; no mapping resolves them.
-	eh.h.phoff = phabs - lo;
-	if (sc4(SYS_pwrite, mfd, eh.b, 64, 0) != 64) die("cannot write boot header");
-	for (u64 i = 0; i < eh.h.phnum; i++) {
-		unsigned char *e = ph + i * PHDR_SIZE;
-		u64 po = le64(e + 8);
-		if (po >= lo && po < hi) put64(e + 8, po - lo);
-	}
-	if (sc4(SYS_pwrite, mfd, ph, phsz, phabs - lo) != (i64)phsz) die("cannot write program headers");
-
-	sc5(SYS_execveat, mfd, "", argv + 1, envp, AT_EMPTY_PATH);
-	die("exec failed");
+	enter(sp, eh.h.entry, path);
 }
 
 // Entry: the kernel leaves argc at sp and argv right above it.

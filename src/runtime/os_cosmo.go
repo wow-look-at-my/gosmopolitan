@@ -208,6 +208,7 @@ const (
 	_AT_HWCAP  = 16
 	_AT_HWCAP2 = 26
 	_AT_SECURE = 23
+	_AT_EXECFN = 31
 )
 
 var procAuxv = []byte("/proc/self/auxv\x00")
@@ -296,6 +297,9 @@ func publishDarwinAuxv() {
 
 var secureMode bool
 
+//go:linkname executablePath os.executablePath
+var executablePath string
+
 func sysauxv(auxv []uintptr) (pairs int) {
 	var i int
 	for ; auxv[i] != _AT_NULL; i += 2 {
@@ -307,6 +311,10 @@ func sysauxv(auxv []uintptr) (pairs int) {
 			physPageSize = val
 		case _AT_SECURE:
 			secureMode = val == 1
+		case _AT_EXECFN:
+			if val != 0 {
+				executablePath = gostringnocopy((*byte)(unsafe.Pointer(val)))
+			}
 		}
 		archauxv(tag, val)
 	}
