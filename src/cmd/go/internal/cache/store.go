@@ -6,9 +6,12 @@
 package cache
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -62,6 +65,7 @@ func openStore(dir string) (*cacheclient.WebBackend, error) {
 	// The client keys its build manifest on this. A publish stamp alone changes no cache key, so it is left out.
 	cfg.Version = stripPublishStamp(runtime.Version()) + " compile=" + objabi.ToolBuildID("compile")
 	cfg.Module = mainModulePath()
+	cfg.Command = commandDigest()
 	// The key index's disk copy lives beside the cache it describes.
 	cfg.IndexDir = dir
 	cacheclient.SetLogger(goLogger{})
@@ -73,6 +77,14 @@ func openStore(dir string) (*cacheclient.WebBackend, error) {
 	}
 	liveStore.Store(store)
 	return store, nil
+}
+
+// commandDigest names what this go command builds: its arguments and the
+// directory they resolve in. The store keeps one build manifest per command.
+func commandDigest() string {
+	wd, _ := os.Getwd()
+	sum := sha256.Sum256([]byte(strings.Join(append([]string{wd}, os.Args[1:]...), "\x00")))
+	return hex.EncodeToString(sum[:16])
 }
 
 // liveStore is this command's store, once it has one.
