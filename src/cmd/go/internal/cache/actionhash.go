@@ -47,7 +47,27 @@ type Hash struct {
 // execution. This allows bootstrapping to converge faster: dist builds
 // go_bootstrap without any experiments, so by stripping experiments
 // go_bootstrap and the final go binary will use the same salt.
-var hashSalt = []byte(stripExperiment(runtime.Version()))
+//
+// A published build of this fork stamps its version with the CI run, as
+// go1.27.0-cosmo.r<run>, and the salt leaves that stamp out. With it, every
+// publish started with an empty shared cache. A build from source carries no
+// stamp, so it already shares this salt across commits. The compiler and
+// linker IDs come from their content, so a changed tool still gets new keys.
+var hashSalt = []byte(stripPublishStamp(stripExperiment(runtime.Version())))
+
+// stripPublishStamp removes a trailing ".r<run>" from the version.
+func stripPublishStamp(version string) string {
+	dot := strings.LastIndex(version, ".r")
+	if dot < 0 || dot+2 == len(version) {
+		return version
+	}
+	for _, digit := range version[dot+2:] {
+		if digit < '0' || digit > '9' {
+			return version
+		}
+	}
+	return version[:dot]
+}
 
 // stripExperiment strips any GOEXPERIMENT configuration from the Go
 // version string.
