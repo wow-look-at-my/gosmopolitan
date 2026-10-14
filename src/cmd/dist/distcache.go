@@ -63,13 +63,13 @@ func toolDigest(path string) string {
 func installKey(pkg, pkgName string, ispackcmd bool, linkFlags, files, sfiles, sortedImports []string, importMap map[string]string) string {
 	key := newDistKey()
 	key.add("target", pkg, pkgName, fmt.Sprint(ispackcmd), goos, goarch, goarm, gomips, gomips64, goppc64, goriscv64, gogcflags, goldflags)
-	key.add("compile", toolDigest(pathf("%s/compile", tooldir)))
+	key.add("compile", toolDigest(pathf("%s/compile%s", tooldir, exe)))
 	if len(sfiles) > 0 {
-		key.add("asm", toolDigest(pathf("%s/asm", tooldir)))
+		key.add("asm", toolDigest(pathf("%s/asm%s", tooldir, exe)))
 		key.dir(pathf("%s/pkg/include", goroot))
 	}
 	if !ispackcmd {
-		key.add("link", toolDigest(pathf("%s/link", tooldir)))
+		key.add("link", toolDigest(pathf("%s/link%s", tooldir, exe)))
 		key.add(linkFlags...)
 	}
 	sorted := append([]string(nil), files...)
