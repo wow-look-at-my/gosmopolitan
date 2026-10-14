@@ -30,7 +30,7 @@ static inline i64 sc6(i64 n, i64 a, i64 b, i64 c, i64 d, i64 e, i64 f) {
 enum { SYS_write = 1, SYS_lseek = 8, SYS_pread = 17, SYS_pwrite = 18, SYS_mmap = 9,
 	SYS_sendfile = 40, SYS_exit = 60, SYS_openat = 257, SYS_unlinkat = 263,
 	SYS_prctl = 157, SYS_memfd_create = 319, SYS_execveat = 322,
-	SYS_close = 3, SYS_fcntl = 72 };
+	SYS_close = 3, SYS_fcntl = 72, SYS_execve = 59 };
 #elif defined(__aarch64__)
 #define EM_HOST 183
 static inline i64 sc6(i64 n, i64 a, i64 b, i64 c, i64 d, i64 e, i64 f) {
@@ -50,7 +50,7 @@ static inline i64 sc6(i64 n, i64 a, i64 b, i64 c, i64 d, i64 e, i64 f) {
 enum { SYS_write = 64, SYS_lseek = 62, SYS_pread = 67, SYS_pwrite = 68, SYS_mmap = 222,
 	SYS_sendfile = 71, SYS_exit = 93, SYS_openat = 56, SYS_unlinkat = 35,
 	SYS_prctl = 167, SYS_memfd_create = 279, SYS_execveat = 281,
-	SYS_close = 57, SYS_fcntl = 25 };
+	SYS_close = 57, SYS_fcntl = 25, SYS_execve = 221 };
 #else
 #error "unsupported arch"
 #endif
@@ -99,6 +99,19 @@ __attribute__((noreturn)) static void die(const char *msg) {
 	sc3(SYS_write, 2, "\n", 1);
 	sc1(SYS_exit, 127);
 	__builtin_unreachable();
+}
+
+// shell runs a file with no payload for this machine the way the kernel does
+// with no binfmt_misc entry: as a script. That script is under /bin/sh. Every
+// APE is a valid shell script. Root registers this loader for the APE magic
+// system-wide, so a foreign APE reaches it too.
+__attribute__((noreturn)) static void shell(char **argv, char **envp) {
+	char *sh = (char *)"/bin/sh";
+	// The loader sits too high for a sign-extended store of the literal, so the pointer goes through a register.
+	__asm__("" : "+r"(sh));
+	argv[0] = sh;
+	sc3(SYS_execve, sh, argv, envp);
+	die("no payload for this machine, and /bin/sh did not start");
 }
 
 // bootcopy copies the payload's PT_LOAD ranges into a memfd and execs that.
@@ -168,7 +181,7 @@ __attribute__((noreturn, used)) static void run(i64 argc, char **argv) {
 	} eh;
 	u64 off = PAYLOAD_ALIGN;
 	for (;; off += PAYLOAD_ALIGN) {
-		if (sc4(SYS_pread, fd, &eh, 64, off) != 64) die("no payload for this machine");
+		if (sc4(SYS_pread, fd, &eh, 64, off) != 64) shell(argv, envp);
 		if (eh.magic == 0x464c457f && eh.machine == EM_HOST) break;
 	}
 	if (eh.phentsize != sizeof(phdr) || eh.phnum == 0 || eh.phnum > MAX_PHDRS) die("bad program headers");
