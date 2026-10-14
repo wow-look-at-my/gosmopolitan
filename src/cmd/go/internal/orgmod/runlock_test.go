@@ -11,6 +11,7 @@ import (
 	"internal/testenv"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -287,6 +288,14 @@ func TestVersionNamedRunFailsWhenResolveFails(t *testing.T) {
 	}
 }
 
+func TestFileURLOfADrivePath(t *testing.T) {
+	raw := fileURL("C:/Users/runner/locks")
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Host != "" || parsed.Path != "/C:/Users/runner/locks" {
+		t.Errorf("fileURL = %q, which parses to %#v, %v; want no host and the drive in the path", raw, parsed, err)
+	}
+}
+
 func TestOpenRunLock(t *testing.T) {
 	ci := map[string]string{
 		"GITHUB_REPOSITORY":  testRun.Repository,
@@ -325,7 +334,7 @@ func TestOpenRunLock(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	lock, err = openRunLock(true, envOf(with(map[string]string{RunLockEnv: "file://" + dir})))
+	lock, err = openRunLock(true, envOf(with(map[string]string{RunLockEnv: fileURL(dir)})))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -343,7 +352,7 @@ func TestOpenRunLock(t *testing.T) {
 		"GITHUB_REPOSITORY":  "",
 		"GITHUB_RUN_ID":      "",
 		"GITHUB_RUN_ATTEMPT": "",
-		RunLockEnv:           "file://" + dir,
+		RunLockEnv:           fileURL(dir),
 	}
 	blanked[RunEnv] = testRun.Repository + "/" + testRun.ID + "/" + testRun.Attempt
 	lock, err = openRunLock(false, envOf(blanked))
