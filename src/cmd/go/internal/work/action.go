@@ -73,7 +73,7 @@ type Builder struct {
 	buildIDCache   map[string]string         // file name -> build ID
 	pkgConfigCache sync.Map                  // *load.Package -> *pkgConfigResult, so pkg-config runs once per package
 
-	lazy      map[string]lazyOutput            // archive path -> where a lazy hit can fetch it, guarded by id
+	lazy      map[string]lazyOutput          // archive path -> where a lazy hit can fetch it, guarded by id
 	lazyFetch par.ErrCache[string, struct{}] // archive path -> its one fetch
 }
 
