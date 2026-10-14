@@ -9,7 +9,11 @@ On Linux the loader maps each of the payload's PT_LOAD segments straight from th
 **A zero-write start needs a loader the host already reaches.** Putting one there takes root, one time. Either root installs the loader file, or root registers the `binfmt_misc` entry. Read the rest of this page with that in mind. A read-only path starts the program only on a machine where one of those is already done.
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 The privilege buys the machine its loader. It is not what runs the program. `mmap` needs no privilege at all. Neither does the loader once it runs.
+=======
+The privilege buys the machine its loader. It is not what runs the program. The loader maps the payload's segments from the APE file with no privilege at all. A mount can refuse an executable mapping. The loader then copies the APE into a memfd and execs that. `memfd_create` and `execveat` need no privilege either.
+>>>>>>> origin/master
 =======
 The privilege buys the machine its loader. It is not what runs the program. The loader maps the payload's segments from the APE file with no privilege at all. A mount can refuse an executable mapping. The loader then copies the APE into a memfd and execs that. `memfd_create` and `execveat` need no privilege either.
 >>>>>>> origin/master
@@ -72,7 +76,13 @@ ${APE_LOADERDIR:-/dev/shm /tmp "${o%/*}"}
 That last candidate is not a sidecar. `-u` unlinks the file before the program starts. Nothing is distributed. Nothing is left.
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 A container with nothing writable at all reaches none of them. The loader maps the payload from the APE where it lies, so a read-only mount does not stop the payload. A `noexec` mount does: the kernel refuses an executable mapping of a file there. So the loader itself still has to start from somewhere. Register the `binfmt_misc` entry on the host. The kernel then starts the APE with no file anywhere.
+=======
+A container with nothing writable at all reaches none of them. `memfd` is immune to both `noexec` and a read-only mount. The loader falls back to it when the APE's own mount refuses an executable mapping. No POSIX shell can create one. So the loader itself still has to start from somewhere. Register the `binfmt_misc` entry on the host.
+
+The kernel then starts the APE with no file anywhere.
+>>>>>>> origin/master
 =======
 A container with nothing writable at all reaches none of them. `memfd` is immune to both `noexec` and a read-only mount. The loader falls back to it when the APE's own mount refuses an executable mapping. No POSIX shell can create one. So the loader itself still has to start from somewhere. Register the `binfmt_misc` entry on the host.
 
@@ -104,11 +114,21 @@ APE: no apeld-linux-amd64 on this host, and nowhere to unpack the embedded one: 
 ## What it costs the program
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 Only this payload's PT_LOAD ranges are mapped. The other payload and any data past the load span are never touched. The page cache shares the mapped pages across every process running the APE, and only a page a process writes becomes its own. The runtimeprobe `filemap` check asserts the probe's text is a mapping of the APE file itself.
 
 On Linux `/proc/self/exe` names the loader, because the kernel exec'd the loader and not the APE. The loader sets `AT_EXECFN` to the APE's path. `os.Executable` returns that path when `/proc/self/exe` names a different file. cgo's `cosmo_find_progname` does the same for libcosmo. A program that re-execs itself, or reads its own file, gets the APE. `/proc/self/maps` names the APE for every segment.
 
 Anything that reads `/proc/self/exe` directly still sees the loader. The loader sets the process's `comm` to the APE's basename, so `ps` and `top` show the program's name.
+=======
+On Linux the loader maps the payload itself, so `/proc/self/exe` names the loader. The loader passes the APE's open descriptor as `AT_EXECFD`, and `os.Executable` reads the path from `/proc/self/fd/<n>`. A program that re-execs itself, or reads its own file, gets an openable path. `/proc/self/maps` names the APE.
+
+The memfd fallback leaves `/proc/self/exe` reading `/memfd:<name>`. `os.Executable` recognises that and resolves `argv[0]`, which the loader sets to the APE's own path. The memfd holds only this payload's PT_LOAD ranges, at their APE offsets. The rest of it is a hole, which takes no memory.
+
+Anything that reads `/proc/self/exe` directly sees the loader, or the memfd name.
+
+Each start of the memfd path copies the payload's load span. For a toolchain binary of 868 MB a whole-file copy was 0.45 s per process. Mapping costs 0.03 s.
+>>>>>>> origin/master
 =======
 On Linux the loader maps the payload itself, so `/proc/self/exe` names the loader. The loader passes the APE's open descriptor as `AT_EXECFD`, and `os.Executable` reads the path from `/proc/self/fd/<n>`. A program that re-execs itself, or reads its own file, gets an openable path. `/proc/self/maps` names the APE.
 
