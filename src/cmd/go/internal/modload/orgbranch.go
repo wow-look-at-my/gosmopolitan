@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"cmd/go/internal/base"
 	"cmd/go/internal/cfg"
@@ -232,9 +233,28 @@ func resolvedToDirectory(ld *Loader, m module.Version) bool {
 	return repl.Path != "" && repl.Version == ""
 }
 
+// prefetchOrgHeads resolves the head of every org module in mods at the same
+// time. Each head is a network round trip. A caller then reads each from
+// orgVersionCache, errors included.
+func prefetchOrgHeads(ld *Loader, ctx context.Context, mods []module.Version) {
+	var wg sync.WaitGroup
+	for _, m := range mods {
+		if !orgmod.IsOrg(m.Path) || !orgResolvable() || resolvedToDirectory(ld, m) {
+			continue
+		}
+		wg.Add(1)
+		go func(path string) {
+			defer wg.Done()
+			orgVersion(ld, ctx, path)
+		}(m.Path)
+	}
+	wg.Wait()
+}
+
 // resolveOrgRequires returns mods with every org module resolved. It returns
 // mods itself when no module in mods changes.
 func resolveOrgRequires(ld *Loader, ctx context.Context, mods []module.Version) ([]module.Version, error) {
+	prefetchOrgHeads(ld, ctx, mods)
 	out := mods
 	cloned := false
 	for idx, m := range mods {
