@@ -20,11 +20,14 @@ import (
 var (
 	self      string
 	selfTools = map[string]struct{}{}
+	// selfInfo is the file at self when this process started, or nil.
+	selfInfo os.FileInfo
 )
 
 // SetSelf records that exe, this executable, links the named tools.
 func SetSelf(exe string, tools []string) {
 	self = exe
+	selfInfo, _ = os.Stat(exe)
 	for _, name := range tools {
 		selfTools[name] = struct{}{}
 	}
@@ -33,7 +36,19 @@ func SetSelf(exe string, tools []string) {
 // ResetSelf forgets every linked tool, which undoes SetSelf.
 func ResetSelf() {
 	self = ""
+	selfInfo = nil
 	selfTools = map[string]struct{}{}
+}
+
+// SelfUnchanged reports whether the file at this executable's path is still
+// the file this process started from. A build can install a new go command
+// over it, and a tool started by path is then the new one.
+func SelfUnchanged() bool {
+	if selfInfo == nil {
+		return false
+	}
+	now, err := os.Stat(self)
+	return err == nil && os.SameFile(now, selfInfo) && now.Size() == selfInfo.Size() && now.ModTime().Equal(selfInfo.ModTime())
 }
 
 // goCommand is the argv prefix that starts this go command again, when a
