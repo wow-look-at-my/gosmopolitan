@@ -1,4 +1,5 @@
 <<<<<<< HEAD
+<<<<<<< HEAD
 // apeld: boot an APE on Linux by mapping its payload from the file.
 // Freestanding, raw syscalls only.
 //
@@ -16,11 +17,18 @@
 =======
 // apeld: boot an APE on Linux. Freestanding, raw syscalls only.
 //
+=======
+// apeld: boot an APE on Linux. Freestanding, raw syscalls only.
+//
+>>>>>>> origin/master
 // The APE's program headers hold absolute file offsets, so each PT_LOAD
 // segment maps straight from the APE file. Nothing is copied and nothing
 // touches the disk. The loader then rebuilds the start stack the kernel
 // would give the payload and jumps to its entry. AT_EXECFD names the APE,
 // because /proc/self/exe names this loader.
+<<<<<<< HEAD
+>>>>>>> origin/master
+=======
 >>>>>>> origin/master
 //
 // The host arch selects the payload. This binary is compiled per arch, so
@@ -45,14 +53,20 @@ static inline i64 sc6(i64 n, i64 a, i64 b, i64 c, i64 d, i64 e, i64 f) {
 	return r;
 }
 <<<<<<< HEAD
+<<<<<<< HEAD
 enum { SYS_write = 1, SYS_close = 3, SYS_mmap = 9, SYS_mprotect = 10,
 	SYS_pread = 17, SYS_exit = 60, SYS_prctl = 157, SYS_openat = 257,
 	SYS_unlinkat = 263 };
 =======
+=======
+>>>>>>> origin/master
 enum { SYS_write = 1, SYS_lseek = 8, SYS_pread = 17, SYS_pwrite = 18, SYS_mmap = 9,
 	SYS_sendfile = 40, SYS_exit = 60, SYS_openat = 257, SYS_unlinkat = 263,
 	SYS_prctl = 157, SYS_memfd_create = 319, SYS_execveat = 322,
 	SYS_close = 3, SYS_fcntl = 72 };
+<<<<<<< HEAD
+>>>>>>> origin/master
+=======
 >>>>>>> origin/master
 #elif defined(__aarch64__)
 #define EM_HOST 183
@@ -71,14 +85,20 @@ static inline i64 sc6(i64 n, i64 a, i64 b, i64 c, i64 d, i64 e, i64 f) {
 	return x0;
 }
 <<<<<<< HEAD
+<<<<<<< HEAD
 enum { SYS_write = 64, SYS_close = 57, SYS_mmap = 222, SYS_mprotect = 226,
 	SYS_pread = 67, SYS_exit = 93, SYS_prctl = 167, SYS_openat = 56,
 	SYS_unlinkat = 35 };
 =======
+=======
+>>>>>>> origin/master
 enum { SYS_write = 64, SYS_lseek = 62, SYS_pread = 67, SYS_pwrite = 68, SYS_mmap = 222,
 	SYS_sendfile = 71, SYS_exit = 93, SYS_openat = 56, SYS_unlinkat = 35,
 	SYS_prctl = 167, SYS_memfd_create = 279, SYS_execveat = 281,
 	SYS_close = 57, SYS_fcntl = 25 };
+<<<<<<< HEAD
+>>>>>>> origin/master
+=======
 >>>>>>> origin/master
 #else
 #error "unsupported arch"
@@ -96,6 +116,7 @@ enum {
 	AT_FDCWD = -100,
 	O_RDONLY = 0,
 	O_CLOEXEC = 02000000,
+<<<<<<< HEAD
 <<<<<<< HEAD
 	PROT_READ = 1,
 	PROT_WRITE = 2,
@@ -150,12 +171,32 @@ static u32 le32(const unsigned char *p) {
 	MAX_STACK_WORDS = 1 << 16,
 };
 
+=======
+	MFD_CLOEXEC = 1,
+	F_DUPFD_CLOEXEC = 1030,
+	PAYLOAD_ALIGN = 0x10000,
+	PROT_READ = 1, PROT_WRITE = 2, PROT_EXEC = 4,
+	MAP_PRIVATE = 2, MAP_FIXED = 0x10, MAP_ANONYMOUS = 0x20,
+	PT_LOAD = 1, PT_PHDR = 6,
+	PF_X = 1, PF_W = 2, PF_R = 4,
+	AT_NULL = 0, AT_EXECFD = 2, AT_PHDR = 3, AT_PHENT = 4, AT_PHNUM = 5,
+	AT_PAGESZ = 6, AT_ENTRY = 9, AT_EXECFN = 31,
+	PR_SET_NAME = 15,
+	MAX_PHDRS = 16,
+	// The start stack this loader can rebuild, in words. A larger one dies by name.
+	MAX_STACK_WORDS = 1 << 16,
+};
+
+>>>>>>> origin/master
 typedef struct {
 	u32 type, flags;
 	u64 offset, vaddr, paddr, filesz, memsz, align;
 } phdr;
 
 static int mapfailed(i64 r) { return r < 0 && r > -4096; }
+<<<<<<< HEAD
+>>>>>>> origin/master
+=======
 >>>>>>> origin/master
 
 // The main body runs in the C ABI; the entry stub below hands it argv.
@@ -170,6 +211,7 @@ __attribute__((noreturn)) static void die(const char *msg) {
 	__builtin_unreachable();
 }
 
+<<<<<<< HEAD
 <<<<<<< HEAD
 // place maps exactly at addr. MAP_FIXED_NOREPLACE refuses a range that
 // holds anything, this loader and its stack included.
@@ -238,6 +280,8 @@ __attribute__((noreturn)) static void enter(u64 *sp, u64 entry, const char *path
 #endif
 	__builtin_unreachable();
 =======
+=======
+>>>>>>> origin/master
 // bootcopy copies the payload's PT_LOAD ranges into a memfd and execs that.
 // A memfd runs where the APE's own mount forbids an executable mapping, as
 // noexec does. Each range keeps its APE offset, so the rest of the memfd is a
@@ -263,6 +307,9 @@ __attribute__((noreturn)) static void bootcopy(i64 fd, const char *name, u64 off
 	if (sc4(SYS_pwrite, mfd, ehdr, 64, 0) != 64) die("cannot write boot header");
 	sc5(SYS_execveat, mfd, "", pargv, envp, AT_EMPTY_PATH);
 	die("exec failed");
+<<<<<<< HEAD
+>>>>>>> origin/master
+=======
 >>>>>>> origin/master
 }
 
@@ -288,6 +335,7 @@ __attribute__((noreturn, used)) static void run(i64 argc, char **argv) {
 	i64 fd = sc4(SYS_openat, AT_FDCWD, path, O_RDONLY | O_CLOEXEC, 0);
 	if (fd < 0) die("cannot open program");
 <<<<<<< HEAD
+<<<<<<< HEAD
 
 	// Find the payload for this arch on a 64K boundary, in the source file.
 	union {
@@ -302,6 +350,8 @@ __attribute__((noreturn, used)) static void run(i64 argc, char **argv) {
 			u16 ehsize, phentsize, phnum;
 		} h;
 =======
+=======
+>>>>>>> origin/master
 	if (fd < 3) {
 		i64 high = sc3(SYS_fcntl, fd, F_DUPFD_CLOEXEC, 3);
 		if (high < 0) die("cannot move the program descriptor");
@@ -318,6 +368,9 @@ __attribute__((noreturn, used)) static void run(i64 argc, char **argv) {
 		u64 entry, phoff, shoff;
 		u32 flags;
 		u16 ehsize, phentsize, phnum, shentsize, shnum, shstrndx;
+<<<<<<< HEAD
+>>>>>>> origin/master
+=======
 >>>>>>> origin/master
 	} eh;
 	u64 off = PAYLOAD_ALIGN;
@@ -325,6 +378,7 @@ __attribute__((noreturn, used)) static void run(i64 argc, char **argv) {
 		if (sc4(SYS_pread, fd, &eh, 64, off) != 64) die("no payload for this machine");
 		if (eh.magic == 0x464c457f && eh.machine == EM_HOST) break;
 	}
+<<<<<<< HEAD
 <<<<<<< HEAD
 
 	// The kernel's auxv follows envp. Its page size is the one every
@@ -415,6 +469,13 @@ __attribute__((noreturn, used)) static void run(i64 argc, char **argv) {
 	i64 phlen = (i64)eh.phnum * sizeof(phdr);
 	if (sc4(SYS_pread, fd, ph, phlen, off + eh.phoff) != phlen) die("cannot read program headers");
 
+=======
+	if (eh.phentsize != sizeof(phdr) || eh.phnum == 0 || eh.phnum > MAX_PHDRS) die("bad program headers");
+	phdr ph[MAX_PHDRS];
+	i64 phlen = (i64)eh.phnum * sizeof(phdr);
+	if (sc4(SYS_pread, fd, ph, phlen, off + eh.phoff) != phlen) die("cannot read program headers");
+
+>>>>>>> origin/master
 	// The environment ends in a null, and the auxv follows it.
 	char **e = envp;
 	while (*e) e++;
@@ -515,6 +576,9 @@ __attribute__((noreturn, used)) static void run(i64 argc, char **argv) {
 	__asm__ volatile("mov sp, %0\n\tmov x0, xzr\n\tmov x2, %2\n\tmov x3, xzr\n\tmov x15, xzr\n\tbr %1" : : "r"(nsp), "r"(pc), "r"(exe) : "memory");
 #endif
 	__builtin_unreachable();
+<<<<<<< HEAD
+>>>>>>> origin/master
+=======
 >>>>>>> origin/master
 }
 
