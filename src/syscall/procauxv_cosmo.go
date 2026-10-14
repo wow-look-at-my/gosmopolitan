@@ -5,10 +5,7 @@
 
 package syscall
 
-import (
-	"internal/runtime/syscall/cosmo"
-	"unsafe"
-)
+import "unsafe"
 
 // procSelfAuxv is the one /proc path this package answers itself.
 const procSelfAuxv = "/proc/self/auxv"
@@ -16,10 +13,10 @@ const procSelfAuxv = "/proc/self/auxv"
 //go:linkname runtime_getAuxv runtime.getAuxv
 func runtime_getAuxv() []uintptr
 
-// openProcSelfAuxv answers a read of /proc/self/auxv on a macOS host, which
-// serves no /proc, from the vector the runtime already holds.
+// openProcSelfAuxv answers a read of /proc/self/auxv from the vector the
+// runtime already holds, on every host. macOS serves no /proc.
 func openProcSelfAuxv(path string, flags int) (fd int, err error, ok bool) {
-	if path != procSelfAuxv || flags&O_ACCMODE != O_RDONLY || !cosmo.Darwin() {
+	if path != procSelfAuxv || flags&O_ACCMODE != O_RDONLY {
 		return 0, nil, false
 	}
 	if len(runtime_getAuxv()) == 0 {
