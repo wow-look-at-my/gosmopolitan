@@ -40,6 +40,9 @@ func TestGopkgInResolvesToGitHub(t *testing.T) {
 		{"gopkg.in/natefinch/lumberjack.v2", "gopkg.in/natefinch/lumberjack.v2", "https://github.com/natefinch/lumberjack"},
 		{"gopkg.in/src-d/go-git.v4/plumbing", "gopkg.in/src-d/go-git.v4", "https://github.com/src-d/go-git"},
 		{"gopkg.in/mgo.v2-unstable/bson", "gopkg.in/mgo.v2-unstable", "https://github.com/go-mgo/mgo"},
+		// github.com/go-fsnotify/fsnotify holds only a master branch. The
+		// redirect table of gopkg.in sends this path to the real repository.
+		{"gopkg.in/fsnotify.v1", "gopkg.in/fsnotify.v1", "https://github.com/fsnotify/fsnotify"},
 	}
 	for _, test := range tests {
 		got, err := repoRootFromVCSPaths(test.path, web.SecureOnly, vcsPaths)
