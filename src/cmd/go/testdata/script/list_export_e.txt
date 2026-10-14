@@ -10,10 +10,10 @@ stdout '^p2'${/}'main\.go:7:.*'
 
 go list -export -e -f '{{.ImportPath}} -- {{.Incomplete}} -- {{.Error}}' ./...
 stdout 'example.com/p1 -- false -- <nil>'
-stdout 'example.com/p2 -- true -- # example.com/p2'
+stdout 'example.com/p2 -- true -- p2'${/}'main\.go:7:'
 
 go list -e -export -json=Error ./...
-stdout '"Err": "# example.com/p2'
+stdout '"Err": "p2(/|\\\\)main\.go:7:'
 
 -- go.mod --
 module example.com
