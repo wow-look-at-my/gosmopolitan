@@ -45,6 +45,22 @@ func openCache(dir string) (Cache, error) {
 	return cache, nil
 }
 
+// RunUploadSpool runs the upload spool this process was started for, when the
+// environment names one. It reports the exit status and whether it ran. Such
+// a process opens no cache and serves no build.
+func RunUploadSpool() (code int, ran bool) {
+	path := os.Getenv(cacheclient.UploadSpoolEnv)
+	if path == "" {
+		return 0, false
+	}
+	cacheclient.SetLogger(goLogger{})
+	if err := cacheclient.RunUploadSpool(path); err != nil {
+		fmt.Fprintf(os.Stderr, "go: %v\n", err)
+		return 1, true
+	}
+	return 0, true
+}
+
 // The store is configured by the environment. What the build IS comes from the
 // build itself: the target it produces and the module it builds. The store has
 // no other way to learn either. Its log would otherwise say how many objects
@@ -69,6 +85,8 @@ func openStore(dir string) (*cacheclient.WebBackend, error) {
 	// The key index's disk copy lives beside the cache it describes.
 	cfg.IndexDir = dir
 	cacheclient.SetLogger(goLogger{})
+	// RunAs serves the spool, so Close need not wait for the uploads.
+	cacheclient.HandOffUploads()
 	store, err := cacheclient.NewWebBackend(cfg)
 	if err != nil {
 		// A store that cannot be reached is a slower build, not a broken one.
