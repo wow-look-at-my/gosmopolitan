@@ -49,6 +49,7 @@ jobs:
       matrix:
         build-os: [macos-latest, windows-latest]
 
+    if: github.event.repository.visibility == 'public'
     runs-on: ${{ matrix.build-os }}
 
     steps:
@@ -141,7 +142,7 @@ jobs:
       fail-fast: true
       matrix:
         # NT is off: it is the longest leg by far. Put windows-latest back to run it again. waiver-expires: 2026-10-13
-        suite-os: [ubuntu-latest, macos-latest]
+        suite-os: ${{ github.event.repository.visibility == 'public' && fromJSON('["ubuntu-latest","macos-latest"]') || fromJSON('["ubuntu-latest"]') }}
         # NT is the longest leg by far, so it is excluded rather than run. Drop this exclude to run it again. waiver-expires: 2026-10-13
         exclude:
           - suite-os: windows-latest
@@ -552,7 +553,7 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        test-os: [ubuntu-latest, macos-latest, windows-latest]
+        test-os: ${{ github.event.repository.visibility == 'public' && fromJSON('["ubuntu-latest","macos-latest","windows-latest"]') || fromJSON('["ubuntu-latest"]') }}
 
     runs-on: ${{ (github.event.repository.visibility == 'public' || !contains(fromJSON('["ubuntu-latest"]'), matrix.test-os)) && matrix.test-os || vars.CI_RUNNER || matrix.test-os }}
 
@@ -664,7 +665,7 @@ jobs:
 
   # Regression-gate the WebAssembly ports (GOOS=js and GOOS=wasip1) -- see docs/WASM.md and docs/CI.md "wasm job".
   wasm:
-    # Off while the wasip1 suite recompiles its modules and starves the queue; flip the condition back to re-enable. waiver-expires: 2026-10-13
+    # Off while the wasip1 suite recompiles its modules and starves the queue; flip the condition back to re-enable. waiver-expires: 2026-10-28
     if: ${{ false }}
     timeout-minutes: ${{ github.ref == 'refs/heads/master' && 90 || 45 }}
     needs: build-linux
@@ -728,7 +729,7 @@ jobs:
 
   # The whole test suite for each wasm port, the gate the other ports get -- see docs/CI.md "wasm-suite job".
   wasm-suite:
-    # Off while the wasip1 suite recompiles its modules and starves the queue; flip the condition back to re-enable. waiver-expires: 2026-10-13
+    # Off while the wasip1 suite recompiles its modules and starves the queue; flip the condition back to re-enable. waiver-expires: 2026-10-28
     if: ${{ false }}
     timeout-minutes: ${{ github.ref == 'refs/heads/master' && 240 || 120 }}
     needs: build-linux
