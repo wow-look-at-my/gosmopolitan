@@ -482,6 +482,7 @@ func (sh *Shell) reportCmd(desc, dir string, cmdOut []byte, cmdErr error) error 
 
 	// Replace workDir with $WORK
 	out = replacePrefix(out, sh.workDir, "$WORK")
+	out = annotateWarnings(out, dir)
 
 	// Rewrite mentions of dir with a relative path to dir
 	// when the relative path is shorter.
@@ -554,16 +555,9 @@ type cmdError struct {
 	needsPath  bool // Set if desc does not already include the import path
 }
 
+// Error is the tool's output with no "# package" header line.
 func (e *cmdError) Error() string {
-	var msg string
-	if e.needsPath {
-		// Ensure the import path is part of the message.
-		// Clearly distinguish the description from the import path.
-		msg = fmt.Sprintf("# %s\n# [%s]\n", e.importPath, e.desc)
-	} else {
-		msg = "# " + e.desc + "\n"
-	}
-	return msg + e.text
+	return e.text
 }
 
 func (e *cmdError) ImportPath() string {

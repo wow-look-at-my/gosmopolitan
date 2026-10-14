@@ -2,7 +2,8 @@
 [!cgo] skip
 
 ! go build .
-stderr '# foo\nfoo.c:'
+stderr '^foo.c:'
+! stderr '^# foo'
 ! stderr 'EXTRA string'
 
 -- go.mod --
