@@ -482,10 +482,37 @@ func (sh *Shell) reportCmd(desc, dir string, cmdOut []byte, cmdErr error) error 
 
 	// Replace workDir with $WORK
 	out = replacePrefix(out, sh.workDir, "$WORK")
-	out = annotateWarnings(out, dir)
 
-	// Rewrite mentions of dir with a relative path to dir
-	// when the relative path is shorter.
+	// A capturing action keeps the output as the tool wrote it. That text is
+	// what the build cache stores, and it is formatted each time it prints.
+	if cmdErr == nil && a != nil && a.output != nil {
+		a.output = append(a.output, out...)
+		return nil
+	}
+	out = formatToolOutput(out, dir)
+
+	// Usually desc is already p.Desc(), but if not, signal cmdError.Error to
+	// add a line explicitly mentioning the import path.
+	needsPath := importPath != "" && p != nil && desc != p.Desc()
+
+	err := &cmdError{desc, out, importPath, needsPath}
+	if cmdErr != nil {
+		// The command failed. Report the output up as an error.
+		return err
+	}
+	// Write directly to the Builder output.
+	sh.Printf("%s", err)
+	return nil
+}
+
+// formatToolOutput prepares a tool's output for display. Each warning line
+// becomes a GitHub Actions annotation in a GitHub Actions run, and each
+// mention of dir becomes a relative path when that path is shorter.
+func formatToolOutput(out, dir string) string {
+	out = annotateWarnings(out, dir)
+	if dir == "" {
+		return out
+	}
 	for {
 		// Note that dir starts out long, something like
 		// /foo/bar/baz/root/a
@@ -510,25 +537,7 @@ func (sh *Shell) reportCmd(desc, dir string, cmdOut []byte, cmdErr error) error 
 		}
 		dir = dirP
 	}
-
-	// Usually desc is already p.Desc(), but if not, signal cmdError.Error to
-	// add a line explicitly mentioning the import path.
-	needsPath := importPath != "" && p != nil && desc != p.Desc()
-
-	err := &cmdError{desc, out, importPath, needsPath}
-	if cmdErr != nil {
-		// The command failed. Report the output up as an error.
-		return err
-	}
-	// The command didn't fail, so just print the output as appropriate.
-	if a != nil && a.output != nil {
-		// The Action is capturing output.
-		a.output = append(a.output, err.Error()...)
-	} else {
-		// Write directly to the Builder output.
-		sh.Printf("%s", err)
-	}
-	return nil
+	return out
 }
 
 // replacePrefix is like strings.ReplaceAll, but only replaces instances of old
