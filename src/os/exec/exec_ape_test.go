@@ -13,11 +13,11 @@ import (
 )
 
 // An APE is a shell script with no #! line, so execve answers ENOEXEC
-// and the start goes through /bin/sh. Any script without a #! line takes
-// the same path, which is what this exercises.
+// and the start goes through /bin/sh. A script that opens with the APE
+// header takes the same path, which is what this exercises.
 func TestStartsAScriptWithoutAnInterpreterLine(t *testing.T) {
 	script := filepath.Join(t.TempDir(), "ape-shaped")
-	if err := os.WriteFile(script, []byte("echo ape-shaped \"$@\"\n"), 0o755); err != nil {
+	if err := os.WriteFile(script, []byte("jartsr='\n'\necho ape-shaped \"$@\"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	out, err := exec.Command(script, "arg1", "arg2").Output()

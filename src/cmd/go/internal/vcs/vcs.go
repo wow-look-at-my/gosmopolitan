@@ -1346,15 +1346,26 @@ var vcsPaths = []*vcsPath{
 	},
 }
 
+// gopkgInRedirects is the redirect table of gopkg.in itself: the map
+// "redirect" in main.go of github.com/niemeyer/gopkg. gopkg.in applies it
+// before its fixed rule, so each key serves the repository it maps to.
+// Keep it equal to that table. A key with no user is the short form.
+var gopkgInRedirects = map[[2]string][2]string{
+	{"", "fsnotify"}: {"fsnotify", "fsnotify"},
+}
+
 // gopkgInRepo sets the GitHub repository a gopkg.in path names.
 // gopkg.in/pkg.vN is github.com/go-pkg/pkg. gopkg.in/user/pkg.vN is
-// github.com/user/pkg.
+// github.com/user/pkg. An entry of gopkgInRedirects comes first.
 func gopkgInRepo(match map[string]string) error {
-	owner := match["user"]
-	if owner == "" {
-		owner = "go-" + match["pkg"]
+	owner, name := match["user"], match["pkg"]
+	if target, found := gopkgInRedirects[[2]string{owner, name}]; found {
+		owner, name = target[0], target[1]
 	}
-	match["repo"] = "https://github.com/" + owner + "/" + match["pkg"]
+	if owner == "" {
+		owner = "go-" + name
+	}
+	match["repo"] = "https://github.com/" + owner + "/" + name
 	return nil
 }
 
