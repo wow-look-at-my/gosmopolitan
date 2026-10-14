@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,6 +23,7 @@ import (
 	"cmd/go/internal/fsys"
 	"cmd/go/internal/str"
 	"cmd/internal/buildid"
+	"cmd/internal/objabi"
 	"cmd/internal/pathcache"
 	"cmd/internal/quoted"
 	"cmd/internal/telemetry/counter"
@@ -251,22 +253,30 @@ func (b *Builder) toolID(name string) string {
 			desc = strings.Join(VetTool, " ")
 		}
 
-		cmdline := str.StringList(path, "-V=full")
-		cmd := exec.Command(cmdline[0], cmdline[1:]...)
-		var stdout, stderr strings.Builder
-		cmd.Stdout = &stdout
-		cmd.Stderr = &stderr
-		if err := cmd.Run(); err != nil {
-			if stderr.Len() > 0 {
-				os.Stderr.WriteString(stderr.String())
+		var id string
+		if linkedHere(name, path) && objabi.FullVersionCarriesBuildID() {
+			// The tool is this binary, so its -V=full line is known here. A
+			// run of it starts the whole toolchain binary for that one line.
+			id = toolIDFromField("buildID=" + objabi.ToolBuildID(name))
+		} else {
+			cmdline := str.StringList(path, "-V=full")
+			cmd := exec.Command(cmdline[0], cmdline[1:]...)
+			var stdout, stderr strings.Builder
+			cmd.Stdout = &stdout
+			cmd.Stderr = &stderr
+			if err := cmd.Run(); err != nil {
+				if stderr.Len() > 0 {
+					os.Stderr.WriteString(stderr.String())
+				}
+				base.Fatalf("go: error obtaining buildID for %s: %v", desc, err)
 			}
-			base.Fatalf("go: error obtaining buildID for %s: %v", desc, err)
-		}
 
-		line := stdout.String()
-		id, ok := parseToolID(name, name == "vet", line)
-		if !ok {
-			base.Fatalf("go: parsing buildID from %s -V=full: unexpected output:\n\t%s", desc, line)
+			line := stdout.String()
+			var ok bool
+			id, ok = parseToolID(name, name == "vet", line)
+			if !ok {
+				base.Fatalf("go: parsing buildID from %s -V=full: unexpected output:\n\t%s", desc, line)
+			}
 		}
 		// A binary that stands in for a tool, such as cmd/compile's test
 		// binary, carries no stamped build ID and prints an empty one. An
@@ -286,6 +296,13 @@ func (b *Builder) toolID(name string) string {
 		}
 		return id
 	})
+}
+
+// linkedHere reports whether path starts the tool called name inside this
+// executable, as "<self> tool <name>", and the file at that path is still
+// this process's own image.
+func linkedHere(name string, path []string) bool {
+	return base.Linked(name) && slices.Equal(path, base.ToolCmd(name)) && base.SelfUnchanged()
 }
 
 // toolWord answers the name a tool command line runs: the word after "tool"
@@ -323,17 +340,23 @@ func parseToolID(name string, isVetTool bool, line string) (id string, ok bool) 
 		return "", false
 	}
 	if strings.HasPrefix(f[len(f)-1], "buildID=") {
-		// An unstamped tool prints an empty ID. Report it as empty, never as
-		// the constant "buildID=": toolID hashes the file for it.
-		if f[len(f)-1] == "buildID=" {
-			return "", true
-		}
-		// Use the content ID part of the tool's own build ID.
-		return contentID(f[len(f)-1]), true
+		return toolIDFromField(f[len(f)-1]), true
 	}
 	// For a release, the output is like: "compile version go1.9.1 X:framepointer".
 	// Use the whole line.
 	return strings.TrimSpace(line), true
+}
+
+// toolIDFromField answers the tool ID for the "buildID=<id>" field of a
+// -V=full line. An unstamped tool prints an empty ID, which is reported as
+// empty, never as the constant "buildID=": toolID hashes the file for it.
+// Otherwise it is the content ID part of the field. An ID with no separator
+// keeps the "buildID=" prefix, and the tool IDs already in caches carry it.
+func toolIDFromField(field string) string {
+	if field == "buildID=" {
+		return ""
+	}
+	return contentID(field)
 }
 
 // gccToolID returns the unique ID to use for a tool that is invoked

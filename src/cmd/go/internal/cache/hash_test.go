@@ -10,6 +10,21 @@ import (
 	"testing"
 )
 
+// A publish stamp leaves the salt. Anything else in the version stays.
+func TestStripPublishStamp(t *testing.T) {
+	for in, want := range map[string]string{
+		"go1.27.0-cosmo.r3206":    "go1.27.0-cosmo",
+		"go1.27.0-cosmo":          "go1.27.0-cosmo",
+		"go1.27.0-cosmo.r":        "go1.27.0-cosmo.r",
+		"go1.27.0-cosmo.rc1":      "go1.27.0-cosmo.rc1",
+		"devel go1.28-abc.r12 +x": "devel go1.28-abc.r12 +x",
+	} {
+		if got := stripPublishStamp(in); got != want {
+			t.Errorf("stripPublishStamp(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestHash(t *testing.T) {
 	t.Serial()
 	oldSalt := hashSalt

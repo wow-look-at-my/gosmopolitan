@@ -15,6 +15,7 @@ import (
 
 	"cmd/go/internal/base"
 	goCfg "cmd/go/internal/cfg"
+	"cmd/internal/objabi"
 
 	"github.com/wow-look-at-my/go-s3-server/cacheclient"
 )
@@ -58,7 +59,8 @@ func openStore(dir string) (*cacheclient.WebBackend, error) {
 		return nil, nil
 	}
 	cfg.Target = goCfg.Goos + "/" + goCfg.Goarch
-	cfg.Version = runtime.Version()
+	// The client keys its build manifest on this. A publish stamp alone changes no cache key, so it is left out.
+	cfg.Version = stripPublishStamp(runtime.Version()) + " compile=" + objabi.ToolBuildID("compile")
 	cfg.Module = mainModulePath()
 	// The key index's disk copy lives beside the cache it describes.
 	cfg.IndexDir = dir
