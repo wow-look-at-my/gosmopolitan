@@ -7,7 +7,11 @@ Upstream is [wow-look-at-my/ape-research](https://github.com/wow-look-at-my/ape-
 | loader | how it boots the payload |
 |---|---|
 <<<<<<< HEAD
+<<<<<<< HEAD
 | `bin/apeld-linux-amd64`, `bin/apeld-linux-arm64` | maps each PT_LOAD `MAP_PRIVATE` from the APE at its own offset, builds the payload's stack from the kernel's argv, envp and auxv, sets `AT_EXECFN` to the APE path, jumps |
+=======
+| `bin/apeld-linux-amd64`, `bin/apeld-linux-arm64` | maps the payload's segments straight from the APE file, builds the start stack with `AT_EXECFD` naming the APE, jumps. A mount that refuses an executable mapping gets a sparse memfd of the payload's PT_LOAD ranges instead |
+>>>>>>> origin/master
 =======
 | `bin/apeld-linux-amd64`, `bin/apeld-linux-arm64` | maps the payload's segments straight from the APE file, builds the start stack with `AT_EXECFD` naming the APE, jumps. A mount that refuses an executable mapping gets a sparse memfd of the payload's PT_LOAD ranges instead |
 >>>>>>> origin/master
