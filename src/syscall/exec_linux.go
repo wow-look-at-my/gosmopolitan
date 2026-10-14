@@ -680,10 +680,10 @@ func forkAndExecInChild1(argv0 *byte, argv, envv []*byte, chroot, dir *byte, att
 		uintptr(unsafe.Pointer(argv0)),
 		uintptr(unsafe.Pointer(&argv[0])),
 		uintptr(unsafe.Pointer(&envv[0])))
-	if err1 == ENOEXEC {
-		// The kernel refused the image. An APE is a shell script, so
-		// hand it to the shell that reads its header. This is what
-		// execvp(3) does with any ENOEXEC file.
+	if err1 == ENOEXEC && hasAPEMagic(argv0) {
+		// The kernel refused an APE. An APE is a shell script, so hand it
+		// to the shell that reads its header. Any other file keeps the
+		// ENOEXEC.
 		_, _, err1 = RawSyscall(SYS_EXECVE,
 			uintptr(unsafe.Pointer(&apeShellPath[0])),
 			uintptr(unsafe.Pointer(&shArgv[0])),
