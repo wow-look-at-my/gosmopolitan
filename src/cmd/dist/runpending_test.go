@@ -4,6 +4,7 @@
 package main
 
 import (
+	"internal/testenv"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -45,6 +46,7 @@ func TestRunPendingHelper(t *testing.T) {
 // still running. A scheduler that frees a slot only when the oldest work ends
 // never starts the third, and this test times out.
 func TestRunPendingStartsOnAnyEnd(t *testing.T) {
+	testenv.MustHaveExec(t)
 	t.Serial()
 	marker := filepath.Join(t.TempDir(), "marker")
 	saved := maxbg
@@ -84,6 +86,7 @@ func pendingWork(name, mode, file string) *work {
 // start while the second waits. A scheduler that holds the works behind a
 // waiting one never starts the third, and this test times out.
 func TestRunPendingAfterWaitsAlone(t *testing.T) {
+	testenv.MustHaveExec(t)
 	t.Serial()
 	marker := filepath.Join(t.TempDir(), "marker")
 	saved := maxbg
@@ -109,6 +112,7 @@ func TestRunPendingAfterWaitsAlone(t *testing.T) {
 
 // A work marked first starts before the works queued ahead of it.
 func TestRunPendingStartsFirstAhead(t *testing.T) {
+	testenv.MustHaveExec(t)
 	t.Serial()
 	marker := filepath.Join(t.TempDir(), "marker")
 	saved := maxbg

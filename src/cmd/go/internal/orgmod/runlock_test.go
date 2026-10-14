@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"internal/testenv"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -699,6 +700,7 @@ func answerChild(asks string) {
 // TestPassHeadReachesOnlyChildren pins where an inherited head comes from: a
 // live ancestor that wrote it, and nothing else.
 func TestPassHeadReachesOnlyChildren(t *testing.T) {
+	testenv.MustHaveExec(t)
 	t.Serial()
 	me, procFound := self()
 	cleanup, err := PassHead(alphaPath, "main", headA)
