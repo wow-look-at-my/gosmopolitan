@@ -35,9 +35,11 @@ type lazyOutput struct {
 }
 
 // lazyEnabled reports whether a can hit through its lazy record. A listing
-// that reports the archive's path needs the file at that path.
+// that reports the archive's path needs the file at that path. An install
+// puts its archives in the local cache, where a go command with no shared
+// store, go_bootstrap in make.bash for one, reads them.
 func (b *Builder) lazyEnabled(a *Action) bool {
-	return a.Mode == "build" && cfg.BuildToolchainName == "gc" && !b.NeedExport
+	return a.Mode == "build" && cfg.BuildToolchainName == "gc" && !b.NeedExport && cfg.CmdName != "install"
 }
 
 // storeLazy writes the lazy record of a, whose archive the cache stored as
