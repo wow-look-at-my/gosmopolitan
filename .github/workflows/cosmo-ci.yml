@@ -752,19 +752,14 @@ jobs:
         run: git update-index -q --ignore-submodules --refresh
 
       - name: The whole test suite (dist test)
-        # Actions withholds this job's log for the hour it runs, so the command streams live instead.
-        uses: wow-look-at-my/log-streamer/.github/actions/stream@master
-        with:
-          stream-key: ${{ secrets.LOG_STREAMER_STREAM_KEY }}
-          name: ${{ matrix.port }}
-          run: |
-            set -o pipefail
-            export PATH="$PWD/bin:$PWD/lib/wasm:$HOME/.wasmtime/bin:$PATH"
-            sh ./.github/resource-log.sh &
-            probe=$!
-            # the stream client reads until every holder of its pipe exits, so the probe goes when this script does.
-            trap 'kill "$probe"' EXIT
-            GOOS=${{ matrix.port }} GOARCH=wasm stdbuf -oL -eL go tool dist test 2>&1 | tee "$RUNNER_TEMP/suite.log"
+        shell: bash
+        run: |
+          set -o pipefail
+          export PATH="$PWD/bin:$PWD/lib/wasm:$HOME/.wasmtime/bin:$PATH"
+          sh ./.github/resource-log.sh &
+          probe=$!
+          trap 'kill "$probe"' EXIT
+          GOOS=${{ matrix.port }} GOARCH=wasm stdbuf -oL -eL go tool dist test 2>&1 | tee "$RUNNER_TEMP/suite.log"
 
       - name: What ${{ matrix.port }} spent its time on
         # the per-package times are how the js and wasip1 ports get compared, and how a leg that overruns its budget names what overran.
