@@ -32,8 +32,9 @@ func annotateWarnings(out []byte, dir string) []byte {
 			continue
 		}
 		file := match[1]
-		if !filepath.IsAbs(file) && dir != "" {
-			file = filepath.Join(dir, file)
+		// A -trimpath build names a file by its module path, which is not under dir.
+		if joined := filepath.Join(dir, file); !filepath.IsAbs(file) && dir != "" && fileExists(joined) {
+			file = joined
 		}
 		if workspace != "" {
 			if rel, err := filepath.Rel(workspace, file); err == nil && !strings.HasPrefix(rel, "..") {
@@ -47,6 +48,11 @@ func annotateWarnings(out []byte, dir string) []byte {
 		lines[idx] = "::warning " + props + "::" + ghaData(match[4])
 	}
 	return []byte(strings.Join(lines, "\n"))
+}
+
+func fileExists(name string) bool {
+	_, err := os.Stat(name)
+	return err == nil
 }
 
 // ghaData escapes a workflow command's message.
