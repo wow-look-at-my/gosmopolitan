@@ -3131,7 +3131,8 @@ func isBuildCache(name string) bool {
 	if err != nil || dir == "off" {
 		return false
 	}
-	return search.InDir(name, dir) != ""
+	// GOCACHE need not be clean: on Windows, $WORK/gocache mixes separators.
+	return search.InDir(filepath.Clean(name), filepath.Clean(dir)) != ""
 }
 
 // inModCache reports where name sits in the module cache, as a slash path
@@ -3144,7 +3145,7 @@ func inModCache(name string) (string, bool) {
 	if cfg.GOMODCACHE == "" {
 		return "", false
 	}
-	rel := search.InDir(name, cfg.GOMODCACHE)
+	rel := search.InDir(filepath.Clean(name), filepath.Clean(cfg.GOMODCACHE))
 	if rel == "" {
 		return "", false
 	}
