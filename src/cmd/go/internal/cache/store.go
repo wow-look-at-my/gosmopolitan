@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -85,8 +86,7 @@ func openStore(dir string) (*cacheclient.WebBackend, error) {
 	cfg.Version = stripPublishStamp(runtime.Version()) + " compile=" + objabi.ToolBuildID("compile")
 	cfg.Module = mainModulePath()
 	cfg.Command = commandDigest()
-	// The key index's disk copy lives beside the cache it describes.
-	cfg.IndexDir = dir
+	cfg.IndexDir = indexDir(dir)
 	cacheclient.SetLogger(goLogger{})
 	// RunAs serves the spool, so Close need not wait for the uploads.
 	cacheclient.HandOffUploads()
@@ -97,6 +97,19 @@ func openStore(dir string) (*cacheclient.WebBackend, error) {
 		return nil, nil
 	}
 	return store, nil
+}
+
+// indexDir returns the directory for the key index's disk copy.
+func indexDir(dir string) string {
+	userCache, err := os.UserCacheDir()
+	if err != nil || userCache == "" {
+		return dir
+	}
+	shared := filepath.Join(userCache, "go-build-index")
+	if err := os.MkdirAll(shared, 0o777); err != nil {
+		return dir
+	}
+	return shared
 }
 
 // publishStore makes store the SetSharedModule names the module to. The
