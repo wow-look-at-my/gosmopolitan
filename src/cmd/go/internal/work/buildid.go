@@ -790,7 +790,7 @@ func (b *Builder) useCache(a *Action, actionHash cache.ActionID, target string, 
 	}
 
 	// Check to see if the action output is cached.
-	if file, _, err := cache.GetFile(c, actionHash); err == nil {
+	if file, entry, err := cache.GetFile(c, actionHash); err == nil {
 		if a.Mode == "preprocess PGO profile" {
 			// Preprocessed PGO profiles don't embed a build ID, so
 			// skip the build ID lookup.
@@ -826,6 +826,10 @@ func (b *Builder) useCache(a *Action, actionHash cache.ActionID, target string, 
 			a.built = file
 			a.Target = "DO NOT USE - using cache"
 			a.buildID = buildID
+			if b.lazyEnabled(a) {
+				// The lazy record is missing, or the hit above would have used it. The next build then reads no archive.
+				storeLazy(c, a, entry.OutputID, entry.Size)
+			}
 			if a.json != nil {
 				a.json.BuildID = a.buildID
 			}
