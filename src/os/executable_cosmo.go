@@ -12,7 +12,11 @@ import (
 	"runtime"
 	"sync"
 <<<<<<< HEAD
+<<<<<<< HEAD
 	_ "unsafe" // for linkname
+=======
+	_ "unsafe"
+>>>>>>> origin/master
 =======
 	_ "unsafe"
 >>>>>>> origin/master
@@ -39,6 +43,7 @@ func executable() (string, error) {
 	// a file, and trusting one hands back a name that opens nothing.
 	if runtime.CosmoHostOS() == "linux" {
 <<<<<<< HEAD
+<<<<<<< HEAD
 		path, err := Readlink("/proc/self/exe")
 		// Readlink appends " (deleted)" for a file nothing links to.
 		path = stringslite.TrimSuffix(path, " (deleted)")
@@ -51,6 +56,8 @@ func executable() (string, error) {
 		if named != "" && isExecutable(named) == nil {
 			return named, nil
 =======
+=======
+>>>>>>> origin/master
 		// The APE loader maps the payload itself, so /proc/self/exe names the
 		// loader. It hands over the APE's own descriptor as AT_EXECFD.
 		if fd := execFD(); fd >= 0 {
@@ -74,6 +81,7 @@ func executable() (string, error) {
 	return exeOnce.path, exeOnce.err
 }
 
+<<<<<<< HEAD
 <<<<<<< HEAD
 // execFnPath answers AT_EXECFN as an absolute path, or "" when the kernel
 // passed none or a relative one cannot be resolved.
@@ -102,6 +110,8 @@ func samePath(first, second string) bool {
 	}
 	return SameFile(firstInfo, secondInfo)
 =======
+=======
+>>>>>>> origin/master
 //go:linkname runtime_getAuxv runtime.getAuxv
 func runtime_getAuxv() []uintptr
 
@@ -116,6 +126,9 @@ func execFD() int {
 		}
 	}
 	return -1
+<<<<<<< HEAD
+>>>>>>> origin/master
+=======
 >>>>>>> origin/master
 }
 
