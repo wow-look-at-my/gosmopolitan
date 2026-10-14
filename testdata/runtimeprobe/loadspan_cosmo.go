@@ -13,10 +13,10 @@ import (
 	"syscall"
 )
 
-// checkLoadSpan asserts that the linux loader put only this payload's load
-// span into the memfd it exec'd. A fat APE also carries the other payload
-// and any data appended past the load span. The loader must leave those
-// out, or every start copies the whole file.
+// checkLoadSpan asserts that a start on linux never copies the whole APE.
+// The loader maps the payload from the APE file, and then this program's
+// text maps from that file. On a mount that refuses the mapping, the loader
+// execs a memfd that holds only this payload's load span.
 func checkLoadSpan() {
 	if host := cosmoHostOS(); host != "linux" {
 		ok("loadspan", "skipped: a "+host+" host boots without a memfd")
@@ -28,7 +28,7 @@ func checkLoadSpan() {
 		return
 	}
 	if !strings.HasPrefix(link, "/memfd:") {
-		fail("loadspan", "/proc/self/exe is %q, not the memfd the loader execs", link)
+		checkMappedFromAPE()
 		return
 	}
 	var mem syscall.Stat_t
@@ -52,4 +52,27 @@ func checkLoadSpan() {
 		return
 	}
 	ok("loadspan", fmt.Sprintf("memfd holds %d of %d bytes", held, fi.Size()))
+}
+
+// checkMappedFromAPE asserts that this program's text maps from the APE that
+// os.Executable names, so no start copied it.
+func checkMappedFromAPE() {
+	exe, err := os.Executable()
+	if err != nil {
+		fail("loadspan", "os.Executable(): %v", err)
+		return
+	}
+	maps, err := os.ReadFile("/proc/self/maps")
+	if err != nil {
+		fail("loadspan", "read /proc/self/maps: %v", err)
+		return
+	}
+	for _, line := range strings.Split(string(maps), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 6 && strings.Contains(fields[1], "x") && fields[5] == exe {
+			ok("loadspan", "text maps from "+exe)
+			return
+		}
+	}
+	fail("loadspan", "no executable mapping of %q in /proc/self/maps:\n%s", exe, maps)
 }

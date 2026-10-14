@@ -17,16 +17,17 @@ import (
 
 // TestSignalNoteLosesNoWakeup runs the protocol that traceAdvance,
 // StartTrace and the SIGQUIT crash relay use to sleep until another M
-// changes what they wait for. The waker runs on a second P while the
+// changes what they wait for. The waker runs on another P while the
 // waiter's M is blocked, and wakes at every point of the waiter's arm,
 // check and sleep, so a lost wakeup hangs the test. The timed rounds time
 // out often, so they also cover a wakeup that races with a timeout. The
 // waiter's P stays held while it sleeps, as traceAdvance's does; the Ms
 // traceAdvance waits for cannot be stopped mid-wake, but this goroutine
 // can, so the collector is off for the test lest a stop-the-world wait on
-// the sleeping waiter.
+// the sleeping waiter. A forEachP holds a P of its own while it waits for
+// the waiter's, so a third P keeps the waker running past one.
 func TestSignalNoteLosesNoWakeup(t *testing.T) {
-	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(2))
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(3))
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	runtime.SignalNoteRounds(20000, 0)
 	runtime.SignalNoteRounds(20000, 20000)
