@@ -1008,6 +1008,14 @@ func runInstall(pkg string, ch chan struct{}) {
 	if !ispkg {
 		pkgName = "main"
 	}
+	cacheKey := installKey(pkg, pkgName, ispackcmd, link[1:targ], files, sfiles, sortedImports, importMap)
+	outFlag := 0
+	if !ispackcmd {
+		outFlag = writeExec
+	}
+	if distCacheGet(cacheKey, link[targ], outFlag) {
+		return
+	}
 	b := pathf("%s/_go_.a", workdir)
 	clean = append(clean, b)
 	if !ispackcmd {
@@ -1062,6 +1070,7 @@ func runInstall(pkg string, ch chan struct{}) {
 	if ispackcmd {
 		xremove(link[targ])
 		dopack(link[targ], archive, link[targ+1:])
+		distCachePut(cacheKey, link[targ])
 		return
 	}
 
@@ -1069,6 +1078,7 @@ func runInstall(pkg string, ch chan struct{}) {
 	xremove(link[targ])
 	bgrun(&wg, "", link...)
 	bgwait(&wg)
+	distCachePut(cacheKey, link[targ])
 }
 
 // packagefile returns the path to a compiled .a file for the given package
