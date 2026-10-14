@@ -676,6 +676,12 @@ func (rp *IndexPackage) Import(bctxt build.Context, mode build.ImportMode) (p *b
 // for the goroot and compiler using the module index if possible,
 // and otherwise falling back to internal/goroot.IsStandardPackage
 func IsStandardPackage(goroot_, compiler, path string) bool {
+	// A standard import path has no dot in its first element, so a
+	// module path never needs the tree or the blob to answer.
+	first, _, _ := strings.Cut(path, "/")
+	if strings.Contains(first, ".") {
+		return false
+	}
 	// The blob answers first and the tree answers for the rest: cmd is a
 	// distribution's own and no blob carries it, so a GOROOT of this same
 	// toolchain is what a program importing the go command reads.
