@@ -13,8 +13,13 @@ import (
 // make.bash runs under two, and each downloaded the whole index.
 func TestIndexDirIsSharedAcrossCaches(t *testing.T) {
 	userCache, err := os.UserCacheDir()
-	if err != nil {
-		t.Fatalf("no user cache directory, so the index would stay per cache: %v", err)
+	if err != nil || userCache == "" {
+		// wasip1 and js have no user cache directory. The copy then stays beside the cache.
+		dir := t.TempDir()
+		if got := indexDir(dir); got != dir {
+			t.Fatalf("with no user cache directory, index directory = %s, want the cache's own %s", got, dir)
+		}
+		return
 	}
 	first, second := indexDir(t.TempDir()), indexDir(t.TempDir())
 	if first != second {
