@@ -5,10 +5,18 @@
 
 package gendep
 
-import "github.com/wow-look-at-my/go-mmap"
+import (
+	"errors"
 
-// fileLines calls visit with each line of the file at path, as a subslice of a
-// read-only mapping. A line costs no copy and has no length limit.
+	"github.com/wow-look-at-my/go-mmap"
+)
+
+// fileLines calls visit with each line of the file at path, as a subslice of
+// a read-only mapping. A line costs no copy and has no length limit.
 func fileLines(path string, visit func(line []byte) bool) error {
-	return mmap.FileLines(path, visit)
+	err := mmap.FileLines(path, visit)
+	if errors.Is(err, errors.ErrUnsupported) {
+		return readLines(path, visit)
+	}
+	return err
 }
