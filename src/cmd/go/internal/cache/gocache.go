@@ -74,6 +74,12 @@ func PutBytes(c Cache, id ActionID, data []byte) error {
 	return cachedisk.PutBytes(c, id, data)
 }
 
+// Local answers the part of c that stays on this machine, for an output the
+// shared store must not see.
+func Local(c Cache) Cache {
+	return cachedisk.Local(c)
+}
+
 // PutNoVerify stores an output that is not reproducible, such as test output.
 func PutNoVerify(c Cache, id ActionID, file io.ReadSeeker) (OutputID, int64, error) {
 	return cachedisk.PutNoVerify(c, id, file)
