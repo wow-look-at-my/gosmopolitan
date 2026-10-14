@@ -83,9 +83,9 @@ func forkAndExecInChild(argv0 *byte, argv, envv []*byte, chroot, dir *byte, attr
 	// An APE is a shell script by construction, and no kernel execs its
 	// MZqFpD header, so execve answers ENOEXEC. This toolchain runs on a
 	// darwin host and starts APEs - the cosmo test binaries it builds -
-	// so the child retries through the shell that reads that header,
-	// which is what execvp(3) does with any ENOEXEC file. Built here,
-	// where allocation is still legal.
+	// so the child retries an APE through the shell that reads that
+	// header. Any other file keeps the ENOEXEC. Built here, where
+	// allocation is still legal.
 	shArgv := apeShellArgv(argv0, argv)
 
 	// About to call fork.
@@ -293,7 +293,7 @@ func forkAndExecInChild(argv0 *byte, argv, envv []*byte, chroot, dir *byte, attr
 		uintptr(unsafe.Pointer(argv0)),
 		uintptr(unsafe.Pointer(&argv[0])),
 		uintptr(unsafe.Pointer(&envv[0])))
-	if err1 == ENOEXEC {
+	if err1 == ENOEXEC && hasAPEMagic(argv0) {
 		_, _, err1 = rawSyscall(abi.FuncPCABI0(libc_execve_trampoline),
 			uintptr(unsafe.Pointer(&apeShellPath[0])),
 			uintptr(unsafe.Pointer(&shArgv[0])),
