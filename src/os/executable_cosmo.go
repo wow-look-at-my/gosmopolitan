@@ -7,9 +7,11 @@ package os
 
 import (
 	"internal/filepathlite"
+	"internal/strconv"
 	"internal/stringslite"
 	"runtime"
 	"sync"
+	_ "unsafe"
 )
 
 // Cosmopolitan binaries run on several host operating systems. On Linux hosts /proc/self/exe gives the answer directly.
@@ -29,6 +31,13 @@ func executable() (string, error) {
 	// of procfs on the other hosts. A success here is no proof the answer names
 	// a file, and trusting one hands back a name that opens nothing.
 	if runtime.CosmoHostOS() == "linux" {
+		// The APE loader maps the payload itself, so /proc/self/exe names the
+		// loader. It hands over the APE's own descriptor as AT_EXECFD.
+		if fd := execFD(); fd >= 0 {
+			if path, err := Readlink("/proc/self/fd/" + strconv.Itoa(fd)); err == nil {
+				return stringslite.TrimSuffix(path, " (deleted)"), nil
+			}
+		}
 		if path, err := Readlink("/proc/self/exe"); err == nil {
 			// Readlink appends " (deleted)" for a file nothing links to.
 			path = stringslite.TrimSuffix(path, " (deleted)")
@@ -42,6 +51,22 @@ func executable() (string, error) {
 
 	exeOnce.Do(func() { exeOnce.path, exeOnce.err = resolveArgv0() })
 	return exeOnce.path, exeOnce.err
+}
+
+//go:linkname runtime_getAuxv runtime.getAuxv
+func runtime_getAuxv() []uintptr
+
+// atExecFD is the auxv tag of the descriptor that holds the program file.
+const atExecFD = 2
+
+func execFD() int {
+	auxv := runtime_getAuxv()
+	for i := 0; i+1 < len(auxv); i += 2 {
+		if auxv[i] == atExecFD {
+			return int(auxv[i+1])
+		}
+	}
+	return -1
 }
 
 func resolveArgv0() (string, error) {

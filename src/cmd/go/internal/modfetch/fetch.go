@@ -1204,7 +1204,19 @@ func contentSum(ctx context.Context, mod module.Version, gitSum string) (string,
 	if !errors.Is(err, fs.ErrNotExist) {
 		return "", err
 	}
+	sum, err := hashContent(ctx, mod, gitSum)
+	if err != nil {
+		return "", err
+	}
+	// The cache entry no longer changes, so the record saves every later
+	// build the hash. A failed write costs only that.
+	_ = writeZiphash(record, sum)
+	return sum, nil
+}
 
+// hashContent hashes the files of mod: its zip, else its extracted directory
+// without the files its generators added.
+func hashContent(ctx context.Context, mod module.Version, gitSum string) (string, error) {
 	zipfile, err := CachePath(ctx, mod, "zip")
 	if err != nil {
 		return "", err
