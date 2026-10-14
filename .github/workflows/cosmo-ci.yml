@@ -23,13 +23,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: wow-look-at-my/actions@no-all-builds-job#latest
-      - uses: wow-look-at-my/slopfix@master
+      - uses: wow-look-at-my/slopfix@lkgb
       - uses: wow-look-at-my/actions@no-tests-in-yaml#latest
       - uses: wow-look-at-my/actions@push-excludes-tags#latest
       - uses: wow-look-at-my/actions@ste-lint#latest
 
       - name: The source suites
-        uses: wow-look-at-my/dats@master
+        uses: wow-look-at-my/dats@lkgb
         with:
           tests: dats/source
 
@@ -77,7 +77,7 @@ jobs:
       - name: Build Go toolchain
         # A cold build, with the shared cache unreachable, takes over 8 minutes on macOS.
         timeout-minutes: ${{ github.ref == 'refs/heads/master' && 40 || 20 }}
-        uses: wow-look-at-my/actions/multicmd@master
+        uses: wow-look-at-my/actions/multicmd@lkgb
         with:
           unix: cd src && ./make.bash -v
           windows: cd src && .\make.bat -v
@@ -263,7 +263,7 @@ jobs:
       # The suite says what a bare "exit status 2" from run.bat means.
       - name: A cosmo binary built here runs here (dats)
         if: runner.os != 'Windows'
-        uses: wow-look-at-my/dats@master
+        uses: wow-look-at-my/dats@lkgb
         with:
           tests: dats/host
 
@@ -271,7 +271,7 @@ jobs:
       - name: Download dats
         if: runner.os == 'Windows'
         id: dats
-        uses: wow-look-at-my/buildhost/.github/actions/buildhost-download@master
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-download@lkgb
         with:
           project: dats
 
@@ -499,7 +499,7 @@ jobs:
       # Every host-independent suite. Which tests each covers is the suite's decision, not this file's.
       - name: The dats suites
         timeout-minutes: ${{ github.ref == 'refs/heads/master' && 90 || 45 }}
-        uses: wow-look-at-my/dats@master
+        uses: wow-look-at-my/dats@lkgb
         with:
           tests: dats/checks
 
@@ -590,7 +590,7 @@ jobs:
       - name: The APE binaries run on this host (dats)
         if: matrix.test-os != 'windows-latest'
         timeout-minutes: ${{ github.ref == 'refs/heads/master' && 90 || 45 }}
-        uses: wow-look-at-my/dats@master
+        uses: wow-look-at-my/dats@lkgb
         with:
           tests: dats/test/apetest.dats dats/test/readonly-boot.dats
 
@@ -601,7 +601,7 @@ jobs:
       - name: An APE runs in a read-only container (dats)
         if: runner.os == 'Linux'
         timeout-minutes: ${{ github.ref == 'refs/heads/master' && 20 || 10 }}
-        uses: wow-look-at-my/dats@master
+        uses: wow-look-at-my/dats@lkgb
         with:
           tests: dats/test/readonly-boot-container.dats
 
@@ -609,7 +609,7 @@ jobs:
       - name: Download dats
         if: matrix.test-os == 'windows-latest'
         id: dats
-        uses: wow-look-at-my/buildhost/.github/actions/buildhost-download@master
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-download@lkgb
         with:
           project: dats
 
@@ -684,7 +684,7 @@ jobs:
       # Every wasm suite: std for both ports, the object writer, the node and wasip1sock transports, wasmexport and GOWASM=threads.
       - name: The wasm dats suites
         timeout-minutes: ${{ github.ref == 'refs/heads/master' && 80 || 40 }}
-        uses: wow-look-at-my/dats@master
+        uses: wow-look-at-my/dats@lkgb
         with:
           tests: dats/wasm
 
@@ -762,7 +762,7 @@ jobs:
 
       - name: The whole test suite (dist test)
         # Actions withholds this job's log for the hour it runs, so the command streams live instead.
-        uses: wow-look-at-my/log-streamer/.github/actions/stream@master
+        uses: wow-look-at-my/log-streamer/.github/actions/stream@lkgb
         with:
           stream-key: ${{ secrets.LOG_STREAMER_STREAM_KEY }}
           name: ${{ matrix.port }}
@@ -847,7 +847,7 @@ jobs:
       - name: Create buildhost release
         # No version input: buildhost auto-increments it. See docs/CI.md "publish jobs".
         id: release
-        uses: wow-look-at-my/buildhost/.github/actions/buildhost-create-release@master
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-create-release@lkgb
         with:
           project: gosmopolitan
 
@@ -899,7 +899,7 @@ jobs:
 
       - name: Upload toolchain tarball
         timeout-minutes: ${{ github.ref == 'refs/heads/master' && 20 || 10 }}
-        uses: wow-look-at-my/buildhost/.github/actions/buildhost-upload-artifact@master
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-upload-artifact@lkgb
         with:
           project: gosmopolitan
           version: ${{ needs.publish-create.outputs.version }}
@@ -931,7 +931,7 @@ jobs:
           lfs: true
 
       - name: Publish buildhost release
-        uses: wow-look-at-my/buildhost/.github/actions/buildhost-publish-release@master
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-publish-release@lkgb
         with:
           project: gosmopolitan
           version: ${{ needs.publish-create.outputs.version }}
