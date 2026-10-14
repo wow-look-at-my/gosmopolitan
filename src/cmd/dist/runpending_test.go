@@ -134,6 +134,38 @@ func TestRunPendingStartsFirstAhead(t *testing.T) {
 	}
 }
 
+// A work queued alone starts after the works queued before it end, though a
+// slot is free beside them.
+func TestQueueAloneWaitsForEarlierWorks(t *testing.T) {
+	testenv.MustHaveExec(t)
+	t.Serial()
+	marker := filepath.Join(t.TempDir(), "marker")
+	saved := maxbg
+	maxbg = 2
+	defer func() { maxbg = saved }()
+
+	earlier := pendingWork("earlier", "wait", marker)
+	alone := pendingWork("alone", "noop", marker)
+	writeMarker := time.AfterFunc(200*time.Millisecond, func() {
+		if err := os.WriteFile(marker, nil, 0o666); err != nil {
+			t.Error(err)
+		}
+	})
+	defer writeMarker.Stop()
+
+	var tester tester
+	tester.queue(earlier, false)
+	tester.queue(alone, true)
+	tester.runPending(nil)
+	if tester.failed {
+		t.Fatal("a work failed")
+	}
+	earlierEnd := earlier.began.Add(earlier.elapsed)
+	if alone.began.Before(earlierEnd) {
+		t.Errorf("the alone work began at %v, before the earlier work ended at %v", alone.began, earlierEnd)
+	}
+}
+
 func TestQueuedFindsTheWaitingWork(t *testing.T) {
 	var tester tester
 	waiting := &work{dt: &distTest{name: "crypto/...:gofips140-v1.0.0-c2097c7c"}}

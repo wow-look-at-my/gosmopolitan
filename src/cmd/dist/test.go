@@ -540,6 +540,11 @@ type goTest struct {
 
 	// first starts this test ahead of the rest of its worklist (see work.first).
 	first bool
+
+	// alone starts this test once every test queued before it has ended. Its
+	// command fills the machine, so a test beside it gets too little of the
+	// CPU to finish inside its deadline.
+	alone bool
 }
 
 // upstreamTestVet is the analyzer list upstream's go test runs, which is this
@@ -1501,6 +1506,8 @@ func (t *tester) registerTests() {
 					// Every shard starts the one test binary with its
 					// own -shard.
 					shared: true,
+					// The corpus fills every CPU, the way cmd/go does.
+					alone: true,
 				},
 			)
 		}
@@ -1594,7 +1601,7 @@ func (t *tester) registerTest(heading string, test *goTest, opts ...registerTest
 					test.summarize(t, &w.out, w.cmd, time.Since(w.began))
 				}
 			}
-			t.worklist = append(t.worklist, w)
+			t.queue(w, test.alone)
 			return nil
 		})
 	}
@@ -1626,6 +1633,15 @@ func (t *tester) registerTest(heading string, test *goTest, opts ...registerTest
 // queued answers the work for the dist test named name that waits in the
 // worklist, or nil when that test is not queued: it ran already, or this run
 // leaves it out.
+// queue adds w to the worklist. If alone is set, the works queued before w
+// run to their end first.
+func (t *tester) queue(w *work, alone bool) {
+	if alone {
+		t.runPending(w.dt)
+	}
+	t.worklist = append(t.worklist, w)
+}
+
 func (t *tester) queued(name string) *work {
 	if name == "" {
 		return nil
