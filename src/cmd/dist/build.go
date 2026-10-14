@@ -1675,6 +1675,14 @@ func cmdbootstrap() {
 	//
 	//	toolchain3 = mk(new toolchain, toolchain2, go_bootstrap)
 	//
+	// The user's own GOCACHE is safe to return to, VERSION file or not. A key
+	// here names the tool's CONTENT, never the version string: parseToolID
+	// takes the content ID out of the buildID= field that every tool of this
+	// fork prints. A changed compiler therefore cannot hit an entry an older
+	// one wrote, so a repeat make.bash reuses std instead of recompiling it.
+	// GOROOT/pkg/obj/go-build then holds only what toolchain1 and toolchain2
+	// compile, which is the part CI keeps between runs.
+	os.Setenv("GOCACHE", oldgocache)
 	startPhase("toolchain3")
 	if vflag > 0 {
 		xprintf("\n")
@@ -1703,13 +1711,6 @@ func cmdbootstrap() {
 	// Now prime the build cache with the rest of the standard library for
 	// testing, and so that the user can run 'go install std cmd' to quickly
 	// iterate on local changes without waiting for a full rebuild.
-	//
-	// The user's own GOCACHE is safe to return to, VERSION file or not. A key
-	// here names the tool's CONTENT, never the version string: parseToolID
-	// takes the content ID out of the buildID= field that every tool of this
-	// fork prints. A changed compiler therefore cannot hit an entry an older
-	// one wrote, so a repeat make.bash reuses std instead of recompiling it.
-	os.Setenv("GOCACHE", oldgocache)
 
 	if goos == oldgoos && goarch == oldgoarch {
 		// Common case - not setting up for cross-compilation.
