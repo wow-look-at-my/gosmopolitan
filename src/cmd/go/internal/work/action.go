@@ -72,6 +72,9 @@ type Builder struct {
 	gccToolIDCache map[string]string         // tool name -> tool ID
 	buildIDCache   map[string]string         // file name -> build ID
 	pkgConfigCache sync.Map                  // *load.Package -> *pkgConfigResult, so pkg-config runs once per package
+
+	lazy      map[string]lazyOutput            // archive path -> where a lazy hit can fetch it, guarded by id
+	lazyFetch par.ErrCache[string, struct{}] // archive path -> its one fetch
 }
 
 // NOTE: Much of Action would not need to be exported if not for test.
@@ -358,6 +361,7 @@ func NewBuilder(workDir string, getVendorDir func() string) *Builder {
 	b.actionCache = make(map[cacheKey]*Action)
 	b.gccToolIDCache = make(map[string]string)
 	b.buildIDCache = make(map[string]string)
+	b.lazy = make(map[string]lazyOutput)
 
 	printWorkDir := false
 	if workDir != "" {
