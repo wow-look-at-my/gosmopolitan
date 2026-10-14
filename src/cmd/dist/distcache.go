@@ -62,6 +62,7 @@ func toolDigest(path string) string {
 // installKey is the cache key of one runInstall target: the tools, their
 // flags, the sources, and the archives the package imports.
 func installKey(pkg, pkgName string, ispackcmd bool, linkFlags, files, sfiles, sortedImports []string, importMap map[string]string) string {
+	distCacheTrim()
 	key := newDistKey()
 	key.add("target", pkg, pkgName, fmt.Sprint(ispackcmd), goos, goarch, goarm, gomips, gomips64, goppc64, goriscv64, gogcflags, goldflags)
 	key.add("compile", toolDigest(pathf("%s/compile%s", tooldir, exe)))
@@ -176,8 +177,12 @@ func distCachePath(key string) string {
 	return pathf("%s/pkg/obj/go-build/dist/%s/%s", goroot, key[:2], key)
 }
 
+// distCacheTrimAge is how long an entry no run used stays, as for GOCACHE.
+const distCacheTrimAge = 5 * 24 * time.Hour
+
 // distCacheGet copies the cached output for key to target, and reports
-// whether there was one.
+// whether there was one. A hit moves the entry's mtime to now, which is what
+// distCacheTrim reads as use.
 func distCacheGet(key, target string, flag int) bool {
 	src := distCachePath(key)
 	if !isfile(src) {
@@ -185,7 +190,29 @@ func distCacheGet(key, target string, flag int) bool {
 	}
 	xmkdirall(filepath.Dir(target))
 	copyfile(target, src, flag)
+	now := time.Now()
+	os.Chtimes(src, now, now)
 	return true
+}
+
+var distCacheTrimOnce sync.Once
+
+// distCacheTrim removes the entries no run used in distCacheTrimAge. CI keeps
+// the directory between runs, so without this it grows with each change.
+func distCacheTrim() {
+	distCacheTrimOnce.Do(func() {
+		root := pathf("%s/pkg/obj/go-build/dist", goroot)
+		cutoff := time.Now().Add(-distCacheTrimAge)
+		filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+			if err != nil || entry.IsDir() {
+				return nil
+			}
+			if info, err := entry.Info(); err == nil && info.ModTime().Before(cutoff) {
+				os.Remove(path)
+			}
+			return nil
+		})
+	})
 }
 
 // distCachePut stores target as the output for key. The rename makes the
