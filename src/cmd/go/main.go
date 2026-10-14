@@ -20,6 +20,7 @@ import (
 
 	"cmd/go/internal/base"
 	"cmd/go/internal/bug"
+	"cmd/go/internal/cache"
 	"cmd/go/internal/cfg"
 	"cmd/go/internal/clean"
 	"cmd/go/internal/doc"
@@ -336,6 +337,12 @@ func invoke(cmd *base.Command, args []string) {
 			rtrace.Stop()
 			f.Close()
 		}()
+	}
+
+	// The cache opens while the modules load, so its index download does not wait behind them.
+	switch cfg.CmdName {
+	case "build", "install", "test", "run", "vet", "list":
+		go cache.Default()
 	}
 
 	ctx := maybeStartTrace(context.Background())
