@@ -19,7 +19,7 @@ func runtime_getAuxv() []uintptr
 // openProcSelfAuxv answers a read of /proc/self/auxv on a macOS host, which
 // serves no /proc, from the vector the runtime already holds.
 func openProcSelfAuxv(path string, flags int) (fd int, err error, ok bool) {
-	if path != procSelfAuxv || flags&O_ACCMODE != O_RDONLY || !cosmo.Darwin() {
+	if path != procSelfAuxv || flags&O_ACCMODE != O_RDONLY || !(cosmo.Darwin() || loaderBooted()) {
 		return 0, nil, false
 	}
 	if len(runtime_getAuxv()) == 0 {
@@ -28,6 +28,17 @@ func openProcSelfAuxv(path string, flags int) (fd int, err error, ok bool) {
 	}
 	fd, err = openAuxv(flags)
 	return fd, err, true
+}
+
+// loaderBooted reports whether the APE loader mapped this program.
+func loaderBooted() bool {
+	auxv := runtime_getAuxv()
+	for i := 0; i+1 < len(auxv); i += 2 {
+		if auxv[i] == 2 { // AT_EXECFD
+			return true
+		}
+	}
+	return false
 }
 
 // openAuxv serves the file, with no host test of its own. Openat calls it

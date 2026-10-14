@@ -2269,12 +2269,18 @@ func (c *runCache) tryCacheWithID(b *work.Builder, a *work.Action, id string) bo
 		for _, dep := range searchDeps {
 			if dep.Mode == "write coverage meta-data file" {
 				h := cache.NewHash("covermeta")
+				unset := 0
 				for _, metaDep := range dep.Deps {
 					if aid := metaDep.BuildActionID(); aid != "" {
 						fmt.Fprintf(h, "dep %s\n", aid)
+					} else {
+						unset++
 					}
 				}
 				c.covMeta = h.Sum()
+				if cache.DebugTest {
+					fmt.Fprintf(os.Stderr, "testcache: %s: cover meta %x from %d deps, %d without a build ID\n", a.Package.ImportPath, c.covMeta, len(dep.Deps), unset)
+				}
 				break
 			}
 		}
@@ -3078,21 +3084,41 @@ func isRunScratch(name string) bool {
 	return search.InDir(real, realTmp) != "" || search.InDir(name, realTmp) != ""
 }
 
-// isProcessLocal reports whether name is a path that names whichever process
-// reads it: its own /proc entry, its descriptor table, its standard streams.
-// The test process read its own. The go command can only read the go
-// command's, which says nothing about the test.
+// isProcessLocal reports whether name is a path that names live process
+// state: a process's /proc entry, the system's running counters, the
+// descriptor table, the standard streams. The bytes change between two reads,
+// so they key nothing. A metrics library reads /proc/<pid>/stat by number,
+// so /proc/self alone leaves every such test uncacheable. Host settings, as
+// /proc/sys holds, stay inputs.
 func isProcessLocal(name string) bool {
 	switch name {
-	case "/proc/self", "/proc/thread-self", "/dev/fd", "/dev/stdin", "/dev/stdout", "/dev/stderr":
+	case "/proc/self", "/proc/thread-self", "/dev/fd", "/dev/stdin", "/dev/stdout", "/dev/stderr", "/dev/shm":
 		return true
 	}
-	for _, dir := range []string{"/proc/self/", "/proc/thread-self/", "/dev/fd/"} {
+	// Shared memory segments carry the PID and a random name of whichever
+	// processes run at the time.
+	for _, dir := range []string{"/proc/self/", "/proc/thread-self/", "/dev/fd/", "/dev/shm/"} {
 		if strings.HasPrefix(name, dir) {
 			return true
 		}
 	}
-	return false
+	rest, ok := strings.CutPrefix(name, "/proc/")
+	if !ok {
+		return false
+	}
+	first, _, _ := strings.Cut(rest, "/")
+	if first != "" && strings.Trim(first, "0123456789") == "" {
+		return true
+	}
+	return procCounters[rest]
+}
+
+// procCounters are the /proc files whose bytes are the system's running
+// totals.
+var procCounters = map[string]bool{
+	"stat": true, "meminfo": true, "loadavg": true, "uptime": true, "vmstat": true,
+	"diskstats": true, "schedstat": true, "softirqs": true, "interrupts": true,
+	"pressure/cpu": true, "pressure/io": true, "pressure/memory": true,
 }
 
 // isBuildCache reports whether name is in this build's cache directory. A
