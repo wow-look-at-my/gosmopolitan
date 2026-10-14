@@ -106,8 +106,10 @@ __attribute__((noreturn)) static void die(const char *msg) {
 // APE is a valid shell script. Root registers this loader for the APE magic
 // system-wide, so a foreign APE reaches it too.
 __attribute__((noreturn)) static void shell(char **argv, char **envp) {
-	argv[0] = (char *)"/bin/sh";
-	sc3(SYS_execve, argv[0], argv, envp);
+	char *sh = (char *)"/bin/sh";
+	__asm__("" : "+r"(sh));
+	argv[0] = sh;
+	sc3(SYS_execve, sh, argv, envp);
 	die("no payload for this machine, and /bin/sh did not start");
 }
 
