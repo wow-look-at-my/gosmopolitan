@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"time"
 )
 
 // dist compiles go_bootstrap itself, so no go command and no GOCACHE serves
@@ -77,14 +78,50 @@ func installKey(pkg, pkgName string, ispackcmd bool, linkFlags, files, sfiles, s
 	for _, path := range sorted {
 		key.file(path)
 	}
+	deps := make([]string, 0, len(sortedImports))
 	for _, imp := range sortedImports {
 		if imp == "unsafe" {
 			continue
 		}
 		dep := importMap[imp]
-		key.add("import", imp, dep, fileDigest(packagefile(dep)))
+		deps = append(deps, dep)
+		if ispackcmd {
+			// A compile reads only what its direct imports export.
+			key.add("import", imp, dep, fileDigest(packagefile(dep)))
+		} else {
+			// A link reads every package below it, and a change deep down can leave each direct import's archive as it was.
+			key.add("import", imp, dep, deepDigest(dep))
+		}
 	}
+	packageImports.Store(pkg, deps)
 	return key.sum()
+}
+
+var (
+	packageImports sync.Map // package path -> the package paths it imports
+	deepDigests    sync.Map // package path -> deepDigest
+)
+
+// deepDigest is the digest of the archive of pkg and of every archive below
+// it. runInstall installs a package's imports before the package, so each
+// has recorded its imports when this reads them.
+func deepDigest(pkg string) string {
+	if digest, ok := deepDigests.Load(pkg); ok {
+		return digest.(string)
+	}
+	deps, ok := packageImports.Load(pkg)
+	if !ok {
+		// This run did not build pkg, so what is below it is not known. A digest no other run has makes the link a miss.
+		return fmt.Sprintf("unknown %s %d", pkg, time.Now().UnixNano())
+	}
+	key := &distKey{h: sha256.New()}
+	key.add(pkg, fileDigest(packagefile(pkg)))
+	for _, dep := range deps.([]string) {
+		key.add(dep, deepDigest(dep))
+	}
+	digest := key.sum()
+	deepDigests.Store(pkg, digest)
+	return digest
 }
 
 // distKey builds one cache key.
