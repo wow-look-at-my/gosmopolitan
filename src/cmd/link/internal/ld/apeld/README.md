@@ -6,7 +6,7 @@ Upstream is [wow-look-at-my/ape-research](https://github.com/wow-look-at-my/ape-
 
 | loader | how it boots the payload |
 |---|---|
-| `bin/apeld-linux-amd64`, `bin/apeld-linux-arm64` | copies only this payload's PT_LOAD ranges into a sparse memfd, writes the payload's ELF header over offset 0, `execveat`s the memfd |
+| `bin/apeld-linux-amd64`, `bin/apeld-linux-arm64` | maps the payload's segments straight from the APE file, builds the start stack with `AT_EXECFD` naming the APE, jumps. A mount that refuses an executable mapping gets a sparse memfd of the payload's PT_LOAD ranges instead |
 | `bin/apeld-darwin-arm64` | maps the arm64 ELF payload itself, builds the SysV stack and auxv, hands over a Syslib table of libSystem entry points, jumps |
 
 windows/amd64 has no loader. The APE is a valid PE and the OS maps the payload straight from the file, read-only path or not.
