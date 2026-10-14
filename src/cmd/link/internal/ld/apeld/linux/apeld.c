@@ -107,6 +107,7 @@ __attribute__((noreturn)) static void die(const char *msg) {
 // system-wide, so a foreign APE reaches it too.
 __attribute__((noreturn)) static void shell(char **argv, char **envp) {
 	char *sh = (char *)"/bin/sh";
+	// The loader sits too high for a sign-extended store of the literal, so the pointer goes through a register.
 	__asm__("" : "+r"(sh));
 	argv[0] = sh;
 	sc3(SYS_execve, sh, argv, envp);
