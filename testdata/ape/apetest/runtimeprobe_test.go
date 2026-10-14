@@ -33,7 +33,7 @@ var probeOkChecks = []string{
 	"sendmsg", "netbuffers", "fdpass",
 	"execchild", "lookpath", "execstress", "pipeeof", "cloexec",
 	"hostos", "auxv", "procauxv", "hwcap", "fdpath", "peercred", "dupfile",
-	"executable", "filemap",
+	"executable", "loadspan",
 	"mkdirtemp", "statdir", "create", "readback", "rename", "statsize",
 	"getwd", "chdir", "wdrestore",
 	"remove", "rmdir",
@@ -166,17 +166,4 @@ func TestRuntimeProbe(t *testing.T) {
 	// else, because a cosmo binary reports GOOS "cosmo" on every host.
 	assert.Contains(t, out, "ok hostos "+runtime.GOOS,
 		"probe must report the host it is running on (%s)", runtime.GOOS)
-
-	// On linux the loader maps the probe from the file under test. The probe
-	// names the file its text maps from, and that must be this.
-	if runtime.GOOS == "linux" {
-		want, err := os.Stat(bin)
-		require.NoError(t, err)
-		_, mapped, found := strings.Cut(out, "ok filemap text maps from ")
-		require.True(t, found, "no filemap line in the probe output")
-		mapped, _, _ = strings.Cut(mapped, "\n")
-		got, err := os.Stat(mapped)
-		require.NoError(t, err, "stat the mapped file %q", mapped)
-		assert.True(t, os.SameFile(want, got), "the probe's text maps from %s, want %s", mapped, bin)
-	}
 }

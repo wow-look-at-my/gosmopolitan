@@ -11,19 +11,8 @@ import (
 	"internal/stringslite"
 	"runtime"
 	"sync"
-<<<<<<< HEAD
-<<<<<<< HEAD
-	_ "unsafe" // for linkname
-=======
 	_ "unsafe"
->>>>>>> origin/master
-=======
-	_ "unsafe"
->>>>>>> origin/master
 )
-
-//go:linkname executablePath
-var executablePath string
 
 // Cosmopolitan binaries run on several host operating systems. On Linux hosts /proc/self/exe gives the answer directly.
 
@@ -42,22 +31,6 @@ func executable() (string, error) {
 	// of procfs on the other hosts. A success here is no proof the answer names
 	// a file, and trusting one hands back a name that opens nothing.
 	if runtime.CosmoHostOS() == "linux" {
-<<<<<<< HEAD
-<<<<<<< HEAD
-		path, err := Readlink("/proc/self/exe")
-		// Readlink appends " (deleted)" for a file nothing links to.
-		path = stringslite.TrimSuffix(path, " (deleted)")
-		named := execFnPath()
-		// The kernel exec'd this file itself when the link and AT_EXECFN name one
-		// file.
-		if err == nil && !stringslite.HasPrefix(path, "/memfd:") && (named == "" || samePath(path, named)) {
-			return path, nil
-		}
-		if named != "" && isExecutable(named) == nil {
-			return named, nil
-=======
-=======
->>>>>>> origin/master
 		// The APE loader maps the payload itself, so /proc/self/exe names the
 		// loader. It hands over the APE's own descriptor as AT_EXECFD.
 		if fd := execFD(); fd >= 0 {
@@ -73,7 +46,6 @@ func executable() (string, error) {
 			if !stringslite.HasPrefix(path, "/memfd:") {
 				return path, nil
 			}
->>>>>>> origin/master
 		}
 	}
 
@@ -81,37 +53,6 @@ func executable() (string, error) {
 	return exeOnce.path, exeOnce.err
 }
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-// execFnPath answers AT_EXECFN as an absolute path, or "" when the kernel
-// passed none or a relative one cannot be resolved.
-func execFnPath() string {
-	if executablePath == "" {
-		return ""
-	}
-	if filepathlite.IsAbs(executablePath) {
-		return executablePath
-	}
-	if errWd != nil {
-		return ""
-	}
-	return initWd + string(PathSeparator) + executablePath
-}
-
-// samePath reports whether paths name one file.
-func samePath(first, second string) bool {
-	firstInfo, err := Stat(first)
-	if err != nil {
-		return false
-	}
-	secondInfo, err := Stat(second)
-	if err != nil {
-		return false
-	}
-	return SameFile(firstInfo, secondInfo)
-=======
-=======
->>>>>>> origin/master
 //go:linkname runtime_getAuxv runtime.getAuxv
 func runtime_getAuxv() []uintptr
 
@@ -126,10 +67,6 @@ func execFD() int {
 		}
 	}
 	return -1
-<<<<<<< HEAD
->>>>>>> origin/master
-=======
->>>>>>> origin/master
 }
 
 func resolveArgv0() (string, error) {
