@@ -176,6 +176,8 @@ func TestSpuriousEDEADLK(t *testing.T) {
 	// 	P.2 unblocks and locks file B.
 	// 	P.2 unlocks file B.
 
+	testenv.MustHaveExec(t)
+
 	dirVar := t.Name() + "DIR"
 
 	if dir := os.Getenv(dirVar); dir != "" {
