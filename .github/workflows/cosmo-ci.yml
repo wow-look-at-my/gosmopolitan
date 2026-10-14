@@ -736,9 +736,10 @@ jobs:
         run: curl -sSfL https://wasmtime.dev/install.sh | bash -s -- --version v14.0.4
 
       # wasmtime compiles each test binary's module before running it. That compile is most of a cheap package: sort.test costs 2.53s cold against 1.05s warm.
+      # Every branch reads the cache. Only master writes it, and it keeps one copy: an entry is 4.6 GiB against the repository's 10 GiB.
       - name: Keep the compiled wasm modules between runs
         if: matrix.port == 'wasip1'
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: ~/.cache/wasmtime
           key: wasmtime-modules-${{ matrix.port }}-${{ github.sha }}
@@ -819,6 +820,36 @@ jobs:
             core.info(`${port}: recorded ${rows.length} package timings, ${total.toFixed(1)}s total`);
         env:
           WASM_PORT: ${{ matrix.port }}
+
+      # The modules of every earlier commit stay in the directory, so a cache past 2 GiB starts over empty.
+      - name: Start the wasm module cache over once it outgrows 2 GiB
+        if: matrix.port == 'wasip1' && github.ref == 'refs/heads/master'
+        shell: bash
+        run: |
+          size=$(du -sm ~/.cache/wasmtime 2>/dev/null | cut -f1)
+          echo "wasm module cache: ${size:-0} MiB"
+          if [ "${size:-0}" -gt 2048 ]; then rm -rf ~/.cache/wasmtime; fi
+
+      - name: Delete the older wasm module caches
+        if: matrix.port == 'wasip1' && github.ref == 'refs/heads/master'
+        uses: wow-look-at-my/actions@typescript#latest
+        with:
+          script: |
+            const prefix = `wasmtime-modules-${process.env.WASM_PORT}-`;
+            const caches = await octokit.paginate(octokit.rest.actions.getActionsCacheList, { ...context.repo, key: prefix, per_page: 100 });
+            for (const entry of caches) {
+              await octokit.rest.actions.deleteActionsCacheById({ ...context.repo, cache_id: entry.id! });
+              core.info(`deleted ${entry.key} (${Math.round((entry.size_in_bytes ?? 0) / 1048576)} MiB)`);
+            }
+        env:
+          WASM_PORT: ${{ matrix.port }}
+
+      - name: Save the compiled wasm modules
+        if: matrix.port == 'wasip1' && github.ref == 'refs/heads/master'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/wasmtime
+          key: wasmtime-modules-${{ matrix.port }}-${{ github.sha }}
 
       - if: failure()
         uses: wow-look-at-my/actions@fail-fast#latest
