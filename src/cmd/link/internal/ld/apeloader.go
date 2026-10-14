@@ -39,7 +39,11 @@ type apeLoader struct {
 const (
 	apeLdLinuxAMD64Offset  = 0x2800
 <<<<<<< HEAD
+<<<<<<< HEAD
 	apeLdLinuxARM64Offset  = 0x3400
+=======
+	apeLdLinuxARM64Offset  = 0x3800
+>>>>>>> origin/master
 =======
 	apeLdLinuxARM64Offset  = 0x3800
 >>>>>>> origin/master
