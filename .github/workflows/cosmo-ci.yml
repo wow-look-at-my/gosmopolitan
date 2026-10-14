@@ -735,8 +735,7 @@ jobs:
         shell: bash
         run: curl -sSfL https://wasmtime.dev/install.sh | bash -s -- --version v14.0.4
 
-      # wasmtime compiles each test binary's module before running it. That compile is most of a cheap package: sort.test costs 2.53s cold against 1.05s warm.
-      # Every branch reads the cache. Only master writes it, and it keeps one copy: an entry is 4.6 GiB against the repository's 10 GiB.
+      # wasmtime compiles each test binary's module before running it. That compile is most of a cheap package: sort.test costs 2.53s cold against 1.05s warm. Every branch reads the cache. Only master writes it, and it keeps one copy: an entry is 4.6 GiB against the repository's 10 GiB.
       - name: Keep the compiled wasm modules between runs
         if: matrix.port == 'wasip1'
         uses: actions/cache/restore@v4
