@@ -38,7 +38,11 @@ type apeLoader struct {
 // slot; placeApeLoaders fails the link if one outgrows it.
 const (
 	apeLdLinuxAMD64Offset  = 0x2800
+<<<<<<< HEAD
 	apeLdLinuxARM64Offset  = 0x3400
+=======
+	apeLdLinuxARM64Offset  = 0x3800
+>>>>>>> origin/master
 	apeLdDarwinARM64Offset = 0x8000
 )
 

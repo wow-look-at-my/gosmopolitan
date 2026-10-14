@@ -7,10 +7,15 @@ package os
 
 import (
 	"internal/filepathlite"
+	"internal/strconv"
 	"internal/stringslite"
 	"runtime"
 	"sync"
+<<<<<<< HEAD
 	_ "unsafe" // for linkname
+=======
+	_ "unsafe"
+>>>>>>> origin/master
 )
 
 //go:linkname executablePath
@@ -33,6 +38,7 @@ func executable() (string, error) {
 	// of procfs on the other hosts. A success here is no proof the answer names
 	// a file, and trusting one hands back a name that opens nothing.
 	if runtime.CosmoHostOS() == "linux" {
+<<<<<<< HEAD
 		path, err := Readlink("/proc/self/exe")
 		// Readlink appends " (deleted)" for a file nothing links to.
 		path = stringslite.TrimSuffix(path, " (deleted)")
@@ -44,6 +50,23 @@ func executable() (string, error) {
 		}
 		if named != "" && isExecutable(named) == nil {
 			return named, nil
+=======
+		// The APE loader maps the payload itself, so /proc/self/exe names the
+		// loader. It hands over the APE's own descriptor as AT_EXECFD.
+		if fd := execFD(); fd >= 0 {
+			if path, err := Readlink("/proc/self/fd/" + strconv.Itoa(fd)); err == nil {
+				return stringslite.TrimSuffix(path, " (deleted)"), nil
+			}
+		}
+		if path, err := Readlink("/proc/self/exe"); err == nil {
+			// Readlink appends " (deleted)" for a file nothing links to.
+			path = stringslite.TrimSuffix(path, " (deleted)")
+			// An APE boots through a loader that execs a memfd, so on Linux the link
+			// reads "/memfd:<name>".
+			if !stringslite.HasPrefix(path, "/memfd:") {
+				return path, nil
+			}
+>>>>>>> origin/master
 		}
 	}
 
@@ -51,6 +74,7 @@ func executable() (string, error) {
 	return exeOnce.path, exeOnce.err
 }
 
+<<<<<<< HEAD
 // execFnPath answers AT_EXECFN as an absolute path, or "" when the kernel
 // passed none or a relative one cannot be resolved.
 func execFnPath() string {
@@ -77,6 +101,22 @@ func samePath(first, second string) bool {
 		return false
 	}
 	return SameFile(firstInfo, secondInfo)
+=======
+//go:linkname runtime_getAuxv runtime.getAuxv
+func runtime_getAuxv() []uintptr
+
+// atExecFD is the auxv tag of the descriptor that holds the program file.
+const atExecFD = 2
+
+func execFD() int {
+	auxv := runtime_getAuxv()
+	for i := 0; i+1 < len(auxv); i += 2 {
+		if auxv[i] == atExecFD {
+			return int(auxv[i+1])
+		}
+	}
+	return -1
+>>>>>>> origin/master
 }
 
 func resolveArgv0() (string, error) {
