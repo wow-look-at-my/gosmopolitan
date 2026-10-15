@@ -528,6 +528,10 @@ type goTest struct {
 	// packages' tests share (-keepbinary).
 	keep string
 
+	// actionGraph, if non-empty, is where go test writes its action graph
+	// with timings (-debug-actiongraph). reportSlowActions reads it.
+	actionGraph string
+
 	// shared says this test differs from the package's run only in the
 	// flags its binary starts with. It starts the binary every package's
 	// tests compile into, with those flags, and builds nothing of its own.
@@ -883,6 +887,9 @@ func (opts *goTest) buildArgs(t *tester) (build, run, pkgs, testFlags []string, 
 	if opts.pgo != "" {
 		build = append(build, "-pgo="+opts.pgo)
 	}
+	if opts.actionGraph != "" {
+		build = append(build, "-debug-actiongraph="+opts.actionGraph)
+	}
 	if opts.keep != "" {
 		build = append(build, "-keepbinary="+opts.keep)
 	}
@@ -1005,11 +1012,15 @@ func (t *tester) registerStdTest(pkg string) {
 		// One step builds and runs every package here, so its own line is the only thing that accounts for the compile.
 		var err error
 		if len(rest) > 0 {
+			if !t.json {
+				test.actionGraph = filepath.Join(workdir, "std.test.actions.json")
+			}
 			started := time.Now()
 			var state *os.ProcessState
 			state, err = test.runState(t)
 			if !t.json {
 				reportTestStep("std.test", time.Since(started), state)
+				reportSlowActions(os.Stdout, "std.test", test.actionGraph)
 			}
 			t.recordOneBinary(false, test.keep, rest)
 		}
@@ -1017,10 +1028,14 @@ func (t *tester) registerStdTest(pkg string) {
 		if alone {
 			cmdGo := oneBinaryTest([]string{"cmd/go"}, goos)
 			cmdGo.timeout = timeoutSec
+			if !t.json {
+				cmdGo.actionGraph = filepath.Join(workdir, "cmd-go.test.actions.json")
+			}
 			started := time.Now()
 			state, errCmdGo := cmdGo.runState(t)
 			if !t.json {
 				reportTestStep("cmd-go.test", time.Since(started), state)
+				reportSlowActions(os.Stdout, "cmd-go.test", cmdGo.actionGraph)
 			}
 			if err == nil {
 				err = errCmdGo
