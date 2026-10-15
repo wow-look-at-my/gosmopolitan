@@ -717,7 +717,8 @@ func TestRegexpPrecompileWarning(t *testing.T) {
 	}
 	build := testenv.Command(t, testenv.GoToolPath(t), "build", "-o", filepath.Join(dir, "warn.exe"), ".")
 	build.Dir = dir
-	build.Env = append(os.Environ(), "GOOS=linux", "GOARCH=amd64", "CGO_ENABLED=0", "GOFLAGS=")
+	// GITHUB_ACTIONS= keeps the warnings in their plain form, not as annotations.
+	build.Env = append(os.Environ(), "GOOS=linux", "GOARCH=amd64", "CGO_ENABLED=0", "GOFLAGS=", "GITHUB_ACTIONS=")
 	out, err := build.CombinedOutput()
 	if err != nil {
 		t.Fatalf("a performance warning failed the build: %v\n%s", err, out)
