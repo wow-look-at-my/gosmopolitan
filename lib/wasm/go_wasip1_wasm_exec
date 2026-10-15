@@ -3,6 +3,52 @@
 # Use of this source code is governed by a BSD-style
 # license that can be found in the LICENSE file.
 
+# go_wasip1_precompile prints a precompiled copy of the module $1. Each start
+# of a module makes wasmtime compile it, and the compile of a test binary
+# takes many seconds. Starts of one module at the same time all compile it
+# and share the cores. Here one start compiles under a lock, and every other
+# start of the same bytes waits for it, in this run or a later one. The copy
+# has the module's own file name, so the program sees that name in os.Args[0].
+go_wasip1_precompile() {
+	local src=$1
+	local cache=${GOWASIP1_PRECOMPILED:-${XDG_CACHE_HOME:-$HOME/.cache}/wasmtime/go-precompiled}
+	mkdir -p "$cache/stat" || return
+	local version
+	version=$(wasmtime --version) || return
+	# The content hash of a file is read one time per change of the file.
+	local identity
+	identity=$(stat -c '%s %y %i' "$src" 2>/dev/null || stat -f '%z %Fm %i' "$src") || return
+	local stamp
+	stamp="$cache/stat/$(printf '%s\n%s\n' "$src" "$identity" | sha256sum | cut -c1-32)"
+	local digest
+	if [ -f "$stamp" ]; then
+		digest=$(<"$stamp")
+	else
+		digest=$({ printf '%s\n' "$version"; cat "$src"; } | sha256sum | cut -c1-40) || return
+		printf '%s\n' "$digest" >"$stamp.$$" && mv "$stamp.$$" "$stamp"
+	fi
+	local dir="$cache/$digest"
+	local out
+	out="$dir/$(basename "$src")"
+	if [ ! -f "$out" ]; then
+		mkdir -p "$dir" || return
+		(
+			# macOS ships no flock. There each start compiles for itself, as before.
+			if command -v flock >/dev/null; then
+				flock 9 || exit
+			fi
+			if [ ! -f "$out" ]; then
+				wasmtime compile -C cache=n -W max-wasm-stack=8388608 -o "$out.$$" "$src" >&2 && mv "$out.$$" "$out"
+			fi
+		) 9>"$dir/lock" || return
+		# A module no run started for two days goes. A compile is the time to look.
+		find "$cache" -mindepth 1 -maxdepth 1 -type d ! -name stat -mtime +2 -exec rm -rf {} + 2>/dev/null
+		find "$cache/stat" -type f -mtime +2 -delete 2>/dev/null
+	fi
+	touch "$dir"
+	printf '%s\n' "$out"
+}
+
 case "$GOWASIRUNTIME" in
 	"wasmedge")
 		exec wasmedge --dir=/ --env PWD="$PWD" --env PATH="$PATH" ${GOWASIRUNTIMEARGS:-} "$1" "${@:2}"
@@ -14,7 +60,13 @@ case "$GOWASIRUNTIME" in
 		exec wazero run -mount /:/ -env-inherit -cachedir "${TMPDIR:-/tmp}"/wazero ${GOWASIRUNTIMEARGS:-} "$1" "${@:2}"
 		;;
 	"wasmtime" | "")
-		exec wasmtime run --dir=/ --env PWD="$PWD" --env PATH="$PATH" -W max-wasm-stack=8388608 ${GOWASIRUNTIMEARGS:-} "$1" "${@:2}"
+		if [ -n "${GOWASIRUNTIMEARGS:-}" ]; then
+			# Extra arguments can change the code wasmtime makes, so a module
+			# compiled without them does not stand in for one compiled with them.
+			exec wasmtime run --dir=/ --env PWD="$PWD" --env PATH="$PATH" -W max-wasm-stack=8388608 ${GOWASIRUNTIMEARGS} "$1" "${@:2}"
+		fi
+		module=$(go_wasip1_precompile "$1") || exit
+		exec wasmtime run --allow-precompiled --dir=/ --env PWD="$PWD" --env PATH="$PATH" -W max-wasm-stack=8388608 "$module" "${@:2}"
 		;;
 	*)
 		echo "Unknown Go WASI runtime specified: $GOWASIRUNTIME"
