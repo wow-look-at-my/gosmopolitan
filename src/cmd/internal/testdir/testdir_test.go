@@ -704,7 +704,9 @@ func (t test) run() error {
 		if goexp != goExperiment {
 			env = append(env, "GOEXPERIMENT="+goexp)
 		}
-		return &builder{flags: parsed, env: env, work: tempDir, omitDebug: omitDebug, run: runWith}, nil
+		// The source sits in a new temporary directory each run. Trimmed, a
+		// program is the same bytes every run, and a wasm runtime compiles it once.
+		return &builder{flags: parsed, env: env, work: tempDir, srcTrim: tempDir + "=>testdir", omitDebug: omitDebug, run: runWith}, nil
 	}
 
 	// goRun builds and runs what `go run flags args...` would: the leading
@@ -791,7 +793,7 @@ func (t test) run() error {
 			if parsed.race {
 				buildEnv = append(buildEnv, "CGO_ENABLED=1")
 			}
-			bld := &builder{flags: parsed, env: buildEnv, work: tempDir, run: func(extra []string, args ...string) ([]byte, error) {
+			bld := &builder{flags: parsed, env: buildEnv, work: tempDir, srcTrim: tempDir + "=>testdir", run: func(extra []string, args ...string) ([]byte, error) {
 				cmd := exec.Command(args[0], args[1:]...)
 				cmd.Env = append(os.Environ(), extra...)
 				var buf bytes.Buffer
