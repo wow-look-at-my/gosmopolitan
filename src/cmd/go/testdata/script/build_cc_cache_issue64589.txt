@@ -45,7 +45,8 @@ go build -x runtime/cgo
 	# resulted in a cache key with no clang version information.
 env GO_BREAK_CLANG=1
 ! go build -x runtime/cgo
-stderr '# runtime/cgo\nGO_BREAK_CLANG is set'
+stderr '^GO_BREAK_CLANG is set'
+! stderr '^# runtime/cgo'
 
 -- go.mod --
 module example/issue64589

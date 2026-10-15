@@ -98,19 +98,14 @@ func testPGOIntendedInlining(t *testing.T, dir string, profFile string) {
 	out := buildPGOInliningTest(t, dir, gcflag)
 
 	scanner := bufio.NewScanner(bytes.NewReader(out))
-	curPkg := ""
+	// The build applies -m to one package, so every diagnostic is about it.
+	curPkg := pkg
 	canInline := regexp.MustCompile(`: can inline ([^ ]*)`)
 	haveInlined := regexp.MustCompile(`: inlining call to ([^ ]*)`)
 	cannotInline := regexp.MustCompile(`: cannot inline ([^ ]*): (.*)`)
 	for scanner.Scan() {
 		line := scanner.Text()
 		t.Logf("child: %s", line)
-		if strings.HasPrefix(line, "# ") {
-			curPkg = line[2:]
-			splits := strings.Split(curPkg, " ")
-			curPkg = splits[0]
-			continue
-		}
 		if m := haveInlined.FindStringSubmatch(line); m != nil {
 			fname := m[1]
 			delete(notInlinedReason, curPkg+"."+fname)
