@@ -771,7 +771,7 @@ func (b *Builder) useCache(a *Action, actionHash cache.ActionID, target string, 
 	if b.lazyEnabled(a) && cache.Retrievable(c, a.actionID) {
 		if record, ok := readLazy(a, c); ok {
 			if printOutput {
-				if err := showStdout(b, c, a, "stdout"); err != nil { // compile output
+				if err := showStdout(b, c, a, compileOutputKey); err != nil {
 					a.output = []byte{}
 					return false
 				}
