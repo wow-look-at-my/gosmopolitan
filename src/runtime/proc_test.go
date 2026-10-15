@@ -1125,6 +1125,10 @@ func TestPreemptionAfterSyscall(t *testing.T) {
 	if runtime.GOOS == "plan9" {
 		testenv.SkipFlaky(t, 41015)
 	}
+	// It sets GOMAXPROCS for the whole process and bounds each round by the
+	// wall clock, so a test beside it changes both what it measures and the
+	// procs that test has.
+	t.Serial()
 
 	for _, i := range []time.Duration{10, 100, 1000} {
 		d := i * time.Microsecond
