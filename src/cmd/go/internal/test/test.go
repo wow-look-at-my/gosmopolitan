@@ -2366,22 +2366,18 @@ func (c *runCache) tryCacheWithID(b *work.Builder, a *work.Action, id string) bo
 
 	// Load list of referenced environment variables and files
 	// from last run of testID, and compute hash of that content.
-	data, entry, err := cache.GetBytes(cache.Default(), testID)
-	if !bytes.HasPrefix(data, testlogMagic) || data[len(data)-1] != '\n' {
+	testlogs := savedTestlogs(cache.Default(), testID)
+	if len(testlogs) == 0 {
 		if cache.DebugTest {
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "testcache: %s: input list not found: %v\n", a.Package.ImportPath, err)
-			} else {
-				fmt.Fprintf(os.Stderr, "testcache: %s: input list malformed\n", a.Package.ImportPath)
-			}
+			fmt.Fprintf(os.Stderr, "testcache: %s: input list not found\n", a.Package.ImportPath)
 		}
 		if cache.MissNotices() {
 			c.misses = append(c.misses, func() { explainBinaryMiss(a, cacheArgs, id) })
 		}
 		return false
 	}
-	inputList := data
-	testInputsID, inputLines, err := computeTestInputsID(a, data)
+	inputList := testlogs[0]
+	testInputsID, inputLines, err := computeTestInputsID(a, inputList)
 	if err != nil {
 		return false
 	}
@@ -2391,13 +2387,12 @@ func (c *runCache) tryCacheWithID(b *work.Builder, a *work.Action, id string) bo
 
 	// Parse cached result in preparation for changing run time to "(cached)".
 	// If we can't parse the cached result, don't use it.
-	data, entry, err = cache.GetBytes(cache.Default(), testAndInputKey(testID, testInputsID))
+	data, entry, err := cache.GetBytes(cache.Default(), testAndInputKey(testID, testInputsID))
 	tried := []triedTestlog{{inputList, inputLines}}
 	if err != nil {
 		// Runs of one binary that differ in their environment read different
-		// files, and the last testlog written belongs to whichever ran last.
-		// Every other testlog this binary has written is tried before a miss.
-		for _, other := range otherTestlogs(testID, inputList) {
+		// files. Every other testlog this binary has written is tried before a miss.
+		for _, other := range testlogs[1:] {
 			otherID, otherLines, otherErr := computeTestInputsID(a, other)
 			if otherErr != nil {
 				continue
@@ -2487,7 +2482,7 @@ func (c *runCache) tryCacheWithID(b *work.Builder, a *work.Action, id string) bo
 			profile, readErr = os.ReadFile(cpData)
 		}
 		if readErr == nil {
-			saveTestlog(c.id1, inputList)
+			saveTestlog(cache.Default(), c.id1, inputList, testlogShape(inputLines))
 			cache.PutNoVerify(cache.Default(), inputLinesKey(c.id1, inputList), bytes.NewReader(inputLines))
 			cache.PutNoVerify(cache.Default(), testAndInputKey(c.id1, testInputsID), bytes.NewReader(data))
 			if testCoverProfile != "" || c.covMeta != (cache.ActionID{}) {
@@ -2853,58 +2848,74 @@ func readHostsFile(file string) (map[string]netconf.ByName, map[string][]string,
 }
 
 // maxTestlogs bounds how many distinct testlogs one test binary keeps.
-const maxTestlogs = 16
+const maxTestlogs = 64
 
-// testlogsKey is where the digests of every distinct testlog written under
-// testID are kept, newest first, one hex digest a line.
-func testlogsKey(testID cache.ActionID) cache.ActionID {
-	return cache.Subkey(testID, "testlogs")
+// The shared store keeps the first body written under a key and never
+// replaces it. So every key here is written once: testlog n of a test ID
+// goes in slot n, and its shape names which reads it lists.
+
+// testlogSlotKey is where testlog n of testID is kept.
+func testlogSlotKey(testID cache.ActionID, slot int) cache.ActionID {
+	return cache.Subkey(testID, fmt.Sprintf("testlog-slot:%d", slot))
 }
 
-// testlogDigestKey is where the testlog with the given digest is kept.
-func testlogDigestKey(testID cache.ActionID, digest string) cache.ActionID {
-	return cache.Subkey(testID, "testlog:"+digest)
+// testlogShapeKey is where the shape of testlog n of testID is kept.
+func testlogShapeKey(testID cache.ActionID, slot int) cache.ActionID {
+	return cache.Subkey(testID, fmt.Sprintf("testlog-shape:%d", slot))
 }
 
-// saveTestlog writes testlog as the latest under testID, and adds it to the
-// testlogs a lookup under testID tries.
-func saveTestlog(testID cache.ActionID, testlog []byte) {
-	cache.PutNoVerify(cache.Default(), testID, bytes.NewReader(testlog))
-	digest := fmt.Sprintf("%x", sha256.Sum256(testlog))
-	cache.PutNoVerify(cache.Default(), testlogDigestKey(testID, digest), bytes.NewReader(testlog))
-	digests := []string{digest}
-	saved, _, _ := cache.GetBytes(cache.Default(), testlogsKey(testID))
-	for line := range strings.Lines(string(saved)) {
-		line = strings.TrimSpace(line)
-		if line == "" || line == digest || len(digests) == maxTestlogs {
-			continue
+// testlogShape names the reads that input lines list, less what each read
+// found. Two testlogs of one shape give one inputs ID for one state of the
+// machine, so a test ID keeps one testlog per shape.
+func testlogShape(inputLines []byte) string {
+	h := sha256.New()
+	for line := range strings.Lines(string(inputLines)) {
+		line = strings.TrimSuffix(line, "\n")
+		if idx := strings.LastIndexByte(line, ' '); idx >= 0 {
+			line = line[:idx]
 		}
-		digests = append(digests, line)
+		fmt.Fprintf(h, "%s\n", line)
 	}
-	cache.PutNoVerify(cache.Default(), testlogsKey(testID), strings.NewReader(strings.Join(digests, "\n")+"\n"))
+	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
-// otherTestlogs answers every testlog saved under testID except latest,
-// newest first. One evicted from the cache is left out.
-func otherTestlogs(testID cache.ActionID, latest []byte) [][]byte {
-	saved, _, err := cache.GetBytes(cache.Default(), testlogsKey(testID))
-	if err != nil {
-		return nil
-	}
-	skip := fmt.Sprintf("%x", sha256.Sum256(latest))
-	var others [][]byte
-	for line := range strings.Lines(string(saved)) {
-		line = strings.TrimSpace(line)
-		if line == "" || line == skip {
+// saveTestlog keeps testlog under testID, unless a testlog of its shape is
+// kept already. A slot another run took first holds that run's shape, and
+// this testlog goes in the next free slot.
+func saveTestlog(store cache.Cache, testID cache.ActionID, testlog []byte, shape string) {
+	for slot := range maxTestlogs {
+		saved, _, err := cache.GetBytes(store, testlogShapeKey(testID, slot))
+		if err == nil {
+			if string(saved) == shape {
+				return
+			}
 			continue
 		}
-		testlog, _, err := cache.GetBytes(cache.Default(), testlogDigestKey(testID, line))
-		if err != nil || !bytes.HasPrefix(testlog, testlogMagic) || testlog[len(testlog)-1] != '\n' {
+		cache.PutNoVerify(store, testlogSlotKey(testID, slot), bytes.NewReader(testlog))
+		cache.PutNoVerify(store, testlogShapeKey(testID, slot), strings.NewReader(shape))
+		return
+	}
+}
+
+// savedTestlogs answers every testlog kept under testID, newest first. The
+// slots fill in order, so the first empty one ends the list.
+func savedTestlogs(store cache.Cache, testID cache.ActionID) [][]byte {
+	var saved [][]byte
+	for slot := range maxTestlogs {
+		testlog, _, err := cache.GetBytes(store, testlogSlotKey(testID, slot))
+		if err != nil {
+			if _, _, shapeErr := cache.GetBytes(store, testlogShapeKey(testID, slot)); shapeErr != nil {
+				break
+			}
+			continue // evicted, while later slots are not
+		}
+		if !bytes.HasPrefix(testlog, testlogMagic) || testlog[len(testlog)-1] != '\n' {
 			continue
 		}
-		others = append(others, testlog)
+		saved = append(saved, testlog)
 	}
-	return others
+	slices.Reverse(saved)
+	return saved
 }
 
 // inputLinesKey is where the lines behind a test result's inputs ID are kept,
@@ -3288,7 +3299,7 @@ func (c *runCache) saveOutput(a *work.Action) {
 		if cache.DebugTest {
 			fmt.Fprintf(os.Stderr, "testcache: %s: save test ID %x => input ID %x => %x\n", a.Package.ImportPath, c.id1, testInputsID, testAndInputKey(c.id1, testInputsID))
 		}
-		saveTestlog(c.id1, testlog)
+		saveTestlog(cache.Default(), c.id1, testlog, testlogShape(inputLines))
 		cache.PutNoVerify(cache.Default(), inputLinesKey(c.id1, testlog), bytes.NewReader(inputLines))
 		cache.PutNoVerify(cache.Default(), testAndInputKey(c.id1, testInputsID), bytes.NewReader(a.TestOutput.Bytes()))
 		if coverProfile != nil {
@@ -3303,7 +3314,7 @@ func (c *runCache) saveOutput(a *work.Action) {
 		if cache.DebugTest {
 			fmt.Fprintf(os.Stderr, "testcache: %s: save test ID %x => input ID %x => %x\n", a.Package.ImportPath, c.id2, testInputsID, testAndInputKey(c.id2, testInputsID))
 		}
-		saveTestlog(c.id2, testlog)
+		saveTestlog(cache.Default(), c.id2, testlog, testlogShape(inputLines))
 		cache.PutNoVerify(cache.Default(), inputLinesKey(c.id2, testlog), bytes.NewReader(inputLines))
 		cache.PutNoVerify(cache.Default(), testAndInputKey(c.id2, testInputsID), bytes.NewReader(a.TestOutput.Bytes()))
 		if coverProfile != nil {
