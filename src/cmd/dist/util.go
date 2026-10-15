@@ -100,7 +100,7 @@ func runEnv(dir string, mode int, env []string, cmd ...string) string {
 	if err != nil && mode&CheckExit != 0 {
 		outputLock.Lock()
 		if len(data) > 0 {
-			xprintf("%s\n", data)
+			xprintf("%s\n", annotateWarnings(data, dir))
 		}
 		outputLock.Unlock()
 		if mode&Background != 0 {
@@ -112,7 +112,7 @@ func runEnv(dir string, mode int, env []string, cmd ...string) string {
 	}
 	if mode&ShowOutput != 0 {
 		outputLock.Lock()
-		os.Stdout.Write(data)
+		os.Stdout.Write(annotateWarnings(data, dir))
 		outputLock.Unlock()
 	}
 	if vflag > 2 {

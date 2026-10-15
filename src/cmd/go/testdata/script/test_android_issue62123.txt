@@ -6,7 +6,7 @@ stderr 'android/amd64 requires external \(cgo\) linking, but cgo is not enabled'
 ! stderr 'cannot find runtime/cgo'
 
 ! go test -c -o $devnull os
-stderr '# os\nandroid/amd64 requires external \(cgo\) linking, but cgo is not enabled'
+stderr 'os: android/amd64 requires external \(cgo\) linking, but cgo is not enabled'
 ! stderr 'cannot find runtime/cgo'
 
 env GOOS=ios GOARCH=arm64 CGO_ENABLED=0
@@ -16,7 +16,7 @@ stderr 'ios/arm64 requires external \(cgo\) linking, but cgo is not enabled'
 ! stderr 'cannot find runtime/cgo'
 
 ! go test -c -o $devnull os
-stderr '# os\nios/arm64 requires external \(cgo\) linking, but cgo is not enabled'
+stderr 'os: ios/arm64 requires external \(cgo\) linking, but cgo is not enabled'
 ! stderr 'cannot find runtime/cgo'
 
 -- go.mod --
