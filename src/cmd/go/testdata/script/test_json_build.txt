@@ -11,7 +11,7 @@ env GODEBUG=gotestjsonbuildtext=0
 
 # Test a build error directly in a test file.
 ! go test -json -o=$devnull ./builderror
-stdout '"ImportPath":"m/builderror \[m/builderror\.test\]","Action":"build-output","Output":"# m/builderror \[m/builderror.test\]\\n"'
+! stdout '"Output":"# '
 stdout '"ImportPath":"m/builderror \[m/builderror\.test\]","Action":"build-output","Output":"builderror(/|\\\\)main_test.go:3:11: undefined: y\\n"'
 stdout '"ImportPath":"m/builderror \[m/builderror\.test\]","Action":"build-fail"'
 stdout '"Action":"start","Package":"m/builderror"'
@@ -21,7 +21,7 @@ stdout '"Action":"fail","Package":"m/builderror","Elapsed":.*,"FailedBuild":"m/b
 
 # Test a build error in an imported package. Make sure it's attributed to the right package.
 ! go test -json -o=$devnull ./builderror2
-stdout '"ImportPath":"m/builderror2/x","Action":"build-output","Output":"# m/builderror2/x\\n"'
+! stdout '"Output":"# '
 stdout '"ImportPath":"m/builderror2/x","Action":"build-output","Output":"builderror2(/|\\\\)x(/|\\\\)main.go:3:11: undefined: y\\n"'
 stdout '"ImportPath":"m/builderror2/x","Action":"build-fail"'
 stdout '"Action":"start","Package":"m/builderror2"'
@@ -32,8 +32,8 @@ stdout '"Action":"fail","Package":"m/builderror2","Elapsed":.*,"FailedBuild":"m/
 # Test a loading error in a test file
 # TODO(#65335): ImportPath attribution is weird
 ! go test -json -o=$devnull ./loaderror
-stdout '"ImportPath":"x","Action":"build-output","Output":"# m/loaderror\\n"'
-stdout '"ImportPath":"x","Action":"build-output","Output":".*package x is not in std.*"'
+! stdout '"Output":"# '
+stdout '"ImportPath":"x","Action":"build-output","Output":"m/loaderror: .*package x is not in std.*"'
 stdout '"ImportPath":"x","Action":"build-fail"'
 stdout '"Action":"start","Package":"m/loaderror"'
 stdout '"Action":"output","Package":"m/loaderror","Output":"FAIL\\tm/loaderror \[setup failed\]\\n"'
@@ -42,8 +42,8 @@ stdout '"Action":"fail","Package":"m/loaderror","Elapsed":.*,"FailedBuild":"x"'
 
 # Test an import cycle loading error in a non test file. (#70820)
 ! go test -json -o=$devnull ./cycle/p
-stdout '"ImportPath":"m/cycle/q","Action":"build-output","Output":"# m/cycle/p\\n"'
-stdout '"ImportPath":"m/cycle/q","Action":"build-output","Output":"package m/cycle/p\\n"'
+! stdout '"Output":"# '
+stdout '"ImportPath":"m/cycle/q","Action":"build-output","Output":"m/cycle/p: package m/cycle/p\\n"'
 stdout '"ImportPath":"m/cycle/q","Action":"build-output","Output":"\\timports m/cycle/q from p.go\\n"'
 stdout '"ImportPath":"m/cycle/q","Action":"build-output","Output":"\\timports m/cycle/q from q.go: import cycle not allowed\\n"'
 stdout '"ImportPath":"m/cycle/q","Action":"build-fail"'
@@ -54,8 +54,7 @@ stdout '"Action":"fail","Package":"m/cycle/p","Elapsed":.*,"FailedBuild":"m/cycl
 
 # Test a vet error
 ! go test -json -o=$devnull ./veterror
-stdout '"ImportPath":"m/veterror \[m/veterror.test\]","Action":"build-output","Output":"# m/veterror\\n"'
-stdout '"ImportPath":"m/veterror \[m/veterror.test\]","Action":"build-output","Output":"# \[m/veterror\]\\n"'
+! stdout '"Output":"# '
 stdout '"ImportPath":"m/veterror \[m/veterror.test\]","Action":"build-output","Output":"veterror(/|\\\\)main_test.go:9:21: fmt.Printf format %s reads arg #1, but call has 0 args\\n"'
 stdout '"ImportPath":"m/veterror \[m/veterror.test\]","Action":"build-fail"'
 stdout '"Action":"start","Package":"m/veterror"'
@@ -66,7 +65,7 @@ stdout '"Action":"fail","Package":"m/veterror","Elapsed":.*,"FailedBuild":"m/vet
 # Test that the GODEBUG fallback works.
 env GODEBUG=gotestjsonbuildtext=1
 ! go test -json -o=$devnull ./builderror
-stderr '# m/builderror \[m/builderror.test\]\n'
+! stderr '^# '
 stderr 'builderror'${/}'main_test.go:3:11: undefined: y\n'
 stdout '"Action":"start","Package":"m/builderror"'
 stdout '"Action":"output","Package":"m/builderror","Output":"FAIL\\tm/builderror \[build failed\]\\n"'

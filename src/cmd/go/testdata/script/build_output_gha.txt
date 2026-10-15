@@ -1,0 +1,39 @@
+# A compiler warning prints as a GitHub Actions annotation in a GitHub Actions
+# run, both when the compiler runs and when the build cache replays its
+# output. No output starts with a "# package" line.
+
+env GO111MODULE=off
+[!compiler:gc] skip
+
+env GOCACHE=$WORK/gocache
+mkdir $GOCACHE
+env GITHUB_ACTIONS=true
+env GITHUB_WORKSPACE=$WORK
+# An agent marker keeps this from being a CI build, which needs a remote cache.
+env CLAUDECODE=1
+
+go build -x lib.go
+stderr 'compile( |\.exe"?)'
+stderr '^::warning file=gopath/src/lib.go,line=5,col=\d+::performance warning: the pattern of regexp.MustCompile is not constant'
+! stderr '^# command-line-arguments'
+! stderr '^lib.go:5'
+
+# The second build replays the cached output and annotates it the same way.
+go build -x lib.go
+! stderr 'compile( |\.exe"?)'
+stderr '^::warning file=gopath/src/lib.go,line=5,col=\d+::performance warning'
+! stderr '^# command-line-arguments'
+
+# Outside GitHub Actions the replayed warning is a plain line.
+env GITHUB_ACTIONS=
+go build lib.go
+stderr 'lib.go:5:\d+: performance warning'
+! stderr '::warning'
+! stderr '^# command-line-arguments'
+
+-- lib.go --
+package lib
+
+import "regexp"
+
+func Match(pattern, text string) bool { return regexp.MustCompile(pattern).MatchString(text) }
