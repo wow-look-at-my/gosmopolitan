@@ -2574,7 +2574,7 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, []byte
 			fmt.Fprintf(h, "env %s %x\n", name, hashGetenv(name))
 		case "chdir":
 			pwd = name // always absolute
-			if isRunScratch(name) || isBuildCache(name) || isProcessLocal(name) {
+			if hashes.scratch(name) || isProcessLocal(name) {
 				break
 			}
 			fmt.Fprintf(h, "chdir %s %x\n", name, hashes.stat(name))
@@ -2588,7 +2588,7 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, []byte
 			if !filepath.IsAbs(file) {
 				file = filepath.Join(pwd, file)
 			}
-			if isRunScratch(file) || isBuildCache(file) {
+			if hashes.scratch(file) {
 				break
 			}
 			answer, err := lookupAnswer(kind, file, query, sources)
@@ -2604,10 +2604,10 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, []byte
 				parsed["stat "+name]--
 				break
 			}
-			if isRunScratch(name) || isBuildCache(name) || isProcessLocal(name) {
+			if hashes.scratch(name) || isProcessLocal(name) {
 				break
 			}
-			if rel, ok := inModCache(name); ok {
+			if rel, ok := hashes.modCache(name); ok {
 				fmt.Fprintf(h, "stat $GOMODCACHE/%s modcache\n", rel)
 				break
 			}
@@ -2620,10 +2620,10 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, []byte
 				parsed["open "+name]--
 				break
 			}
-			if isRunScratch(name) || isBuildCache(name) || isProcessLocal(name) {
+			if hashes.scratch(name) || isProcessLocal(name) {
 				break
 			}
-			if rel, ok := inModCache(name); ok {
+			if rel, ok := hashes.modCache(name); ok {
 				fmt.Fprintf(h, "open $GOMODCACHE/%s modcache\n", rel)
 				break
 			}

@@ -14,9 +14,11 @@ import (
 	"cmd/go/internal/cache"
 )
 
-// fileHashMemo answers hashOpen and hashStat once per name for one testlog. A
-// test can open the same file many times, and the log has a line for each.
-// The lines still go into the inputs ID one by one, so the ID does not change.
+// fileHashMemo answers hashOpen, hashStat and the checks of where a name sits
+// once per name for one testlog. A test can open the same file many times, and
+// the log has a line for each. Each check resolves the symlinks of every
+// directory above the name, which is an lstat per component. The lines still
+// go into the inputs ID one by one, so the ID does not change.
 type fileHashMemo struct {
 	mu    sync.Mutex
 	files map[string]*inputHash
@@ -26,6 +28,9 @@ type inputHash struct {
 	once sync.Once
 	id   cache.ActionID
 	err  error
+	// found and rel are the answer of a check: scratch, or the module cache.
+	found bool
+	rel   string
 }
 
 func newFileHashMemo() *fileHashMemo {
@@ -56,10 +61,24 @@ func (hs *fileHashMemo) stat(name string) cache.ActionID {
 	return entry.id
 }
 
-// prefetch hashes, in parallel, every file the testlog opens or stats that the
-// inputs ID can need. A read on Windows costs a round trip to the filesystem
-// driver, and a test that type-checks the tree reads thousands of files. A
-// name a parser reported is left for the ID walk, which decides if it counts.
+// scratch is isRunScratch(name) || isBuildCache(name): the name is no input.
+func (hs *fileHashMemo) scratch(name string) bool {
+	entry := hs.entry("scratch", name)
+	entry.once.Do(func() { entry.found = isRunScratch(name) || isBuildCache(name) })
+	return entry.found
+}
+
+// modCache is inModCache(name).
+func (hs *fileHashMemo) modCache(name string) (string, bool) {
+	entry := hs.entry("modcache", name)
+	entry.once.Do(func() { entry.rel, entry.found = inModCache(name) })
+	return entry.rel, entry.found
+}
+
+// prefetch checks and hashes, in parallel, every name the testlog opens or
+// stats. A filesystem call on Windows costs a round trip to the driver, and a
+// test that type-checks the tree reads thousands of files. The hash of a name
+// a parser reported is left for the ID walk, which decides if it counts.
 func (hs *fileHashMemo) prefetch(dir string, testlog []byte, parsed map[string]int) {
 	type job struct{ op, name string }
 	var jobs []job
@@ -81,16 +100,10 @@ func (hs *fileHashMemo) prefetch(dir string, testlog []byte, parsed map[string]i
 			name = filepath.Join(pwd, name)
 		}
 		key := op + " " + name
-		if seen[key] || parsed[key] > 0 {
+		if seen[key] || isProcessLocal(name) {
 			continue
 		}
 		seen[key] = true
-		if isRunScratch(name) || isBuildCache(name) || isProcessLocal(name) {
-			continue
-		}
-		if _, ok := inModCache(name); ok {
-			continue
-		}
 		jobs = append(jobs, job{op, name})
 	}
 	if len(jobs) < 2 {
@@ -103,6 +116,12 @@ func (hs *fileHashMemo) prefetch(dir string, testlog []byte, parsed map[string]i
 		go func() {
 			defer wg.Done()
 			for next := range work {
+				if hs.scratch(next.name) {
+					continue
+				}
+				if _, ok := hs.modCache(next.name); ok || parsed[next.op+" "+next.name] > 0 {
+					continue
+				}
 				if next.op == "open" {
 					hs.open(next.name)
 				} else {
