@@ -1073,7 +1073,7 @@ func runTest(ctx context.Context, cmd *base.Command, args []string) {
 		reportErr := func(perr *load.Package, err error) {
 			str := err.Error()
 			if p.ImportPath != "" {
-				load.DefaultPrinter().Errorf(perr, "# %s\n%s", p.ImportPath, str)
+				load.DefaultPrinter().Errorf(perr, "%s: %s", p.ImportPath, str)
 			} else {
 				load.DefaultPrinter().Errorf(perr, "%s", str)
 			}
