@@ -724,8 +724,8 @@ func (b *Builder) useCache(a *Action, actionHash cache.ActionID, target string, 
 					// If it doesn't work, it doesn't work: reusing the cached binary is more
 					// important than reprinting diagnostic information.
 					if printOutput {
-						showStdout(b, c, a, "stdout")      // compile output
-						showStdout(b, c, a, "link-stdout") // link output
+						showStdout(b, c, a, compileOutputKey)      // compile output
+						showStdout(b, c, a, linkOutputKey) // link output
 					}
 
 					// Poison a.Target to catch uses later in the build.
@@ -757,8 +757,8 @@ func (b *Builder) useCache(a *Action, actionHash cache.ActionID, target string, 
 		// If it doesn't work, it doesn't work: reusing the test result is more
 		// important than reprinting diagnostic information.
 		if printOutput {
-			showStdout(b, c, a.Deps[0], "stdout")      // compile output
-			showStdout(b, c, a.Deps[0], "link-stdout") // link output
+			showStdout(b, c, a.Deps[0], compileOutputKey)      // compile output
+			showStdout(b, c, a.Deps[0], linkOutputKey) // link output
 		}
 
 		// Poison a.Target to catch uses later in the build.
@@ -783,7 +783,7 @@ func (b *Builder) useCache(a *Action, actionHash cache.ActionID, target string, 
 				case "link":
 					// A hit without its output entry is a miss, as for a compile.
 					// Otherwise the link output, -dumpdep for example, is gone.
-					if err := showStdout(b, c, a, "link-stdout"); err != nil {
+					if err := showStdout(b, c, a, linkOutputKey); err != nil {
 						a.output = []byte{}
 						return false
 					}
@@ -795,7 +795,7 @@ func (b *Builder) useCache(a *Action, actionHash cache.ActionID, target string, 
 					// a package that had none. Take the miss and compile, and
 					// open the buffer the miss at the end of this func opens:
 					// the action writes into it and cacheOutput demands it.
-					if err := showStdout(b, c, a, "stdout"); err != nil { // compile output
+					if err := showStdout(b, c, a, compileOutputKey); err != nil { // compile output
 						a.output = []byte{}
 						return false
 					}
@@ -841,6 +841,22 @@ func (b *Builder) useCache(a *Action, actionHash cache.ActionID, target string, 
 	return false
 }
 
+// The cache keeps a compile's or a link's output under these subkeys, as the
+// tool wrote it. An entry under an older subkey holds formatted output, so it
+// is never read.
+const (
+	compileOutputKey = "tool-output"
+	linkOutputKey    = "link-tool-output"
+)
+
+// actionDir is the directory a's tool output names its files against.
+func actionDir(a *Action) string {
+	if a.Package == nil {
+		return ""
+	}
+	return a.Package.Dir
+}
+
 func showStdout(b *Builder, c cache.Cache, a *Action, key string) error {
 	actionID := a.actionID
 
@@ -855,7 +871,7 @@ func showStdout(b *Builder, c cache.Cache, a *Action, key string) error {
 			sh.ShowCmd("", "%s  # internal", joinUnambiguously(str.StringList("cat", c.OutputFile(stdoutEntry.OutputID))))
 		}
 		if !cfg.BuildN {
-			sh.Printf("%s", stdout)
+			sh.Printf("%s", formatToolOutput(string(stdout), actionDir(a)))
 		}
 	}
 	return nil
@@ -863,7 +879,9 @@ func showStdout(b *Builder, c cache.Cache, a *Action, key string) error {
 
 // flushOutput flushes the output being queued in a.
 func (b *Builder) flushOutput(a *Action) {
-	b.Shell(a).Printf("%s", a.output)
+	if len(a.output) > 0 {
+		b.Shell(a).Printf("%s", formatToolOutput(string(a.output), actionDir(a)))
+	}
 	a.output = nil
 }
 
@@ -890,17 +908,17 @@ func (b *Builder) updateBuildID(a *Action, target string) error {
 	// Cache output from compile/link, even if we don't do the rest.
 	switch a.Mode {
 	case "build":
-		cache.PutBytes(c, cache.Subkey(a.actionID, "stdout"), a.output)
+		cache.PutBytes(c, cache.Subkey(a.actionID, compileOutputKey), a.output)
 	case "link":
 		// An up-to-date installed binary knows only the main package's action ID,
 		// so the output goes there too. A link hit reads its own entry.
 		for _, a1 := range a.Deps {
 			if p1 := a1.Package; p1 != nil && p1.Name == "main" {
-				cache.PutBytes(c, cache.Subkey(a1.actionID, "link-stdout"), a.output)
+				cache.PutBytes(c, cache.Subkey(a1.actionID, linkOutputKey), a.output)
 				break
 			}
 		}
-		cache.PutBytes(c, cache.Subkey(a.actionID, "link-stdout"), a.output)
+		cache.PutBytes(c, cache.Subkey(a.actionID, linkOutputKey), a.output)
 	}
 
 	// Find occurrences of old ID and compute new content-based ID.
