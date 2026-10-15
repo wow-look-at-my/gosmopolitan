@@ -9,6 +9,7 @@ import (
 	"internal/testenv"
 	"io"
 	"math/bits"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strings"
@@ -335,17 +336,18 @@ func TestIntendedInlining(t *testing.T) {
 		cmdErr <- cmd.Run()
 		pw.Close()
 	}()
+	dirPkg := packageDirs(t, pkgs)
 	scanner := bufio.NewScanner(pr)
-	curPkg := ""
 	canInline := regexp.MustCompile(`: can inline ([^ ]*)`)
 	haveInlined := regexp.MustCompile(`: inlining call to ([^ ]*)`)
 	cannotInline := regexp.MustCompile(`: cannot inline ([^ ]*): (.*)`)
 	for scanner.Scan() {
 		line := scanner.Text()
-		if strings.HasPrefix(line, "# ") {
-			curPkg = line[2:]
+		file, _, ok := strings.Cut(line, ":")
+		if !ok {
 			continue
 		}
+		curPkg := dirPkg[filepath.Dir(absPath(t, file))]
 		if m := haveInlined.FindStringSubmatch(line); m != nil {
 			fname := m[1]
 			delete(notInlinedReason, curPkg+"."+fname)
@@ -429,4 +431,33 @@ func TestIssue56044(t *testing.T) {
 			}
 		}
 	}
+}
+
+// packageDirs maps the source directory of each package in pkgs to its
+// import path. The go command prints no package header, so the test finds the
+// package of a diagnostic from the directory of its file.
+func packageDirs(t *testing.T, pkgs []string) map[string]string {
+	args := append([]string{"list", "-tags=math_big_pure_go", "-f", "{{.Dir}}\t{{.ImportPath}}"}, pkgs...)
+	out, err := testenv.CleanCmdEnv(testenv.Command(t, testenv.GoToolPath(t), args...)).Output()
+	if err != nil {
+		t.Fatalf("go list: %v", err)
+	}
+	dirPkg := make(map[string]string)
+	for _, row := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		dir, path, _ := strings.Cut(row, "\t")
+		dirPkg[absPath(t, dir)] = path
+	}
+	return dirPkg
+}
+
+// absPath returns name as an absolute path with symbolic links resolved.
+func absPath(t *testing.T, name string) string {
+	abs, err := filepath.Abs(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		return resolved
+	}
+	return abs
 }
