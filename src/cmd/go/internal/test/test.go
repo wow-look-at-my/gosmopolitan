@@ -2546,7 +2546,6 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, []byte
 		return cache.ActionID{}, nil, err
 	}
 	hashes := newFileHashMemo()
-	hashes.prefetch(a.Package.Dir, testlog, parsed)
 	sources := make(map[string][]rootCert)
 	pwd := a.Package.Dir
 	for _, line := range bytes.Split(testlog, []byte("\n")) {
@@ -2627,7 +2626,7 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, []byte
 				fmt.Fprintf(h, "open $GOMODCACHE/%s modcache\n", rel)
 				break
 			}
-			fh, err := hashes.open(name)
+			fh, err := hashOpen(name)
 			if err != nil {
 				if cache.DebugTest {
 					fmt.Fprintf(os.Stderr, "testcache: %s: input file %s: %s\n", a.Package.ImportPath, name, err)
