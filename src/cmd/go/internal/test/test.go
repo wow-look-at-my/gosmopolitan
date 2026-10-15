@@ -2545,6 +2545,8 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, []byte
 	if err != nil {
 		return cache.ActionID{}, nil, err
 	}
+	hashes := newFileHashMemo()
+	hashes.prefetch(a.Package.Dir, testlog, parsed)
 	sources := make(map[string][]rootCert)
 	pwd := a.Package.Dir
 	for _, line := range bytes.Split(testlog, []byte("\n")) {
@@ -2575,7 +2577,7 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, []byte
 			if isRunScratch(name) || isBuildCache(name) || isProcessLocal(name) {
 				break
 			}
-			fmt.Fprintf(h, "chdir %s %x\n", name, hashStat(name))
+			fmt.Fprintf(h, "chdir %s %x\n", name, hashes.stat(name))
 		case "parse":
 			// Counted by parsedReads.
 		case "lookup":
@@ -2609,7 +2611,7 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, []byte
 				fmt.Fprintf(h, "stat $GOMODCACHE/%s modcache\n", rel)
 				break
 			}
-			fmt.Fprintf(h, "stat %s %x\n", name, hashStat(name))
+			fmt.Fprintf(h, "stat %s %x\n", name, hashes.stat(name))
 		case "open":
 			if !filepath.IsAbs(name) {
 				name = filepath.Join(pwd, name)
@@ -2625,7 +2627,7 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, []byte
 				fmt.Fprintf(h, "open $GOMODCACHE/%s modcache\n", rel)
 				break
 			}
-			fh, err := hashOpen(name)
+			fh, err := hashes.open(name)
 			if err != nil {
 				if cache.DebugTest {
 					fmt.Fprintf(os.Stderr, "testcache: %s: input file %s: %s\n", a.Package.ImportPath, name, err)
