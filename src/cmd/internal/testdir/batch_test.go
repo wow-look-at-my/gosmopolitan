@@ -40,7 +40,7 @@ func batchOutput(corpus, file string) (out []byte, batched bool, err error) {
 		return out, true, nil
 	}
 	// The one process did not reach this program. Run it alone.
-	argv := launch(exe, name)
+	argv := launch(exe, theBatch.nonce, name)
 	single, err := exec.Command(argv[0], argv[1:]...).CombinedOutput()
 	return single, true, err
 }
@@ -66,7 +66,7 @@ func (bat *batch) runAll(exe string) {
 	}
 	sort.Strings(names)
 
-	argv := launch(exe, names...)
+	argv := launch(exe, append([]string{bat.nonce}, names...)...)
 	out, _ := exec.Command(argv[0], argv[1:]...).CombinedOutput()
 
 	// Each program's output runs from its own marker to the next one.
@@ -114,12 +114,14 @@ type program struct{ ID string }
 // dispatch is what the dispatcher template is rendered from.
 type dispatch struct {
 	Programs []program
-	Nonce    string
 }
 
-// The dispatcher runs every name it is given, in one process, and marks
-// each's output with a nonce the build picked. A program that panics or exits
-// takes the process with it, so the caller re-runs what never reported.
+// The dispatcher runs every name it is given, in one process, and marks each's
+// output with the nonce that is its first argument. A program that panics or
+// exits takes the process with it, so the caller re-runs what never reported.
+// The nonce is an argument and not a constant, so builds of the corpus give the
+// same bytes. A wasm runtime then compiles the module one time, not once per
+// run.
 var dispatcher = template.Must(template.New("main").Parse(`package main
 
 import (
@@ -129,8 +131,6 @@ import (
 	{{.ID}} "testdirbatch/{{.ID}}"
 {{- end}}
 )
-
-const nonce = "{{.Nonce}}"
 
 func run(name string) {
 	// The program under test reads its own argument list, and the names this
@@ -148,12 +148,12 @@ func run(name string) {
 }
 
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: batch <test>...")
+	if len(os.Args) < 3 {
+		fmt.Fprintln(os.Stderr, "usage: batch <nonce> <test>...")
 		os.Exit(2)
 	}
-	names := os.Args[1:]
-	all := os.Args
+	nonce, names := os.Args[1], os.Args[2:]
+	all := append([]string{os.Args[0]}, names...)
 	for _, name := range names {
 		fmt.Printf("%s %s\n", nonce, name)
 		os.Stdout.Sync()
@@ -273,7 +273,7 @@ func (bat *batch) build(corpus string) {
 	bat.nonce = "testdir-batch-" + hex.EncodeToString(seed[:])
 
 	var main strings.Builder
-	if err := dispatcher.Execute(&main, dispatch{Programs: programs, Nonce: bat.nonce}); err != nil {
+	if err := dispatcher.Execute(&main, dispatch{Programs: programs}); err != nil {
 		bat.err = err
 		return
 	}
@@ -283,7 +283,7 @@ func (bat *batch) build(corpus string) {
 	}
 
 	exe := filepath.Join(dir, "batch.exe")
-	bld := &builder{work: dir, run: func(env []string, args ...string) ([]byte, error) {
+	bld := &builder{work: dir, srcTrim: dir + "=>testdirbatch", run: func(env []string, args ...string) ([]byte, error) {
 		cmd := exec.Command(args[0], args[1:]...)
 		cmd.Dir = dir
 		cmd.Env = append(os.Environ(), env...)

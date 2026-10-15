@@ -208,7 +208,18 @@ type builder struct {
 	env       []string // overrides of the target's environment: GOOS, GOARCH, GOEXPERIMENT and the like
 	work      string   // where objects go
 	omitDebug bool     // link without DWARF and a symbol table, as go run does
+	srcTrim   string   // if set, one more -trimpath rewrite, "dir=>prefix", for sources in a temporary directory
 	run       func(env []string, args ...string) ([]byte, error)
+}
+
+// trimpath answers the -trimpath of one package: its objects, and the source
+// root the builder trims.
+func (bld *builder) trimpath(unit *unit) string {
+	trim := strings.TrimSuffix(unit.objdir, string(filepath.Separator)) + "=>"
+	if bld.srcTrim != "" {
+		trim += ";" + bld.srcTrim
+	}
+	return trim
 }
 
 // unit is one package of a program.
@@ -325,7 +336,7 @@ func (bld *builder) forcedGcflags() []string {
 func (bld *builder) asmArgs(unit *unit) []string {
 	goos, goarch := bld.setting("GOOS"), bld.setting("GOARCH")
 	args := []string{
-		bld.tool("asm"), "-p", unit.pkgPath, "-trimpath", strings.TrimSuffix(unit.objdir, string(filepath.Separator)) + "=>",
+		bld.tool("asm"), "-p", unit.pkgPath, "-trimpath", bld.trimpath(unit),
 		"-I", unit.objdir, "-I", filepath.Join(bld.setting("GOROOT"), "pkg", "include"),
 		"-D", "GOOS_" + goos, "-D", "GOARCH_" + goarch,
 	}
@@ -575,7 +586,7 @@ func (bld *builder) compile(unit *unit, importcfg, lang string) ([]byte, error) 
 
 	args := []string{
 		bld.tool("compile"), "-o", unit.archive,
-		"-trimpath", strings.TrimSuffix(unit.objdir, string(filepath.Separator)) + "=>",
+		"-trimpath", bld.trimpath(unit),
 		"-p", unit.pkgPath, "-lang=" + lang,
 	}
 	if len(sfiles) == 0 && len(pkg.CgoFiles) == 0 {
