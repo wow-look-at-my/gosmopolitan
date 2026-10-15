@@ -28,6 +28,9 @@ go_wasip1_precompile() {
 		printf '%s\n' "$digest" >"$stamp.$$" && mv "$stamp.$$" "$stamp"
 	fi
 	local dir="$cache/$digest"
+	# The same bytes start under many names: go test names one binary for each
+	# package it holds. One compile serves them all, and each name is a link.
+	local module="$dir/module.cwasm"
 	local out
 	out="$dir/$(basename "$src")"
 	if [ ! -f "$out" ]; then
@@ -37,8 +40,11 @@ go_wasip1_precompile() {
 			if command -v flock >/dev/null; then
 				flock 9 || exit
 			fi
+			if [ ! -f "$module" ]; then
+				wasmtime compile -C cache=n -W max-wasm-stack=8388608 -o "$module.$$" "$src" >&2 && mv "$module.$$" "$module" || exit
+			fi
 			if [ ! -f "$out" ]; then
-				wasmtime compile -C cache=n -W max-wasm-stack=8388608 -o "$out.$$" "$src" >&2 && mv "$out.$$" "$out"
+				ln -f "$module" "$out.$$" && mv "$out.$$" "$out"
 			fi
 		) 9>"$dir/lock" || return
 		# A module no run started for two days goes. A compile is the time to look.
