@@ -381,6 +381,8 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          # A test that reads PATH misses the test cache when PATH differs from the last run's, so the log names it.
+          Write-Host "PATH=$env:Path"
           # -NoNewWindow gives the probe this step's console, so its lines stream here as the suite runs.
           $probe = Start-Process pwsh -ArgumentList '-NoProfile', '-File', "$env:GITHUB_WORKSPACE/.github/resource-log.ps1" -NoNewWindow -PassThru
           try {
