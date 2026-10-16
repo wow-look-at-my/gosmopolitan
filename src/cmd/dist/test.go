@@ -1524,9 +1524,8 @@ func (t *tester) registerTests() {
 					// The corpus runs as cosmo binaries through the exec
 					// wrapper on a hosted runner, past go test's 10 minutes.
 					timeout: 30 * time.Minute,
-					// Every shard starts the one test binary with its
-					// own -shard.
-					shared: true,
+					// It runs through go test, not as a shared binary, so
+					// go test caches its result.
 					// The corpus fills every CPU, the way cmd/go does.
 					alone: true,
 				},

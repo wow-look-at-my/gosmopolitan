@@ -11,6 +11,7 @@ import (
 	"maps"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -315,8 +316,53 @@ func (bat *batch) build(corpus string) {
 	}
 	bat.nonce = "testdir-batch-" + hex.EncodeToString(seed[:])
 
+	bld := &builder{work: dir, srcTrim: dir + "=>testdirbatch", run: func(env []string, args ...string) ([]byte, error) {
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), env...)
+		return cmd.CombinedOutput()
+	}}
+	ctxt, err := bld.context()
+	if err != nil {
+		bat.err = err
+		return
+	}
+	goVersion := fmt.Sprintf("1.%d", goversion.Version)
+	lang := "go" + langVersion(goVersion)
+
+	// Some programs do not build as a package: one declares a name that a dot import also gives it, for example.
+	var units, kept []*unit
+	for _, prog := range programs {
+		importPath := "testdirbatch/" + prog.ID
+		pkg, err := ctxt.ImportDir(filepath.Join(dir, prog.ID), 0)
+		if err != nil {
+			continue
+		}
+		units = append(units, &unit{importPath: importPath, pkgPath: importPath, pkg: pkg, gcflags: bld.flags.allList})
+	}
+	bld.buildProgram(units, lang, "", "")
+	var joined []program
+	for idx, unit := range units {
+		if unit.err == nil {
+			kept = append(kept, unit)
+			joined = append(joined, program{ID: path.Base(units[idx].importPath)})
+		}
+	}
+	if len(kept) < count {
+		fmt.Fprintf(os.Stderr, "testdir batch: %d of %d run programs do not build as a package, and each runs alone\n", count-len(kept), count)
+		for rel, pkgname := range bat.ids {
+			if !slices.ContainsFunc(joined, func(prog program) bool { return prog.ID == pkgname }) {
+				delete(bat.ids, rel)
+			}
+		}
+	}
+	if len(kept) == 0 {
+		bat.err = fmt.Errorf("testdir batch: none of %d programs builds as a package", count)
+		return
+	}
+
 	var main strings.Builder
-	if err := dispatcher.Execute(&main, dispatch{Programs: programs}); err != nil {
+	if err := dispatcher.Execute(&main, dispatch{Programs: joined}); err != nil {
 		bat.err = err
 		return
 	}
@@ -324,16 +370,17 @@ func (bat *batch) build(corpus string) {
 		bat.err = err
 		return
 	}
+	mainPkg, err := ctxt.ImportDir(dir, 0)
+	if err != nil {
+		bat.err = err
+		return
+	}
+	mainUnit := &unit{importPath: "testdirbatch", pkgPath: "main", pkg: mainPkg, gcflags: bld.flags.mainGcflags, deps: kept}
 
 	exe := filepath.Join(dir, "batch.exe")
-	bld := &builder{work: dir, srcTrim: dir + "=>testdirbatch", run: func(env []string, args ...string) ([]byte, error) {
-		cmd := exec.Command(args[0], args[1:]...)
-		cmd.Dir = dir
-		cmd.Env = append(os.Environ(), env...)
-		return cmd.CombinedOutput()
-	}}
-	if out, err := bld.buildModule(dir, "testdirbatch", fmt.Sprintf("1.%d", goversion.Version), exe); err != nil {
-		bat.err = fmt.Errorf("testdir batch: building %d programs: %v\n%s", count, err, out)
+	godebug := defaultGODEBUG(goVersion, mainPkg.Directives, bld.fips())
+	if out, err := bld.buildProgram(append(kept, mainUnit), lang, godebug, exe); err != nil {
+		bat.err = fmt.Errorf("testdir batch: building %d programs: %v\n%s", len(kept), err, out)
 		return
 	}
 	bat.exe = exe

@@ -1,0 +1,33 @@
+# cmd/dist names the port of a test that runs on the host with -target.
+# The result is cached, and the target is part of the test ID.
+
+env GOCACHE=$WORK/cache
+go test ./t -args -target=wasip1/wasm
+stdout '^ok\s+m/t\s+[0-9.]+s$'
+go test ./t -args -target=wasip1/wasm
+stdout '^ok\s+m/t\s+\(cached\)'
+go test ./t -args -target=js/wasm
+! stdout '\(cached\)'
+
+# Another argument that is not a test flag still turns caching off.
+go test ./t -args -target=js/wasm -other
+! stdout '\(cached\)'
+
+-- go.mod --
+module m
+
+go 1.20
+-- t/t_test.go --
+package t
+
+import (
+	"flag"
+	"testing"
+)
+
+var target = flag.String("target", "", "the port")
+var other = flag.Bool("other", false, "unused")
+
+func TestTarget(t *testing.T) {
+	t.Log(*target, *other)
+}

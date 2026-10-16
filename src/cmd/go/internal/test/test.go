@@ -132,7 +132,8 @@ The rule for a match in the cache is that the run involves the same
 test binary and the flags on the command line come entirely from a
 restricted set of 'cacheable' test flags, defined as -benchtime,
 -coverprofile, -cpu, -failfast, -fullpath, -list, -outputdir, -parallel,
--run, -short, -skip, -timeout and -v.
+-run, -short, -skip, -timeout and -v, plus the -target argument that cmd/dist
+gives a test that runs on the host.
 If a run of go test has any test or non-test flags outside this set,
 the result is not cached. The -count flag is accepted and has no effect:
 it is not passed to the test binary, it is not part of the cache key, and
@@ -2289,6 +2290,12 @@ func (c *runCache) tryCacheWithID(b *work.Builder, a *work.Action, id string) bo
 	var cacheArgs []string
 	for _, arg := range testArgs {
 		i := strings.Index(arg, "=")
+		// cmd/dist names the port of a test that runs on the host with -target.
+		// The test ID holds its value.
+		if strings.HasPrefix(arg, "-target=") {
+			cacheArgs = append(cacheArgs, arg)
+			continue
+		}
 		if i < 0 || !strings.HasPrefix(arg, "-test.") {
 			if cache.DebugTest {
 				fmt.Fprintf(os.Stderr, "testcache: caching disabled for test argument: %s\n", arg)
@@ -2563,7 +2570,7 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, []byte
 			}
 			return cache.ActionID{}, nil, fmt.Errorf("%w: %q", errBadTestInputs, line)
 		case "getenv":
-			if slices.Contains(cache.PlumbingEnv, name) {
+			if slices.Contains(cache.PlumbingEnv, name) || slices.Contains(tempDirEnv, name) {
 				break
 			}
 			fmt.Fprintf(h, "env %s %x\n", name, hashGetenv(name))
@@ -3063,6 +3070,11 @@ func identityWords(id string) map[string]string {
 	}
 	return words
 }
+
+// tempDirEnv names the variables os.TempDir reads. Their value only says where
+// the scratch space is, and isRunScratch already leaves that space out. A
+// macOS runner names a different directory on each machine.
+var tempDirEnv = []string{"TMPDIR", "TMP", "TEMP"}
 
 // isRunScratch reports whether name is scratch space this run created, which is
 // the temporary directory and nothing else. Such a path holds no state from an
