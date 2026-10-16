@@ -1505,6 +1505,12 @@ func (t *tester) registerTests() {
 		}
 		for shard := 0; shard < nShards; shard++ {
 			id := fmt.Sprintf("%d_%d", shard, nShards)
+			// A flag that is not -test.* turns off go test's result cache, and
+			// one shard is the whole corpus, which is what no flag runs.
+			var shardFlags []string
+			if nShards > 1 {
+				shardFlags = []string{fmt.Sprintf("-shard=%d", shard), fmt.Sprintf("-shards=%d", nShards)}
+			}
 			t.registerTest("../test",
 				&goTest{
 					variant: id,
@@ -1513,7 +1519,7 @@ func (t *tester) registerTests() {
 					// results and is important for load-balancing test shards.
 					omitVariant: false,
 					pkg:         "cmd/internal/testdir",
-					testFlags:   []string{fmt.Sprintf("-shard=%d", shard), fmt.Sprintf("-shards=%d", nShards)},
+					testFlags:   shardFlags,
 					runOnHost:   true,
 					// The corpus runs as cosmo binaries through the exec
 					// wrapper on a hosted runner, past go test's 10 minutes.
