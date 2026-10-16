@@ -171,48 +171,19 @@ jobs:
       GO_TEST_TIMEOUT_SCALE: 2
 
     steps:
-      # dist test links one APE per test package and the image leaves too little room on C: for that. It runs beside the checkout and the submodules, which want no room, rather than in front of them.
-      - name: Make room for the suite (NT)
-        id: make-room
+      # dist test links one APE per test package, and C: has too little room for that. D: holds the workspace and RUNNER_TEMP with room to spare, so the temp files and the Go caches go there too.
+      - name: Put the suite's temp files and Go caches on D: (NT)
         if: runner.os == 'Windows'
-        background: true
         shell: pwsh
         run: |
-          $gb = 1GB
-          # Which drive has room decides whether this does anything. The workspace and RUNNER_TEMP are both on D:, and only the caches under the profile sit on C:.
-          Get-PSDrive -PSProvider FileSystem | Where-Object { $null -ne $_.Free } | ForEach-Object {
-            Write-Host ("before: {0}: {1:N1} GB free of {2:N1} GB" -f $_.Name, ($_.Free/$gb), (($_.Free + $_.Used)/$gb))
+          $root = Join-Path $env:RUNNER_TEMP 'suite'
+          $dirs = @{ TEMP = 'tmp'; TMP = 'tmp'; GOTMPDIR = 'tmp'; GOCACHE = 'go-build'; GOPATH = 'gopath' }
+          foreach ($name in $dirs.Keys) {
+            $dir = Join-Path $root $dirs[$name]
+            New-Item -ItemType Directory -Force -Path $dir | Out-Null
+            "$name=$dir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           }
-          $before = (Get-PSDrive C).Free
-          $junk = @(
-            'C:\Android',
-            'C:\Program Files (x86)\Android',
-            'C:\Program Files\Microsoft SDKs\Android',
-            'C:\Program Files\Google\Chrome',
-            'C:\Program Files\Mozilla Firefox',
-            'C:\Program Files\MongoDB',
-            'C:\Program Files\PostgreSQL',
-            'C:\Program Files\Unity',
-            'C:\Miniconda',
-            'C:\Julia',
-            'C:\hostedtoolcache\windows\CodeQL',
-            'C:\hostedtoolcache\windows\Ruby',
-            'C:\hostedtoolcache\windows\PyPy',
-            'C:\hostedtoolcache\windows\Python',
-            'C:\hostedtoolcache\windows\node'
-          )
-          # rd walks a tree one entry at a time. robocopy mirrors an empty directory over each tree with many threads instead. This frees the space and leaves a shell of empty directories nothing reads again.
-          $empty = Join-Path $env:RUNNER_TEMP 'empty-for-mirror'
-          New-Item -ItemType Directory -Force -Path $empty | Out-Null
-          # An unlink is an MFT update and those serialize per volume, so four trees at eight threads is past the point where more helps.
-          $timings = $junk | Where-Object { Test-Path $_ } | ForEach-Object -Parallel {
-            $clock = [Diagnostics.Stopwatch]::StartNew()
-            try { robocopy $using:empty $_ /MIR /MT:8 /R:0 /W:0 /NFL /NDL /NJH /NJS /NC /NS /NP *>$null } catch { }
-            [pscustomobject]@{ Seconds = [math]::Round($clock.Elapsed.TotalSeconds, 1); Tree = $_ }
-          } -ThrottleLimit 4
-          $timings | Sort-Object Seconds -Descending | Format-Table -AutoSize | Out-String | Write-Host
-          Write-Host ("C: free {0:N1} GB, was {1:N1} GB" -f ((Get-PSDrive C).Free/$gb), ($before/$gb))
-          exit 0
+          Get-PSDrive C, D | ForEach-Object { Write-Host ("{0}: {1:N1} GB free" -f $_.Name, ($_.Free/1GB)) }
 
       - uses: actions/checkout@v4
         with:
@@ -226,10 +197,6 @@ jobs:
       - uses: wow-look-at-my/actions@bubblewrap#latest
       # TestRepeatBootstrap runs make.bash again, which compiles the APE loaders with these.
       - uses: ./.github/actions/apeld-tools
-
-      # The suite is what wants the room, so the deletion is joined here. wait-all takes no if, and a host that backgrounded nothing passes straight through.
-      - name: Wait for the room the suite needs
-        wait-all:
 
       - name: Take the toolchain its build leg built
         uses: wow-look-at-my/actions@cache-download#latest
