@@ -3190,14 +3190,10 @@ func hashOpen(name string) (cache.ActionID, error) {
 		if err != nil {
 			fmt.Fprintf(h, "err %v\n", err)
 		}
+		// A listing reads each entry's name and type. A size is read by a stat,
+		// which the testlog records on its own line.
 		for _, f := range files {
-			fmt.Fprintf(h, "file %s ", f.Name())
-			finfo, err := f.Info()
-			if err != nil {
-				fmt.Fprintf(h, "err %v\n", err)
-			} else {
-				hashWriteStat(h, finfo)
-			}
+			fmt.Fprintf(h, "file %s %x\n", f.Name(), uint32(f.Type()))
 		}
 	} else if info.Mode().IsRegular() {
 		// The content is the input, not the mtime. A fresh checkout gives
