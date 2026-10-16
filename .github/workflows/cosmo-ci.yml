@@ -74,6 +74,14 @@ jobs:
       # make.bat and make.bash compile the APE loaders with these.
       - uses: ./.github/actions/apeld-tools
 
+      # toolchain1 and toolchain2 build with no shared cache. Kept, they take 2.4s instead of 88s.
+      - name: Keep the bootstrap build cache between runs
+        uses: actions/cache@v4
+        with:
+          path: pkg/obj/go-build
+          key: dist-bootstrap-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
+          restore-keys: dist-bootstrap-${{ runner.os }}-${{ runner.arch }}-
+
       - name: Build Go toolchain
         # A cold build, with the shared cache unreachable, takes over 8 minutes on macOS.
         timeout-minutes: ${{ github.ref == 'refs/heads/master' && 40 || 20 }}
@@ -118,6 +126,14 @@ jobs:
       # make.bash compiles the APE loaders with these.
       - uses: ./.github/actions/apeld-tools
 
+      # toolchain1 and toolchain2 build with no shared cache. Kept, they take 2.4s instead of 88s.
+      - name: Keep the bootstrap build cache between runs
+        uses: actions/cache@v4
+        with:
+          path: pkg/obj/go-build
+          key: dist-bootstrap-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
+          restore-keys: dist-bootstrap-${{ runner.os }}-${{ runner.arch }}-
+
       - name: Build Go toolchain
         timeout-minutes: ${{ github.ref == 'refs/heads/master' && 40 || 20 }}
         shell: bash
@@ -141,11 +157,7 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        # NT is off: it is the longest leg by far. Put windows-latest back to run it again. waiver-expires: 2026-10-13
-        suite-os: ${{ github.event.repository.visibility == 'public' && fromJSON('["ubuntu-latest","macos-latest"]') || fromJSON('["ubuntu-latest"]') }}
-        # NT is the longest leg by far, so it is excluded rather than run. Drop this exclude to run it again. waiver-expires: 2026-10-13
-        exclude:
-          - suite-os: windows-latest
+        suite-os: [ubuntu-latest, macos-latest, windows-latest]
 
     runs-on: ${{ (github.event.repository.visibility == 'public' || !contains(fromJSON('["ubuntu-latest"]'), matrix.suite-os)) && matrix.suite-os || vars.CI_RUNNER || matrix.suite-os }}
     env:
@@ -369,6 +381,8 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          # A test that reads PATH misses the test cache when PATH differs from the last run's, so the log names it.
+          Write-Host "PATH=$env:Path"
           # -NoNewWindow gives the probe this step's console, so its lines stream here as the suite runs.
           $probe = Start-Process pwsh -ArgumentList '-NoProfile', '-File', "$env:GITHUB_WORKSPACE/.github/resource-log.ps1" -NoNewWindow -PassThru
           try {
@@ -629,8 +643,6 @@ jobs:
 
   # Regression-gate the WebAssembly ports (GOOS=js and GOOS=wasip1) -- see docs/WASM.md and docs/CI.md "wasm job".
   wasm:
-    # Off while the wasip1 suite recompiles its modules and starves the queue; flip the condition back to re-enable. waiver-expires: 2026-10-28
-    if: ${{ false }}
     timeout-minutes: ${{ github.ref == 'refs/heads/master' && 90 || 45 }}
     needs: build-linux
     permissions:
@@ -647,6 +659,7 @@ jobs:
           lfs: true
 
       - uses: wow-look-at-my/actions@secret-server#latest
+      - uses: ./.github/actions/track-submodules
 
       - name: Setup Go bootstrap toolchain
         uses: actions/setup-go@v5
@@ -693,8 +706,6 @@ jobs:
 
   # The whole test suite for each wasm port, the gate the other ports get -- see docs/CI.md "wasm-suite job".
   wasm-suite:
-    # Off while the wasip1 suite recompiles its modules and starves the queue; flip the condition back to re-enable. waiver-expires: 2026-10-28
-    if: ${{ false }}
     timeout-minutes: ${{ github.ref == 'refs/heads/master' && 240 || 120 }}
     needs: build-linux
     permissions:
@@ -715,6 +726,7 @@ jobs:
           lfs: true
 
       - uses: wow-look-at-my/actions@secret-server#latest
+      - uses: ./.github/actions/track-submodules
 
       - name: Setup Go bootstrap toolchain
         uses: actions/setup-go@v5
@@ -761,19 +773,14 @@ jobs:
         run: git update-index -q --ignore-submodules --refresh
 
       - name: The whole test suite (dist test)
-        # Actions withholds this job's log for the hour it runs, so the command streams live instead.
-        uses: wow-look-at-my/log-streamer/.github/actions/stream@lkgb
-        with:
-          stream-key: ${{ secrets.LOG_STREAMER_STREAM_KEY }}
-          name: ${{ matrix.port }}
-          run: |
-            set -o pipefail
-            export PATH="$PWD/bin:$PWD/lib/wasm:$HOME/.wasmtime/bin:$PATH"
-            sh ./.github/resource-log.sh &
-            probe=$!
-            # the stream client reads until every holder of its pipe exits, so the probe goes when this script does.
-            trap 'kill "$probe"' EXIT
-            GOOS=${{ matrix.port }} GOARCH=wasm stdbuf -oL -eL go tool dist test 2>&1 | tee "$RUNNER_TEMP/suite.log"
+        shell: bash
+        run: |
+          set -o pipefail
+          export PATH="$PWD/bin:$PWD/lib/wasm:$HOME/.wasmtime/bin:$PATH"
+          sh ./.github/resource-log.sh &
+          probe=$!
+          trap 'kill "$probe"' EXIT
+          GOOS=${{ matrix.port }} GOARCH=wasm stdbuf -oL -eL go tool dist test 2>&1 | tee "$RUNNER_TEMP/suite.log"
 
       - name: What ${{ matrix.port }} spent its time on
         # the per-package times are how the js and wasip1 ports get compared, and how a leg that overruns its budget names what overran.
@@ -894,7 +901,8 @@ jobs:
             goarch: amd64
           - goos: darwin
             goarch: arm64
-          # NT is off, so a release carries no windows archive. Put the entry back to ship one. waiver-expires: 2026-10-13
+          - goos: windows
+            goarch: amd64
     permissions:
       id-token: write
       contents: read

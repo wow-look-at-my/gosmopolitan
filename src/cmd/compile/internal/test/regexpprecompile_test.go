@@ -320,7 +320,7 @@ var rxModes = [2]struct{ must, compile string }{
 // a constant and from a variable, in both modes, and compares the two.
 func writeDifferential(corpus *rxCorpus) []byte {
 	var buf bytes.Buffer
-	buf.WriteString("package main\n\nimport (\n\t\"fmt\"\n\t\"os\"\n\t\"reflect\"\n\t\"regexp\"\n\t\"strings\"\n)\n\n")
+	buf.WriteString("package main\n\nimport (\n\t\"fmt\"\n\t\"os\"\n\t\"reflect\"\n\t\"regexp\"\n\t\"runtime\"\n\t\"strings\"\n\t\"sync\"\n\t\"sync/atomic\"\n)\n\n")
 	// Many patterns share one list of inputs, so each list is written once.
 	setIndex := map[string]int{}
 	var sets [][]string
@@ -392,7 +392,13 @@ func writeDifferential(corpus *rxCorpus) []byte {
 
 // rxDifferentialMain is the fixed half of the differential program.
 const rxDifferentialMain = `
-var compiled, rejected, checks, failures int
+// tally holds one worker's counts, so the workers share no counter.
+type tally struct {
+	compiled, rejected, checks int
+}
+
+var failures atomic.Int64
+var printLock sync.Mutex
 
 func errText(re *regexp.Regexp, err error) string {
 	if re != nil || err == nil {
@@ -402,40 +408,67 @@ func errText(re *regexp.Regexp, err error) string {
 }
 
 func fail(format string, args ...any) {
-	failures++
-	if failures <= 50 {
+	if failures.Add(1) <= 50 {
+		printLock.Lock()
 		fmt.Printf("FAIL "+format+"\n", args...)
+		printLock.Unlock()
 	}
 }
 
+// compareAll gives each worker the next pattern. A pattern's Regexps belong
+// to one worker only, because Longest changes them.
 func compareAll(pre [][2]*regexp.Regexp, preErr [][2]string) {
-	for idx, pattern := range patterns {
-		for mode := range 2 {
-			var run *regexp.Regexp
-			var err error
-			if mode == 0 {
-				run, err = regexp.Compile(pattern)
-			} else {
-				run, err = regexp.CompilePOSIX(pattern)
-			}
-			if err != nil {
-				rejected++
-				if pre[idx][mode] != nil || preErr[idx][mode] != err.Error() {
-					fail("%q mode %d: constant gives %v %q, variable gives error %q", pattern, mode, pre[idx][mode], preErr[idx][mode], err)
+	var next atomic.Int64
+	tallies := make([]tally, runtime.GOMAXPROCS(0))
+	var wg sync.WaitGroup
+	for worker := range tallies {
+		wg.Go(func() {
+			counts := &tallies[worker]
+			for {
+				idx := int(next.Add(1) - 1)
+				if idx >= len(patterns) {
+					return
 				}
-				continue
+				comparePattern(counts, idx, pre, preErr)
 			}
-			compiled++
-			if pre[idx][mode] == nil {
-				fail("%q mode %d: constant gives error %q, variable compiles", pattern, mode, preErr[idx][mode])
-				continue
-			}
-			compareOne(pattern, mode, pre[idx][mode], run, textSets[textSet[idx]], idx < basePatterns)
-		}
+		})
 	}
-	fmt.Printf("patterns %d every-method %d compiled %d rejected %d checks %d failures %d\n", len(patterns), basePatterns, compiled, rejected, checks, failures)
-	if failures > 0 {
+	wg.Wait()
+	var total tally
+	for _, counts := range tallies {
+		total.compiled += counts.compiled
+		total.rejected += counts.rejected
+		total.checks += counts.checks
+	}
+	fmt.Printf("patterns %d every-method %d compiled %d rejected %d checks %d failures %d\n", len(patterns), basePatterns, total.compiled, total.rejected, total.checks, failures.Load())
+	if failures.Load() > 0 {
 		os.Exit(1)
+	}
+}
+
+func comparePattern(counts *tally, idx int, pre [][2]*regexp.Regexp, preErr [][2]string) {
+	pattern := patterns[idx]
+	for mode := range 2 {
+		var run *regexp.Regexp
+		var err error
+		if mode == 0 {
+			run, err = regexp.Compile(pattern)
+		} else {
+			run, err = regexp.CompilePOSIX(pattern)
+		}
+		if err != nil {
+			counts.rejected++
+			if pre[idx][mode] != nil || preErr[idx][mode] != err.Error() {
+				fail("%q mode %d: constant gives %v %q, variable gives error %q", pattern, mode, pre[idx][mode], preErr[idx][mode], err)
+			}
+			continue
+		}
+		counts.compiled++
+		if pre[idx][mode] == nil {
+			fail("%q mode %d: constant gives error %q, variable compiles", pattern, mode, preErr[idx][mode])
+			continue
+		}
+		compareOne(counts, pattern, mode, pre[idx][mode], run, textSets[textSet[idx]], idx < basePatterns)
 	}
 }
 
@@ -447,13 +480,13 @@ type sameFunc func(what string, have, want any)
 // compareOne checks a precompiled Regexp against a run-time one. full runs
 // every method. Otherwise the inputs go through the four matching entry
 // points: string, bytes, reader, and the repeated search.
-func compareOne(pattern string, mode int, pre, run *regexp.Regexp, texts []string, full bool) {
-	checks++
+func compareOne(counts *tally, pattern string, mode int, pre, run *regexp.Regexp, texts []string, full bool) {
+	counts.checks++
 	if !reflect.DeepEqual(*pre, *run) {
 		fail("%q mode %d: the precompiled Regexp differs from the run-time one", pattern, mode)
 	}
 	same := func(what string, have, want any) {
-		checks++
+		counts.checks++
 		if !reflect.DeepEqual(have, want) {
 			fail("%q mode %d: %s: precompiled %#v, run time %#v", pattern, mode, what, have, want)
 		}

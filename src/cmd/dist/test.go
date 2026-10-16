@@ -528,6 +528,10 @@ type goTest struct {
 	// packages' tests share (-keepbinary).
 	keep string
 
+	// actionGraph, if non-empty, is where go test writes its action graph
+	// with timings (-debug-actiongraph). reportSlowActions reads it.
+	actionGraph string
+
 	// shared says this test differs from the package's run only in the
 	// flags its binary starts with. It starts the binary every package's
 	// tests compile into, with those flags, and builds nothing of its own.
@@ -540,6 +544,11 @@ type goTest struct {
 
 	// first starts this test ahead of the rest of its worklist (see work.first).
 	first bool
+
+	// alone starts this test once every test queued before it has ended. Its
+	// command fills the machine, so a test beside it gets too little of the
+	// CPU to finish inside its deadline.
+	alone bool
 }
 
 // upstreamTestVet is the analyzer list upstream's go test runs, which is this
@@ -878,6 +887,9 @@ func (opts *goTest) buildArgs(t *tester) (build, run, pkgs, testFlags []string, 
 	if opts.pgo != "" {
 		build = append(build, "-pgo="+opts.pgo)
 	}
+	if opts.actionGraph != "" {
+		build = append(build, "-debug-actiongraph="+opts.actionGraph)
+	}
 	if opts.keep != "" {
 		build = append(build, "-keepbinary="+opts.keep)
 	}
@@ -1000,11 +1012,15 @@ func (t *tester) registerStdTest(pkg string) {
 		// One step builds and runs every package here, so its own line is the only thing that accounts for the compile.
 		var err error
 		if len(rest) > 0 {
+			if !t.json {
+				test.actionGraph = filepath.Join(workdir, "std.test.actions.json")
+			}
 			started := time.Now()
 			var state *os.ProcessState
 			state, err = test.runState(t)
 			if !t.json {
 				reportTestStep("std.test", time.Since(started), state)
+				reportSlowActions(os.Stdout, "std.test", test.actionGraph)
 			}
 			t.recordOneBinary(false, test.keep, rest)
 		}
@@ -1012,10 +1028,14 @@ func (t *tester) registerStdTest(pkg string) {
 		if alone {
 			cmdGo := oneBinaryTest([]string{"cmd/go"}, goos)
 			cmdGo.timeout = timeoutSec
+			if !t.json {
+				cmdGo.actionGraph = filepath.Join(workdir, "cmd-go.test.actions.json")
+			}
 			started := time.Now()
 			state, errCmdGo := cmdGo.runState(t)
 			if !t.json {
 				reportTestStep("cmd-go.test", time.Since(started), state)
+				reportSlowActions(os.Stdout, "cmd-go.test", cmdGo.actionGraph)
 			}
 			if err == nil {
 				err = errCmdGo
@@ -1485,6 +1505,12 @@ func (t *tester) registerTests() {
 		}
 		for shard := 0; shard < nShards; shard++ {
 			id := fmt.Sprintf("%d_%d", shard, nShards)
+			// A flag that is not -test.* turns off go test's result cache, and
+			// one shard is the whole corpus, which is what no flag runs.
+			var shardFlags []string
+			if nShards > 1 {
+				shardFlags = []string{fmt.Sprintf("-shard=%d", shard), fmt.Sprintf("-shards=%d", nShards)}
+			}
 			t.registerTest("../test",
 				&goTest{
 					variant: id,
@@ -1493,7 +1519,7 @@ func (t *tester) registerTests() {
 					// results and is important for load-balancing test shards.
 					omitVariant: false,
 					pkg:         "cmd/internal/testdir",
-					testFlags:   []string{fmt.Sprintf("-shard=%d", shard), fmt.Sprintf("-shards=%d", nShards)},
+					testFlags:   shardFlags,
 					runOnHost:   true,
 					// The corpus runs as cosmo binaries through the exec
 					// wrapper on a hosted runner, past go test's 10 minutes.
@@ -1501,6 +1527,8 @@ func (t *tester) registerTests() {
 					// Every shard starts the one test binary with its
 					// own -shard.
 					shared: true,
+					// The corpus fills every CPU, the way cmd/go does.
+					alone: true,
 				},
 			)
 		}
@@ -1594,7 +1622,7 @@ func (t *tester) registerTest(heading string, test *goTest, opts ...registerTest
 					test.summarize(t, &w.out, w.cmd, time.Since(w.began))
 				}
 			}
-			t.worklist = append(t.worklist, w)
+			t.queue(w, test.alone)
 			return nil
 		})
 	}
@@ -1626,6 +1654,15 @@ func (t *tester) registerTest(heading string, test *goTest, opts ...registerTest
 // queued answers the work for the dist test named name that waits in the
 // worklist, or nil when that test is not queued: it ran already, or this run
 // leaves it out.
+// queue adds w to the worklist. If alone is set, the works queued before w
+// run to their end first.
+func (t *tester) queue(w *work, alone bool) {
+	if alone {
+		t.runPending(w.dt)
+	}
+	t.worklist = append(t.worklist, w)
+}
+
 func (t *tester) queued(name string) *work {
 	if name == "" {
 		return nil

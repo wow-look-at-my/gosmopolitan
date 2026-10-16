@@ -27,6 +27,18 @@ cp marker.txt $WORK/modcache/example.com/vectors@v1.0.0/vectors.json
 go test -run=TestReadsModCache .
 stdout '^ok\s+m\s+\(cached\)$'
 
+# A GOCACHE that is not clean still names the build cache. On Windows,
+# $WORK/gocache mixes separators. The link stands in for the short name
+# that resolves to another spelling there.
+mkdir $WORK/real
+symlink $WORK/link -> real
+env GOCACHE=$WORK/link/./unclean
+go test -run=TestReadsPlumbing .
+stdout '^ok\s+m\s+[0-9.]+s$'
+cp marker.txt $WORK/link/unclean/marker.txt
+go test -run=TestReadsPlumbing .
+stdout '^ok\s+m\s+\(cached\)$'
+
 -- go.mod --
 module m
 
