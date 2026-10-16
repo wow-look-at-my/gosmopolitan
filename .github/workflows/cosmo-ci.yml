@@ -172,7 +172,7 @@ jobs:
 
     steps:
       # dist test links one APE per test package, and C: has too little room for that. D: holds the workspace and RUNNER_TEMP with room to spare, so the temp files and the Go caches go there too.
-      - name: Put the suite's temp files and Go caches on D: (NT)
+      - name: Put the suite's temp files and Go caches on the D drive (NT)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
