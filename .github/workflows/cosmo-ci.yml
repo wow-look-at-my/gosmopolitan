@@ -787,12 +787,22 @@ jobs:
         shell: bash
         run: git update-index -q --ignore-submodules --refresh
 
-      # log-streamer is private, so its stream action does not resolve here. These steps do what that action does.
+      # The private log-streamer action does not resolve here. These steps do its work, with the OIDC token that reads ls-client.
+      - name: Mint a buildhost token
+        id: lstoken
+        uses: wow-look-at-my/actions@typescript#latest
+        with:
+          script: |
+            const token = await core.getIDToken('https://pazer.build');
+            core.setSecret(token);
+            core.setOutput('token', token);
+
       - name: Download the log-streamer client
         id: lsclient
         uses: wow-look-at-my/buildhost/.github/actions/buildhost-download@master
         with:
           project: log-streamer/ls-client
+          token: ${{ steps.lstoken.outputs.token }}
 
       - name: The whole test suite (dist test)
         # Actions withholds this job's log for the hour it runs, so the command streams live instead.
