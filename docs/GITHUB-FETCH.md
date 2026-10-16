@@ -31,11 +31,12 @@ A version tag such as `v1.2.3` needs no ref list. Its archive is fetched first. 
 
 Everything else needs the ref list. It comes over plain HTTP, from the first source that answers:
 
-1. `https://github.com/<owner>/<repo>.git/info/refs?service=git-upload-pack`. This is the advertisement git itself reads first: every branch and tag at its commit, annotated tags peeled, and `HEAD`. One request, no rate limit.
-2. The same URL through proxy.pazer.ai.
+1. `https://github.com/<owner>/<repo>.git/info/refs?service=git-upload-pack`. This is the advertisement git itself reads first: every branch and tag at its commit, annotated tags peeled, and `HEAD`. One request, no rate limit. It is asked with git's own credential, then once with each GitHub token in the environment (see "Private repositories"), as the `x-access-token` user.
+2. The same URL through proxy.pazer.ai, with no token.
 3. The REST API on github-state-mirror.pazer.io. The mirror answers only a request with a GitHub token.
 4. The REST API on api.github.com, then through proxy.pazer.ai. Without a token it allows few requests an hour.
-5. `git ls-remote`.
+
+Git never lists the refs of a github.com repository. When no source answers, the error names each one with its status, as `listing the refs of <url> over HTTP: ...`. A `git ls-remote` would cost a process per lookup and would hide which source refused.
 
 The REST steps read `/repos/<owner>/<repo>/tags` and `/branches` page by page, and `/repos/<owner>/<repo>` for `default_branch`, which is `HEAD`.
 
@@ -45,9 +46,11 @@ A request through proxy.pazer.ai carries the GOAUTH credential of the github.com
 
 github.com answers nothing about a private repository without a credential. GOAUTH usually has none for it. The direct `info/refs` advertisement carries the credential git's own helpers hold for github.com (`git credential fill`), presented as HTTP basic authentication. That credential is resolved once per process. A build then pays for one helper run, however many origins it resolves. On a machine whose git has one, a private repository's ref list therefore costs one GET.
 
-A machine with no git credential sends the request anonymously. The ref list then falls to the routes below. github-state-mirror is the route that needs no git. It is asked first with the GOAUTH credential for api.github.com. Then it is asked once with each token in `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`, `GITHUB_TOKEN` and `GH_TOKEN`, in that order. After those, each other environment value that starts like a GitHub token is tried, in the order of the variable names. The prefixes are `ghp_`, `github_pat_`, `gho_`, `ghu_` and `ghs_`.
+A machine with no git credential sends the request anonymously. The advertisement is then asked once with each GitHub token the environment holds, as HTTP basic authentication with the user `x-access-token`, the form GitHub pairs a token with. The tokens are those in `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`, `GITHUB_TOKEN` and `GH_TOKEN`, in that order. After those, each other environment value that starts like a GitHub token is tried, in the order of the variable names. The prefixes are `ghp_`, `github_pat_`, `gho_`, `ghu_` and `ghs_`. A CI job that holds the org read token in `PRIVATE_ORG_REPO_READ` resolves a private repository this way, with no git configuration.
 
-A web session needs that search: its real tokens sit in variables with their own names, and `GH_TOKEN` holds a proxy placeholder. A token goes to the mirror only. The token the mirror last accepted is tried first after that.
+The ref list then falls to the routes below. github-state-mirror is the route that needs no git. It is asked first with the GOAUTH credential for api.github.com, then once with each token, in the same order.
+
+A web session needs that search: its real tokens sit in variables with their own names, and `GH_TOKEN` holds a proxy placeholder. A token goes to github.com itself and to the mirror, never to proxy.pazer.ai. The token github.com or the mirror last accepted is tried first after that.
 
 - The ref list comes from the mirror's REST API, as above.
 - The archive comes from `/repos/<owner>/<repo>/tarball/<commit>`, then `zipball`. The mirror answers with a redirect to a codeload.github.com URL that carries its own short-lived token. That redirect is not followed. The signed URL is fetched directly, then through proxy.pazer.ai, with no credential. An error prints `xxxxx` in place of the token.
