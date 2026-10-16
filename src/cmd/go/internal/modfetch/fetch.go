@@ -1172,14 +1172,25 @@ func (f *Fetcher) recordedH1(mod module.Version) (string, bool) {
 		return "", false
 	}
 	found := ""
-	for _, sum := range f.sumState.m[mod] {
-		if !strings.HasPrefix(sum, "h1:") {
-			continue
+	consider := func(sums []string) bool {
+		for _, sum := range sums {
+			if !strings.HasPrefix(sum, "h1:") {
+				continue
+			}
+			if found != "" && found != sum {
+				return false
+			}
+			found = sum
 		}
-		if found != "" && found != sum {
+		return true
+	}
+	if !consider(f.sumState.m[mod]) {
+		return "", false
+	}
+	for _, goSums := range f.sumState.w {
+		if !consider(goSums[mod]) {
 			return "", false
 		}
-		found = sum
 	}
 	return found, found != ""
 }
