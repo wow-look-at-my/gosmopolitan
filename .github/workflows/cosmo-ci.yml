@@ -803,6 +803,7 @@ jobs:
         with:
           project: log-streamer/ls-client
           token: ${{ steps.lstoken.outputs.token }}
+          required: 'false'
 
       - name: The whole test suite (dist test)
         # Actions withholds this job's log for the hour it runs, so the command streams live instead.
@@ -823,6 +824,10 @@ jobs:
           trap 'kill "$probe"' EXIT
           GOOS=${{ matrix.port }} GOARCH=wasm stdbuf -oL -eL go tool dist test 2>&1 | tee "$RUNNER_TEMP/suite.log"
           EOF
+          if [ "${{ steps.lsclient.outputs.downloaded }}" != "true" ]; then
+            echo "::warning::buildhost refused ls-client to this job, so the suite log does not stream live; it is in this job's log only"
+            exec bash "$script"
+          fi
           "${{ steps.lsclient.outputs.path }}" shell "$script"
 
       - name: What ${{ matrix.port }} spent its time on
