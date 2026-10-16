@@ -26,9 +26,7 @@ import (
 // The run corpus is a few standalone programs, each `package main` with `func
 // main`, so they differ only in a name. This compiles them ONCE, as one
 // package each under a generated dispatcher, and each test then runs that one
-// executable with its own name. As the argument. The corpus costs one build
-// instead of hundreds, and on a wasm target the runtime compiles one module
-// instead of hundreds.
+// executable with its own name. As the argument.
 
 // batchOutput answers what one test program printed. The whole corpus runs in
 // one process per CPU on the first call. This is because a process start
