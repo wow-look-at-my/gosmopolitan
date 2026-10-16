@@ -189,8 +189,8 @@ var (
 var githubTokenPrefixes = []string{"ghp_", "github_pat_", "gho_", "ghu_", "ghs_"}
 
 // gsmBearers returns the token github.com or the mirror last accepted, each
-// token that githubTokenVars hold, then each other environment value that
-// starts like a GitHub token. In the order of the variable names.
+// token that githubTokenVars hold, then each other environment value. That
+// value starts like a GitHub token. In the order of the variable names.
 func gsmBearers() []string {
 	gsmAcceptedMu.Lock()
 	accepted := gsmAccepted
@@ -238,9 +238,9 @@ func gsmSources(route string) []archiveSource {
 }
 
 // githubRefs returns what ls-remote would list, over plain HTTP. The first
-// source that answers wins: the info/refs advertisement from github.com, with
-// git's own credential, then with each token the environment holds, then
-// through the proxy. This also covers then the REST API, from
+// source that answers wins: the info/refs advertisement from github.com. That
+// source is with git's own credential, then with each token the environment
+// holds, then through the proxy. This also covers then the REST API, from
 // github-state-mirror, api.github.com, and api.github.com through the proxy.
 // No git runs: a failure names every source.
 func (r *gitRepo) githubRefs(ctx context.Context) (map[string]string, error) {
@@ -266,14 +266,13 @@ func (r *gitRepo) githubRefs(ctx context.Context) (map[string]string, error) {
 	return nil, err
 }
 
-// githubTokenUser is the user name GitHub pairs a token with in HTTP basic
-// authentication.
+// githubTokenUser is the user name GitHub pairs a token with in HTTP basic authentication.
 const githubTokenUser = "x-access-token"
 
 // githubInfoRefsSources lists where to read the advertisement at infoRefs, in
-// the order to try: github.com with git's own credential, github.com with each
-// token of gsmBearers, then the proxy. A token goes to github.com itself and
-// never to the proxy.
+// the order to try. This is github.com with git's own credential, github.com
+// with each token of gsmBearers, then the proxy. A token goes to github.com
+// itself and never to the proxy.
 func (r *gitRepo) githubInfoRefsSources(infoRefs string) []archiveSource {
 	sources := []archiveSource{{url: infoRefs, allowHost: githubHost}}
 	for _, token := range gsmBearers() {
