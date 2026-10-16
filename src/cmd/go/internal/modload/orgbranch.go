@@ -115,6 +115,9 @@ func gitCheckedOutBranch(dir string) string {
 // orgVersion returns the pseudo-version of the head of the branch the org
 // module at path follows. In a CI build it is the head the run locked.
 func orgVersion(ld *Loader, ctx context.Context, path string) (string, error) {
+	if version, ok, err := orgPinned(path); err != nil || ok {
+		return version, err
+	}
 	// A name in go.mod replaces the branch this invocation would follow, and is resolved the same way after that.
 	branch := orgNamedBranch(ld, path)
 	if branch == "" {
