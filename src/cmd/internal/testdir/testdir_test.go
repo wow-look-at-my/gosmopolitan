@@ -1109,8 +1109,11 @@ func (t test) run() error {
 			// A shared process can change what a program prints: another
 			// program's state, and package names other than main. The program
 			// alone decides a result the batch does not match.
-			if joined && t.checkExpectedOutput(batched) == nil {
-				return nil
+			if joined {
+				if t.checkExpectedOutput(batched) == nil {
+					return nil
+				}
+				fmt.Fprintf(os.Stderr, "testdir batch: %s printed other output in the batch, and runs alone\n", t.goFileName())
 			}
 		}
 		out, err := goRun(flags, append([]string{t.goFileName()}, args...), "run.exe")
