@@ -6,6 +6,7 @@ package test
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -70,6 +71,29 @@ func TestProcessLocal(t *testing.T) {
 	} {
 		if got := isProcessLocal(path); got != want {
 			t.Errorf("isProcessLocal(%q) = %v, want %v", path, got, want)
+		}
+	}
+}
+
+// TestWindowsLiveState pins the Windows paths the system rewrites as it runs.
+// A drive letter is a volume only on Windows, so the paging files answer there.
+func TestWindowsLiveState(t *testing.T) {
+	onWindows := runtime.GOOS == "windows"
+	for path, want := range map[string]bool{
+		`\\.\pipe\`:              true,
+		`\\.\pipe\go-test-1234`:  true,
+		`\\.\NUL`:                true,
+		`c:\pagefile.sys`:        onWindows,
+		`C:\PAGEFILE.SYS`:        onWindows,
+		`d:\swapfile.sys`:        onWindows,
+		`c:\hiberfil.sys`:        onWindows,
+		`c:\data\pagefile.sys`:   false,
+		`c:\Windows\win.ini`:     false,
+		`\\server\share\a.sys`:   false,
+		"/etc/hosts":             false,
+	} {
+		if got := isWindowsLiveState(path); got != want {
+			t.Errorf("isWindowsLiveState(%q) = %v, want %v", path, got, want)
 		}
 	}
 }

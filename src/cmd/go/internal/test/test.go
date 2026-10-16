@@ -3203,6 +3203,9 @@ func isProcessLocal(name string) bool {
 			return true
 		}
 	}
+	if isWindowsLiveState(name) {
+		return true
+	}
 	rest, ok := strings.CutPrefix(name, "/proc/")
 	if !ok {
 		return false
@@ -3212,6 +3215,25 @@ func isProcessLocal(name string) bool {
 		return true
 	}
 	return procCounters[rest]
+}
+
+// isWindowsLiveState reports whether name is Windows state that the system
+// rewrites as it runs: the device namespace, where the named pipes are, and the
+// paging and hibernation files at a volume root. The os tests read both, so
+// without this rule they never hit the cache on Windows.
+func isWindowsLiveState(name string) bool {
+	if strings.HasPrefix(name, `\\.\`) || strings.HasPrefix(name, `//./`) {
+		return true
+	}
+	vol := filepath.VolumeName(name)
+	if len(vol) != 2 || vol[1] != ':' {
+		return false
+	}
+	switch strings.ToLower(strings.TrimLeft(name[len(vol):], `\/`)) {
+	case "pagefile.sys", "swapfile.sys", "hiberfil.sys":
+		return true
+	}
+	return false
 }
 
 // procCounters are the /proc files whose bytes are the system's running
