@@ -53,6 +53,31 @@ func TestSplitBatch(t *testing.T) {
 	}
 }
 
+// TestSplitInits: a run with no programs names what each program printed in
+// its package initialization, and the program whose initialization ended the
+// process.
+func TestSplitInits(t *testing.T) {
+	const nonce = "nonce"
+	whole := "noncei prog0\nnoncei prog1\ninitv0\nnoncei prog2\nnonce .\n"
+	inits, _, finished := splitInits([]byte(whole), nonce)
+	want := map[string][]byte{"prog1": []byte("initv0\n")}
+	if !equalOutputs(inits, want) || !finished {
+		t.Fatalf("whole run: inits %q, finished %v; want %q and finished", inits, finished, want)
+	}
+
+	died := "noncei prog0\nnoncei prog1\n"
+	_, last, finished := splitInits([]byte(died), nonce)
+	if finished || last != "prog1" {
+		t.Fatalf("died in prog1's init: last %q, finished %v; want prog1, not finished", last, finished)
+	}
+
+	// An init mark is not a program marker.
+	finishedProgs, started := splitBatch([]byte(whole), nonce)
+	if len(finishedProgs) != 0 || started != "" {
+		t.Fatalf("splitBatch read init marks as programs: %q, started %q", finishedProgs, started)
+	}
+}
+
 func equalOutputs(got, want map[string][]byte) bool {
 	return maps.EqualFunc(got, want, func(left, right []byte) bool { return string(left) == string(right) })
 }

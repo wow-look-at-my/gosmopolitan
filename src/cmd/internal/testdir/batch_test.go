@@ -82,6 +82,13 @@ func (bat *batch) runAll(exe string) {
 		}()
 	}
 	wg.Wait()
+	fmt.Fprintf(os.Stderr, "testdir batch: %d of %d programs finished in %d processes\n", len(bat.ran), len(names), procs)
+	// A program alone prints its init output before main.
+	for name, out := range bat.ran {
+		if init, ok := bat.initOut[name]; ok {
+			bat.ran[name] = append(slices.Clip(init), out...)
+		}
+	}
 }
 
 // runShare runs names in one process. A program that ends the process does
@@ -190,8 +197,8 @@ func run(name string) {
 }
 
 func main() {
-	if len(os.Args) < 3 {
-		fmt.Fprintln(os.Stderr, "usage: batch <nonce> <test>...")
+	if len(os.Args) < 2 {
+		fmt.Fprintln(os.Stderr, "usage: batch <nonce> [test...]")
 		os.Exit(2)
 	}
 	nonce, names := os.Args[1], os.Args[2:]
@@ -213,6 +220,9 @@ type batch struct {
 	nonce string
 	ids   map[string]string
 	err   error
+
+	// initOut holds what each program prints during its package initialization.
+	initOut map[string][]byte
 
 	// ran holds each program's output from the one process that ran them all.
 	ranOnce sync.Once
@@ -291,6 +301,10 @@ func (bat *batch) build(corpus string) {
 			bat.err = err
 			return
 		}
+		if err := os.WriteFile(filepath.Join(pkgdir, initMarkFile), []byte(initMark(pkgname)), 0o644); err != nil {
+			bat.err = err
+			return
+		}
 		programs = append(programs, program{ID: pkgname})
 		bat.ids[rel] = pkgname
 		count++
@@ -360,27 +374,114 @@ func (bat *batch) build(corpus string) {
 		return
 	}
 
-	var main strings.Builder
-	if err := dispatcher.Execute(&main, dispatch{Programs: joined}); err != nil {
-		bat.err = err
-		return
-	}
-	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(main.String()), 0o644); err != nil {
-		bat.err = err
-		return
-	}
-	mainPkg, err := ctxt.ImportDir(dir, 0)
-	if err != nil {
-		bat.err = err
-		return
-	}
-	mainUnit := &unit{importPath: "testdirbatch", pkgPath: "main", pkg: mainPkg, gcflags: bld.flags.mainGcflags, deps: kept}
-
+	// Every process of the batch runs the package initialization of every program in it.
 	exe := filepath.Join(dir, "batch.exe")
-	godebug := defaultGODEBUG(goVersion, mainPkg.Directives, bld.fips())
-	if out, err := bld.buildProgram(append(kept, mainUnit), lang, godebug, exe); err != nil {
-		bat.err = fmt.Errorf("testdir batch: building %d programs: %v\n%s", len(kept), err, out)
-		return
+	for {
+		var main strings.Builder
+		if err := dispatcher.Execute(&main, dispatch{Programs: joined}); err != nil {
+			bat.err = err
+			return
+		}
+		if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(main.String()), 0o644); err != nil {
+			bat.err = err
+			return
+		}
+		mainPkg, err := ctxt.ImportDir(dir, 0)
+		if err != nil {
+			bat.err = err
+			return
+		}
+		mainUnit := &unit{importPath: "testdirbatch", pkgPath: "main", pkg: mainPkg, gcflags: bld.flags.mainGcflags, deps: kept}
+		godebug := defaultGODEBUG(goVersion, mainPkg.Directives, bld.fips())
+		if out, err := bld.buildProgram(append(slices.Clip(kept), mainUnit), lang, godebug, exe); err != nil {
+			bat.err = fmt.Errorf("testdir batch: building %d programs: %v\n%s", len(kept), err, out)
+			return
+		}
+
+		argv := launch(exe, bat.nonce)
+		out, _ := exec.Command(argv[0], argv[1:]...).CombinedOutput()
+		inits, last, finished := splitInits(out, bat.nonce)
+		if finished {
+			bat.initOut = inits
+			break
+		}
+		drop := slices.IndexFunc(joined, func(prog program) bool { return prog.ID == last })
+		if drop < 0 {
+			bat.err = fmt.Errorf("testdir batch: the dispatcher ended before main, and no program's initialization was under way\n%s", out)
+			return
+		}
+		fmt.Fprintf(os.Stderr, "testdir batch: %s ends its process during package initialization, and runs alone\n", last)
+		joined = slices.Delete(joined, drop, drop+1)
+		kept = slices.Delete(kept, drop, drop+1)
+		for rel, pkgname := range bat.ids {
+			if pkgname == last {
+				delete(bat.ids, rel)
+			}
+		}
+		if len(kept) == 0 {
+			bat.err = fmt.Errorf("testdir batch: no program survives its package initialization in a shared process")
+			return
+		}
 	}
 	bat.exe = exe
+}
+
+// initMarkFile is the first file of each batched program.
+const initMarkFile = "0batchinit.go"
+
+// initMark is the source of initMarkFile for the package pkgname. It prints
+// the nonce, the letter i and pkgname before the package's own initialization
+// runs. A program alone prints its init output before main, and the mark lets
+// the batch put that output in front of the program's batched output.
+func initMark(pkgname string) string {
+	return fmt.Sprintf(`package %[1]s
+
+import (
+	batchfmt "fmt"
+	batchos "os"
+)
+
+var _ = testdirBatchInitMark()
+
+func testdirBatchInitMark() int {
+	if len(batchos.Args) > 1 {
+		batchfmt.Printf("%%si %%s\n", batchos.Args[1], %[1]q)
+		batchos.Stdout.Sync()
+	}
+	return 0
+}
+`, pkgname)
+}
+
+// splitInits splits what a dispatcher run with no programs printed. inits holds
+// each program's init output. last names the program whose initialization ran
+// last. finished reports whether the process reached main.
+func splitInits(out []byte, nonce string) (inits map[string][]byte, last string, finished bool) {
+	inits = map[string][]byte{}
+	mark := []byte(nonce + "i ")
+	end := []byte(nonce + " .\n")
+	if idx := bytes.Index(out, end); idx >= 0 {
+		out, finished = out[:idx], true
+	}
+	for rest := out; ; {
+		start := bytes.Index(rest, mark)
+		if start < 0 {
+			return inits, last, finished
+		}
+		rest = rest[start+len(mark):]
+		line := rest
+		if eol := bytes.IndexByte(rest, '\n'); eol >= 0 {
+			line, rest = rest[:eol], rest[eol+1:]
+		} else {
+			rest = nil
+		}
+		last = string(line)
+		body := rest
+		if next := bytes.Index(rest, mark); next >= 0 {
+			body = rest[:next]
+		}
+		if len(body) > 0 {
+			inits[last] = body
+		}
+	}
 }
