@@ -246,7 +246,8 @@ func eligible(src string) (string, bool) {
 // rewrite turns one test program into a package the dispatcher can call.
 func rewrite(src, pkgname string) string {
 	src = strings.Replace(src, "\npackage main\n", "\npackage "+pkgname+"\n", 1)
-	return strings.Replace(src, "\nfunc main() {", "\n// Main is this test program's own main.\nfunc Main() {", 1)
+	// The dispatcher does not inline Main, as no caller inlines a main.
+	return strings.Replace(src, "\nfunc main() {", "\n// Main is this test program's own main.\n//\n//go:noinline\nfunc Main() {", 1)
 }
 
 func (bat *batch) build(corpus string) {
