@@ -80,17 +80,17 @@ func TestProcessLocal(t *testing.T) {
 func TestWindowsLiveState(t *testing.T) {
 	onWindows := runtime.GOOS == "windows"
 	for path, want := range map[string]bool{
-		`\\.\pipe\`:              true,
-		`\\.\pipe\go-test-1234`:  true,
-		`\\.\NUL`:                true,
-		`c:\pagefile.sys`:        onWindows,
-		`C:\PAGEFILE.SYS`:        onWindows,
-		`d:\swapfile.sys`:        onWindows,
-		`c:\hiberfil.sys`:        onWindows,
-		`c:\data\pagefile.sys`:   false,
-		`c:\Windows\win.ini`:     false,
-		`\\server\share\a.sys`:   false,
-		"/etc/hosts":             false,
+		`\\.\pipe\`:             true,
+		`\\.\pipe\go-test-1234`: true,
+		`\\.\NUL`:               true,
+		`c:\pagefile.sys`:       onWindows,
+		`C:\PAGEFILE.SYS`:       onWindows,
+		`d:\swapfile.sys`:       onWindows,
+		`c:\hiberfil.sys`:       onWindows,
+		`c:\data\pagefile.sys`:  false,
+		`c:\Windows\win.ini`:    false,
+		`\\server\share\a.sys`:  false,
+		"/etc/hosts":            false,
 	} {
 		if got := isWindowsLiveState(path); got != want {
 			t.Errorf("isWindowsLiveState(%q) = %v, want %v", path, got, want)
