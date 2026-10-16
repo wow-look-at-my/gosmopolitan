@@ -133,7 +133,11 @@ func run[T TBRun[T]](t T, f func(t T, mode testMode), opts ...any) {
 		if parallel {
 			setParallel(t)
 		} else {
-			t.Serial()
+			// testNotParallel used to work by not calling t.Parallel. Tests are
+			// parallel by default here and that call is a no-op, so the option
+			// means nothing unless it takes the barrier. What is left under it
+			// counts goroutines or measures timing, which needs the process.
+			t.Serial("the caller passed testNotParallel: it counts goroutines or times a whole process at rest")
 		}
 	}
 	for _, mode := range modes {

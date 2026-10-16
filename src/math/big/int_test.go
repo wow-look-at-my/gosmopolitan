@@ -2016,7 +2016,7 @@ func TestNewIntMinInt64(t *testing.T) {
 }
 
 func TestNewIntAllocs(t *testing.T) {
-	t.Serial() // AllocsPerRun measures the whole process.
+	t.Serial("constructing a small integer has a fixed allocation budget that the whole process shares")
 	testenv.SkipIfOptimizationOff(t)
 	for _, n := range []int64{0, 7, -7, 1 << 30, -1 << 30, 1 << 50, -1 << 50} {
 		x := NewInt(3)
