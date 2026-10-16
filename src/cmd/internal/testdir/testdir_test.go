@@ -1103,14 +1103,14 @@ func (t test) run() error {
 		if plain {
 			// The whole run corpus is ONE executable that ran in ONE process.
 			batched, joined, err := batchOutput(t.gorootTestDir, t.goFileName())
-			if joined && err != nil {
-				return fmt.Errorf("%s\n%s", err, batched)
-			}
 			if err != nil {
 				return err
 			}
-			if joined {
-				return t.checkExpectedOutput(batched)
+			// A shared process can change what a program prints: another
+			// program's state, and package names other than main. The program
+			// alone decides a result the batch does not match.
+			if joined && t.checkExpectedOutput(batched) == nil {
+				return nil
 			}
 		}
 		out, err := goRun(flags, append([]string{t.goFileName()}, args...), "run.exe")

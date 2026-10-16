@@ -8,10 +8,12 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -28,21 +30,17 @@ import (
 // instead of hundreds.
 
 // batchOutput answers what one test program printed. The whole corpus runs in
-// ONE process on the first call. This is because a process start costs about
-// a second on a wasm runtime and most of these programs do almost nothing.
+// one process per CPU on the first call. This is because a process start
+// costs about a second on a wasm runtime and most of these programs do almost
+// nothing.
 func batchOutput(corpus, file string) (out []byte, batched bool, err error) {
 	exe, name, err := batchFor(corpus, file)
 	if err != nil || name == "" {
 		return nil, false, err
 	}
 	theBatch.ranOnce.Do(func() { theBatch.runAll(exe) })
-	if out, done := theBatch.ran[name]; done {
-		return out, true, nil
-	}
-	// The one process did not reach this program. Run it alone.
-	argv := launch(exe, theBatch.nonce, name)
-	single, err := exec.Command(argv[0], argv[1:]...).CombinedOutput()
-	return single, true, err
+	out, done := theBatch.ran[name]
+	return out, done, nil
 }
 
 // launch answers the command that starts a program built here. A cross
@@ -56,7 +54,8 @@ func launch(exe string, names ...string) []string {
 	return append(argv, names...)
 }
 
-// runAll runs every batched program in one process and splits what it printed.
+// runAll runs every batched program, one process per CPU, and splits what each
+// process printed.
 func (bat *batch) runAll(exe string) {
 	bat.ran = map[string][]byte{}
 
@@ -66,15 +65,59 @@ func (bat *batch) runAll(exe string) {
 	}
 	sort.Strings(names)
 
-	argv := launch(exe, append([]string{bat.nonce}, names...)...)
-	out, _ := exec.Command(argv[0], argv[1:]...).CombinedOutput()
+	procs := min(runtime.NumCPU(), len(names))
+	shares := make([][]string, procs)
+	for idx, name := range names {
+		shares[idx%procs] = append(shares[idx%procs], name)
+	}
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for _, share := range shares {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			got := bat.runShare(exe, share)
+			mu.Lock()
+			maps.Copy(bat.ran, got)
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+}
 
-	// Each program's output runs from its own marker to the next one.
-	marker := []byte(bat.nonce + " ")
+// runShare runs names in one process. A program that ends the process does
+// not get an output, and a new process starts at the program after it.
+func (bat *batch) runShare(exe string, names []string) map[string][]byte {
+	ran := map[string][]byte{}
+	for len(names) > 0 {
+		argv := launch(exe, append([]string{bat.nonce}, names...)...)
+		out, _ := exec.Command(argv[0], argv[1:]...).CombinedOutput()
+		finished, started := splitBatch(out, bat.nonce)
+		maps.Copy(ran, finished)
+		if started == "" {
+			return ran
+		}
+		next := slices.Index(names, started)
+		if next < 0 {
+			return ran
+		}
+		names = names[next+1:]
+	}
+	return ran
+}
+
+// splitBatch splits what one dispatcher process printed. A program's output
+// runs from its own marker to the next marker. A program with no marker after
+// it did not finish: splitBatch leaves it out of finished and names it in
+// started. The output of a process that ended normally ends with the marker
+// ".", and started is then "".
+func splitBatch(out []byte, nonce string) (finished map[string][]byte, started string) {
+	finished = map[string][]byte{}
+	marker := []byte(nonce + " ")
 	for rest := out; ; {
 		start := bytes.Index(rest, marker)
 		if start < 0 {
-			break
+			return finished, started
 		}
 		rest = rest[start+len(marker):]
 		line := rest
@@ -85,13 +128,13 @@ func (bat *batch) runAll(exe string) {
 		}
 		name := string(line)
 		if name == "." {
-			break
+			return finished, ""
 		}
-		body := rest
-		if next := bytes.Index(rest, marker); next >= 0 {
-			body = rest[:next]
+		next := bytes.Index(rest, marker)
+		if next < 0 {
+			return finished, name
 		}
-		bat.ran[name] = body
+		finished[name] = rest[:next]
 	}
 }
 
@@ -185,9 +228,9 @@ func eligible(src string) (string, bool) {
 	if strings.Contains(src, "//go:build") || strings.Contains(src, "// +build") {
 		return "", false
 	}
-	// The header runs to the first blank line and names the action.
-	header, _, _ := strings.Cut(src, "\n\n")
-	if !strings.Contains(header, "\n// run\n") && !strings.HasPrefix(header, "// run\n") {
+	// The first line names the action, the same way test.run reads it.
+	first, _, _ := strings.Cut(src, "\n")
+	if strings.TrimSpace(strings.TrimPrefix(first, "//")) != "run" {
 		return "", false
 	}
 	if !strings.Contains(src, "\npackage main\n") {
