@@ -4,8 +4,12 @@
 package testdir_test
 
 import (
+	"fmt"
 	"maps"
+	"os"
+	"strings"
 	"testing"
+	"time"
 )
 
 // TestEligibleRunHeader: the first line names the action. Most run programs
@@ -75,6 +79,26 @@ func TestSplitInits(t *testing.T) {
 	finishedProgs, started := splitBatch([]byte(whole), nonce)
 	if len(finishedProgs) != 0 || started != "" {
 		t.Fatalf("splitBatch read init marks as programs: %q, started %q", finishedProgs, started)
+	}
+}
+
+// TestRunWatchedEndsAStuckProcess: a process that prints no new mark for the
+// limit is ended, and what it printed comes back.
+func TestRunWatchedEndsAStuckProcess(t *testing.T) {
+	if os.Getenv("TESTDIR_BATCH_STUCK") == "1" {
+		fmt.Println("mark one")
+		time.Sleep(time.Hour)
+	}
+	const wait = time.Second
+	argv := []string{os.Args[0], "-test.run=^TestRunWatchedEndsAStuckProcess$"}
+	t.Setenv("TESTDIR_BATCH_STUCK", "1")
+	start := time.Now()
+	out := runWatched(argv, []byte("mark "), wait)
+	if !strings.Contains(string(out), "mark one\n") {
+		t.Fatalf("runWatched lost the output: %q", out)
+	}
+	if elapsed := time.Since(start); elapsed > time.Minute {
+		t.Fatalf("runWatched took %v to end a process stuck for its limit of %v", elapsed, wait)
 	}
 }
 

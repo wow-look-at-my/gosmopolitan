@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"text/template"
+	"time"
 
 	"internal/goversion"
 )
@@ -96,8 +97,7 @@ func (bat *batch) runAll(exe string) {
 func (bat *batch) runShare(exe string, names []string) map[string][]byte {
 	ran := map[string][]byte{}
 	for len(names) > 0 {
-		argv := launch(exe, append([]string{bat.nonce}, names...)...)
-		out, _ := exec.Command(argv[0], argv[1:]...).CombinedOutput()
+		out := runWatched(launch(exe, append([]string{bat.nonce}, names...)...), []byte(bat.nonce+" "), batchProgramLimit)
 		finished, started := splitBatch(out, bat.nonce)
 		maps.Copy(ran, finished)
 		if started == "" {
@@ -110,6 +110,72 @@ func (bat *batch) runShare(exe string, names []string) map[string][]byte {
 		names = names[next+1:]
 	}
 	return ran
+}
+
+// batchProgramLimit is how long one batched program may run before the batch gives up on its process.
+const batchProgramLimit = 2 * time.Minute
+
+// runWatched runs argv and answers what it printed. It ends the process when
+// wait passes with no new mark in the output.
+func runWatched(argv []string, mark []byte, wait time.Duration) []byte {
+	out := &markWriter{mark: mark, progress: make(chan struct{}, 1)}
+	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd.Stdout, cmd.Stderr = out, out
+	cmd.WaitDelay = 10 * time.Second
+	if err := cmd.Start(); err != nil {
+		return nil
+	}
+	done := make(chan struct{})
+	go func() {
+		cmd.Wait()
+		close(done)
+	}()
+	limit := time.NewTimer(wait)
+	defer limit.Stop()
+	for {
+		select {
+		case <-done:
+			return out.bytes()
+		case <-out.progress:
+			limit.Reset(wait)
+		case <-limit.C:
+			fmt.Fprintf(os.Stderr, "testdir batch: no program finished in %v; ending the process\n", wait)
+			cmd.Process.Kill()
+			<-done
+			return out.bytes()
+		}
+	}
+}
+
+// markWriter collects a process's output and signals each new mark in it.
+type markWriter struct {
+	mu       sync.Mutex
+	buf      bytes.Buffer
+	scanned  int
+	mark     []byte
+	progress chan struct{}
+}
+
+func (mw *markWriter) Write(data []byte) (int, error) {
+	mw.mu.Lock()
+	defer mw.mu.Unlock()
+	mw.buf.Write(data)
+	all := mw.buf.Bytes()
+	from := max(mw.scanned-len(mw.mark)+1, 0)
+	if bytes.Contains(all[from:], mw.mark) {
+		select {
+		case mw.progress <- struct{}{}:
+		default:
+		}
+	}
+	mw.scanned = len(all)
+	return len(data), nil
+}
+
+func (mw *markWriter) bytes() []byte {
+	mw.mu.Lock()
+	defer mw.mu.Unlock()
+	return bytes.Clone(mw.buf.Bytes())
 }
 
 // splitBatch splits what one dispatcher process printed. A program's output
@@ -398,8 +464,7 @@ func (bat *batch) build(corpus string) {
 			return
 		}
 
-		argv := launch(exe, bat.nonce)
-		out, _ := exec.Command(argv[0], argv[1:]...).CombinedOutput()
+		out := runWatched(launch(exe, bat.nonce), []byte(bat.nonce+"i "), batchProgramLimit)
 		inits, last, finished := splitInits(out, bat.nonce)
 		if finished {
 			bat.initOut = inits
