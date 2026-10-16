@@ -303,6 +303,8 @@ type fakeGitHub struct {
 	infoRefsCredential string
 	// infoRefsAuth is the Authorization of every info/refs request, in order.
 	infoRefsAuth []string
+	// infoRefsHosts is the host each info/refs request went to, in the same order.
+	infoRefsHosts []string
 	// apiStatus fails every direct api.github.com request with this code.
 	apiStatus int
 	// private makes github.com and api.github.com answer nothing, directly or through the proxy.
@@ -342,6 +344,7 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 	if isInfoRefs {
 		f.infoRefsAuth = append(f.infoRefsAuth, req.Header.Get("Authorization"))
+		f.infoRefsHosts = append(f.infoRefsHosts, req.Host)
 	}
 	f.mu.Unlock()
 
@@ -791,6 +794,148 @@ func TestGitHubCredentialHelperRunsOnce(t *testing.T) {
 	}
 	if got := strings.Count(string(data), "run"); got != 1 {
 		t.Errorf("the credential helper ran %d times for two origins, want once", got)
+	}
+}
+
+// gitlessHome points git at an empty configuration, so no helper and no
+// prompt answers a credential request.
+func gitlessHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(home, "gitconfig"))
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_ASKPASS", "")
+	t.Setenv("GIT_TERMINAL_PROMPT", "0")
+	if err := os.WriteFile(filepath.Join(home, "gitconfig"), []byte("[credential]\n\thelper = store\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// clearGitHubTokens empties every token variable and forgets the accepted token.
+func clearGitHubTokens(t *testing.T) {
+	for _, name := range githubTokenVars {
+		t.Setenv(name, "")
+	}
+	for _, entry := range os.Environ() {
+		name, value, _ := strings.Cut(entry, "=")
+		if slices.ContainsFunc(githubTokenPrefixes, func(prefix string) bool { return strings.HasPrefix(value, prefix) }) {
+			t.Setenv(name, "")
+		}
+	}
+	reset := func() {
+		gsmAcceptedMu.Lock()
+		gsmAccepted = ""
+		gsmAcceptedMu.Unlock()
+	}
+	reset()
+	t.Cleanup(reset)
+}
+
+// TestGitHubInfoRefsUsesTheEnvironmentToken covers a private repository on a
+// machine whose git holds no credential, with the org read token in the
+// environment. The advertisement is read from github.com with that token, as
+// x-access-token, before the proxy or the mirror is asked. No git runs.
+func TestGitHubInfoRefsUsesTheEnvironmentToken(t *testing.T) {
+	t.Serial()
+	testenv.MustHaveExecPath(t, "git")
+	resetGitHubCredential()
+	source, _ := makeSourceRepo(t, sourceFiles)
+	head := gitIn(t, source, "rev-parse", "HEAD")
+	gitlessHome(t)
+	clearGitHubTokens(t)
+	t.Setenv("GITHUB_TOKEN", "ghs_rejected")
+	t.Setenv("PRIVATE_ORG_REPO_READ", "github_pat_accepted")
+	basic := func(token string) string {
+		return "Basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:"+token))
+	}
+
+	fake := &fakeGitHub{dir: source, redirectTo: "codeload.github.com", infoRefsCredential: basic("github_pat_accepted"), apiStatus: http.StatusForbidden}
+	serveFakeGitHub(t, fake)
+	ctx := testContext(t)
+	repo := fakeGitHubRepo(t, ctx, filepath.Join(t.TempDir(), "no-such-remote.git"))
+
+	latest, err := repo.Latest(ctx)
+	if err != nil {
+		t.Fatalf("Latest with the token in the environment = %v; want the advertisement", err)
+	}
+	if latest.Name != head || latest.Origin.Ref != "HEAD" {
+		t.Errorf("Latest = %s at %q, want %s at HEAD", latest.Name, latest.Origin.Ref, head)
+	}
+	if repo.gitDirReady() {
+		t.Errorf("resolving with the environment token made a git repository")
+	}
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	// The anonymous request comes first, and its refusal may be retried once with no credential.
+	var withToken []string
+	for _, auth := range fake.infoRefsAuth {
+		if auth != "" {
+			withToken = append(withToken, auth)
+		}
+	}
+	if want := []string{basic("ghs_rejected"), basic("github_pat_accepted")}; !reflect.DeepEqual(withToken, want) || fake.infoRefsAuth[0] != "" {
+		t.Errorf("info/refs Authorization = %q, want an anonymous request, then %q", fake.infoRefsAuth, want)
+	}
+	for idx, host := range fake.infoRefsHosts {
+		if host != "github.com" {
+			t.Errorf("info/refs request %d went to %s with %q, want github.com only", idx, host, fake.infoRefsAuth[idx])
+		}
+	}
+	for _, request := range fake.refRequests {
+		if strings.HasPrefix(request, gsmHost) || strings.Contains(request, "api.github.com") {
+			t.Errorf("the token's advertisement did not stop the API: %s", request)
+		}
+	}
+	gsmAcceptedMu.Lock()
+	accepted := gsmAccepted
+	gsmAcceptedMu.Unlock()
+	if accepted != "github_pat_accepted" {
+		t.Errorf("the accepted token is %q, want %q", accepted, "github_pat_accepted")
+	}
+}
+
+// TestGitHubRefsFailWithoutGit covers a private repository that no HTTP source
+// answers. The error names each source. Git never runs: there is none on PATH,
+// and the error is the HTTP sources' own.
+func TestGitHubRefsFailWithoutGit(t *testing.T) {
+	t.Serial()
+	testenv.MustHaveExecPath(t, "git")
+	resetGitHubCredential()
+	source, _ := makeSourceRepo(t, sourceFiles)
+	gitlessHome(t)
+	clearGitHubTokens(t)
+	t.Setenv("GITHUB_TOKEN", "ghs_rejected")
+
+	fake := &fakeGitHub{dir: source, private: true}
+	serveFakeGitHub(t, fake)
+	ctx := testContext(t)
+	repo := fakeGitHubRepo(t, ctx, filepath.Join(t.TempDir(), "no-such-remote.git"))
+	t.Setenv("PATH", t.TempDir())
+
+	_, err := repo.Latest(ctx)
+	if err == nil {
+		t.Fatal("Latest with no source answering succeeded")
+	}
+	for _, want := range []string{"listing the refs of", "github.com/owner/repo.git/info/refs", "404", gsmHost, "api.github.com"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not name %q:\n%v", want, err)
+		}
+	}
+	for _, unwanted := range []string{"ls-remote", "executable file not found"} {
+		if strings.Contains(err.Error(), unwanted) {
+			t.Errorf("error names %q, so git ran:\n%v", unwanted, err)
+		}
+	}
+	if repo.gitDirReady() {
+		t.Errorf("a failed lookup made a git repository")
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	for idx, host := range fake.infoRefsHosts {
+		if host == "proxy.pazer.ai" && fake.infoRefsAuth[idx] != "" {
+			t.Errorf("the proxy was sent a credential: %q", fake.infoRefsAuth[idx])
+		}
 	}
 }
 
