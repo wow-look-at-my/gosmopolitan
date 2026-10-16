@@ -35,8 +35,11 @@ func zipCacheKey(mod module.Version, sum string) cache.ActionID {
 
 // zipFromCache writes the zip of mod to zipfile from the build cache, when go.sum
 // records an h1 sum for it and the cache holds a zip with that sum. It reports
-// whether it wrote one.
+// whether it wrote one. A nil cache, which GOCACHE=off gives, holds nothing.
 func (f *Fetcher) zipFromCache(ctx context.Context, c cache.Cache, mod module.Version, zipfile, ziphashfile string) bool {
+	if c == nil {
+		return false
+	}
 	sum, ok := f.RecordedSum(mod)
 	if !ok || !strings.HasPrefix(sum, "h1:") {
 		return false
@@ -81,7 +84,7 @@ func (f *Fetcher) zipFromCache(ctx context.Context, c cache.Cache, mod module.Ve
 
 // zipToCache stores the zip at zipfile, whose h1 sum is sum, for the next build.
 func zipToCache(c cache.Cache, mod module.Version, zipfile, sum string) {
-	if !strings.HasPrefix(sum, "h1:") {
+	if c == nil || !strings.HasPrefix(sum, "h1:") {
 		return
 	}
 	data, err := os.ReadFile(zipfile)
@@ -102,6 +105,9 @@ func goModCacheKey(path, version, sum string) cache.ActionID {
 // go.sum records its h1 sum and the cache holds a go.mod with that sum. It
 // writes the go.mod to file, the module cache's copy.
 func (f *Fetcher) goModFromCache(ctx context.Context, c cache.Cache, path, version, file string) ([]byte, bool) {
+	if c == nil {
+		return nil, false
+	}
 	sum, ok := f.RecordedSum(module.Version{Path: path, Version: version + "/go.mod"})
 	if !ok || !strings.HasPrefix(sum, "h1:") {
 		return nil, false
@@ -126,6 +132,9 @@ func (f *Fetcher) goModFromCache(ctx context.Context, c cache.Cache, path, versi
 
 // goModToCache stores the go.mod data of path@version for the next build.
 func goModToCache(c cache.Cache, path, version string, data []byte) {
+	if c == nil {
+		return
+	}
 	sum, err := goModSum(data)
 	if err != nil {
 		return

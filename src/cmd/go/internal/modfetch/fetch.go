@@ -346,7 +346,7 @@ func (f *Fetcher) downloadZip(ctx context.Context, mod module.Version, zipfile s
 		return zipfile, hashZip(f, mod, zipfile, ziphashfile)
 	}
 
-	if f.zipFromCache(ctx, cache.Default(), mod, zipfile, ziphashfile) {
+	if f.zipFromCache(ctx, cache.DefaultIfEnabled(), mod, zipfile, ziphashfile) {
 		return zipfile, nil
 	}
 
@@ -478,7 +478,7 @@ func (f *Fetcher) downloadZip(ctx context.Context, mod module.Version, zipfile s
 	if err := os.Rename(file.Name(), zipfile); err != nil {
 		return "", err
 	}
-	zipToCache(cache.Default(), mod, zipfile, sum)
+	zipToCache(cache.DefaultIfEnabled(), mod, zipfile, sum)
 
 	// TODO(bcmills): Should we make the .zip and .ziphash files read-only to discourage tampering?
 
