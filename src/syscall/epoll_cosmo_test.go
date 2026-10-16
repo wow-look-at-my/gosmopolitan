@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 //go:build cosmo
 
@@ -15,7 +16,7 @@ import (
 )
 
 // These run against the kernel's epoll on a Linux host and against this
-// package's emulation on a macOS one, so both answer. To the same
+// package's emulation on a macOS one, so both answer to the same
 // expectations.
 
 func epollPipe(t *testing.T) (r, w int) {

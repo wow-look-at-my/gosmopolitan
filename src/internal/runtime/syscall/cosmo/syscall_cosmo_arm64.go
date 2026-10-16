@@ -569,7 +569,8 @@ func syscall6SlowDarwin(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uint
 	return ^uintptr(0), 0, darwinENOSYS
 }
 
-// Linux madvise advice values that differ from Apple's.
+// Linux madvise advice values that differ from Apple's. NORMAL, RANDOM,
+// SEQUENTIAL, WILLNEED and DONTNEED are 0..4 on both systems.
 const (
 	linuxMADV_FREE = 8
 	appleMADV_FREE = 5
