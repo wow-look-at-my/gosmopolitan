@@ -58,6 +58,18 @@ func RunUploadSpool() (code int, ran bool) {
 		return 0, false
 	}
 	cacheclient.SetLogger(goLogger{})
+	if path == cacheclient.UploadSpoolAll {
+		// A CI job's last step: the runner ends a detached uploader with the job.
+		dir, _, err := DefaultDir()
+		if err == nil {
+			err = cacheclient.DrainSpools(dir)
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "go: %v\n", err)
+			return 1, true
+		}
+		return 0, true
+	}
 	if err := cacheclient.RunUploadSpool(path); err != nil {
 		fmt.Fprintf(os.Stderr, "go: %v\n", err)
 		return 1, true
