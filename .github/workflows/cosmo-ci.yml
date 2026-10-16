@@ -214,10 +214,9 @@ jobs:
         wait-all:
 
       - name: Take the toolchain its build leg built
-        uses: wow-look-at-my/actions@cache-download#latest
+        uses: ./.github/actions/take-toolchain
         with:
           name: toolchain-${{ runner.os }}
-          path: .
 
       - name: The restored go answers
         shell: bash

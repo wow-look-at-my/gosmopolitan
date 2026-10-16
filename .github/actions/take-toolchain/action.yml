@@ -1,0 +1,44 @@
+name: Take the toolchain
+description: "Take the toolchain a build leg handed over, and build it here when the Actions cache no longer holds that hand-off. A run hands off about 1.5GB against a 10GB repository cache shared by every concurrent run, so an entry can be evicted between the build leg that saved it and the reader that queued behind that crowd."
+inputs:
+  name:
+    description: "The hand-off name its build leg uploaded: toolchain-Linux, toolchain-macOS or toolchain-Windows."
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Take the hand-off
+      uses: wow-look-at-my/actions@cache-download#latest
+      with:
+        name: ${{ inputs.name }}
+        path: .
+        fail-if-missing: false
+
+    # make.bash writes bin/go (make.bat writes bin/go.exe), so its absence means this host has to build.
+    - name: Say whether the toolchain arrived
+      id: arrived
+      shell: bash
+      run: |
+        set -euo pipefail
+        rebuilt=true
+        if [ -x bin/go ] || [ -x bin/go.exe ]; then
+          rebuilt=false
+        fi
+        echo "rebuilt=$rebuilt" >> "$GITHUB_OUTPUT"
+
+    - name: Setup Go bootstrap toolchain
+      if: steps.arrived.outputs.rebuilt == 'true'
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.24'
+        cache: false
+
+    # The caller already ran apeld-tools: make.bash compiles the APE loaders with them either way.
+    - name: Build the toolchain the cache evicted
+      if: steps.arrived.outputs.rebuilt == 'true'
+      uses: wow-look-at-my/actions/multicmd@lkgb
+      with:
+        unix: cd src && ./make.bash -v
+        windows: cd src && .\make.bat -v
+      env:
+        GOROOT_BOOTSTRAP: ${{ env.GOROOT }}
