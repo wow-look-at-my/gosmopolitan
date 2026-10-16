@@ -1855,7 +1855,7 @@ func (r *runTestActor) Act(b *work.Builder, ctx context.Context, a *work.Action)
 	}
 	execCmd := work.FindExecCmd()
 	testlogArg := []string{}
-	if !r.c.disableCache && len(execCmd) == 0 {
+	if !r.c.disableCache && (len(execCmd) == 0 || execRunsHere(execCmd)) {
 		testlogArg = []string{"-test.testlogfile=" + a.Objdir + "testlog.txt"}
 	}
 	panicArg := "-test.paniconexit0"
@@ -3523,6 +3523,24 @@ func printExitStatus(b *work.Builder, ctx context.Context, a *work.Action) error
 		}
 	}
 	return nil
+}
+
+// execRunsHere reports whether execCmd is one of this toolchain's own exec
+// wrappers. Each of them runs the test binary on this machine and maps the
+// whole file system into it, so the binary writes its testlog where the go
+// command reads it. A wrapper from anywhere else can run the binary on
+// another machine, and its result is not cached.
+func execRunsHere(execCmd []string) bool {
+	if len(execCmd) != 1 {
+		return false
+	}
+	dir := filepath.Dir(execCmd[0])
+	for _, own := range []string{filepath.Join(cfg.GOROOT, "misc", "cosmo"), filepath.Join(cfg.GOROOT, "lib", "wasm")} {
+		if dir == own {
+			return true
+		}
+	}
+	return false
 }
 
 // testBinaryName can be used to create name for test binary executable.
