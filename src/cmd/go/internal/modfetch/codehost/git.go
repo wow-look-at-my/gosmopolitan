@@ -307,10 +307,18 @@ func (r *gitRepo) loadRefs(ctx context.Context) (map[string]string, error) {
 	}
 	r.refsOnce.Do(func() {
 		if r.github != nil {
-			if refs, err := r.githubRefs(ctx); err == nil {
-				r.refs = refs
-				return
+			// A github.com repository lists its refs over HTTP only. Git never
+			// runs for it: ls-remote costs a process per lookup, and its error
+			// would hide which HTTP source refused and why.
+			refs, err := r.githubRefs(ctx)
+			if err != nil {
+				err = fmt.Errorf("listing the refs of %s over HTTP: %w", r.remoteURL, err)
+				if r.remoteNotFound() {
+					err = notExistError{err}
+				}
 			}
+			r.refs, r.refsErr = refs, err
+			return
 		}
 		// The git protocol sends all known refs and ls-remote filters them on the client side,
 		// so we might as well record both heads and tags in one shot.
@@ -330,14 +338,8 @@ func (r *gitRepo) loadRefs(ctx context.Context) (map[string]string, error) {
 				}
 			}
 
-			// If the remote URL doesn't exist at all, ideally we should treat the whole
-			// repository as nonexistent by wrapping the error in a notExistError.
-			// For HTTP and HTTPS, that's easy to detect: we'll try to fetch the URL
-			// ourselves and see what code it serves.
-			if u, err := url.Parse(r.remoteURL); err == nil && (u.Scheme == "http" || u.Scheme == "https") {
-				if _, err := web.GetBytes(u); errors.Is(err, fs.ErrNotExist) {
-					gitErr = notExistError{gitErr}
-				}
+			if r.remoteNotFound() {
+				gitErr = notExistError{gitErr}
 			}
 
 			r.refsErr = gitErr
@@ -363,6 +365,18 @@ func (r *gitRepo) loadRefs(ctx context.Context) (map[string]string, error) {
 		r.refs = refs
 	})
 	return r.refs, r.refsErr
+}
+
+// remoteNotFound reports whether the remote URL does not exist at all, so the
+// whole repository reads as nonexistent. For HTTP and HTTPS the URL itself is
+// fetched and its status code decides.
+func (r *gitRepo) remoteNotFound() bool {
+	u, err := url.Parse(r.remoteURL)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return false
+	}
+	_, err = web.GetBytes(u)
+	return errors.Is(err, fs.ErrNotExist)
 }
 
 func (r *gitRepo) Tags(ctx context.Context, prefix string) (*Tags, error) {

@@ -81,6 +81,8 @@ type archiveSource struct {
 	credentialFor string
 	// bearer is the whole credential when it is set. GOAUTH is not asked.
 	bearer string
+	// basic is the whole credential when it is set, as HTTP basic authentication.
+	basic *url.Userinfo
 	// via names the route of a source that github-state-mirror signed.
 	via string
 	// secret is the signing token in url. Errors print a mask in its place.
@@ -88,7 +90,7 @@ type archiveSource struct {
 }
 
 func (source archiveSource) pinOptions() web.PinOptions {
-	return web.PinOptions{AllowHost: source.allowHost, CredentialURL: source.credentialFor, Bearer: source.bearer}
+	return web.PinOptions{AllowHost: source.allowHost, CredentialURL: source.credentialFor, Bearer: source.bearer, BasicAuth: source.basic}
 }
 
 // viaProxy returns the source that fetches target through the proxy, with
@@ -186,9 +188,9 @@ var (
 // githubTokenPrefixes start every token GitHub issues.
 var githubTokenPrefixes = []string{"ghp_", "github_pat_", "gho_", "ghu_", "ghs_"}
 
-// gsmBearers returns the token the mirror last accepted, each token that
-// githubTokenVars hold, then each other environment value that starts like a
-// GitHub token. In the order of the variable names.
+// gsmBearers returns the token github.com or the mirror last accepted, each
+// token that githubTokenVars hold, then each other environment value. That
+// value starts like a GitHub token. In the order of the variable names.
 func gsmBearers() []string {
 	gsmAcceptedMu.Lock()
 	accepted := gsmAccepted
@@ -236,18 +238,18 @@ func gsmSources(route string) []archiveSource {
 }
 
 // githubRefs returns what ls-remote would list, over plain HTTP. The first
-// source that answers wins: the info/refs advertisement from github.com,
-// direct and then through the proxy. This also covers then the REST API, from
+// source that answers wins: the info/refs advertisement from github.com. That
+// source is with git's own credential, then with each token the environment
+// holds, then through the proxy. This also covers then the REST API, from
 // github-state-mirror, api.github.com, and api.github.com through the proxy.
+// No git runs: a failure names every source.
 func (r *gitRepo) githubRefs(ctx context.Context) (map[string]string, error) {
 	infoRefs := "https://github.com/" + r.github.owner + "/" + r.github.name + ".git/info/refs?service=git-upload-pack"
 	var errs []error
-	for _, source := range []archiveSource{
-		{url: infoRefs, allowHost: githubHost},
-		viaProxy(infoRefs, ""),
-	} {
+	for _, source := range r.githubInfoRefsSources(infoRefs) {
 		refs, err := r.githubInfoRefs(source)
 		if err == nil {
+			gsmAccept(source.basicToken())
 			return refs, nil
 		}
 		errs = append(errs, err)
@@ -264,6 +266,31 @@ func (r *gitRepo) githubRefs(ctx context.Context) (map[string]string, error) {
 	return nil, err
 }
 
+// githubTokenUser is the user name GitHub pairs a token with in HTTP basic authentication.
+const githubTokenUser = "x-access-token"
+
+// githubInfoRefsSources lists where to read the advertisement at infoRefs, in
+// the order to try. This is github.com with git's own credential, github.com
+// with each token of gsmBearers, then the proxy. A token goes to github.com
+// itself and never to the proxy.
+func (r *gitRepo) githubInfoRefsSources(infoRefs string) []archiveSource {
+	sources := []archiveSource{{url: infoRefs, allowHost: githubHost}}
+	for _, token := range gsmBearers() {
+		sources = append(sources, archiveSource{url: infoRefs, allowHost: githubHost, basic: url.UserPassword(githubTokenUser, token)})
+	}
+	return append(sources, viaProxy(infoRefs, ""))
+}
+
+// basicToken is the token of a source that carries one as basic
+// authentication, or "".
+func (source archiveSource) basicToken() string {
+	if source.basic == nil || source.basic.Username() != githubTokenUser {
+		return ""
+	}
+	token, _ := source.basic.Password()
+	return token
+}
+
 // githubInfoRefs reads the ref advertisement git itself fetches first. A
 // private repository refuses it until a credential is presented. Git's own
 // credential is therefore sent with the first request, not found by a refusal.
@@ -273,7 +300,7 @@ func (r *gitRepo) githubInfoRefs(source archiveSource) (map[string]string, error
 		return nil, err
 	}
 	opts := source.pinOptions()
-	if opts.CredentialURL == "" && opts.Bearer == "" {
+	if opts.CredentialURL == "" && opts.Bearer == "" && opts.BasicAuth == nil {
 		opts.BasicAuth = githubBasicAuth(source.url)
 	}
 	return r.readInfoRefs(u, opts)
