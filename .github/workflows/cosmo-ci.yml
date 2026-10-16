@@ -157,7 +157,7 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        suite-os: [ubuntu-latest, macos-latest, windows-latest]
+        suite-os: ${{ github.event.repository.visibility == 'public' && fromJSON('["ubuntu-latest","macos-latest","windows-latest"]') || fromJSON('["ubuntu-latest"]') }}
 
     runs-on: ${{ (github.event.repository.visibility == 'public' || !contains(fromJSON('["ubuntu-latest"]'), matrix.suite-os)) && matrix.suite-os || vars.CI_RUNNER || matrix.suite-os }}
     env:
