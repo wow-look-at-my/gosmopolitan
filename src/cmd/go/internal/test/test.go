@@ -2606,7 +2606,7 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, []byte
 				parsed["stat "+name]--
 				break
 			}
-			if hashes.scratch(name) || isProcessLocal(name) {
+			if hashes.scratch(name) || isProcessLocal(name) || isTempAncestor(name) {
 				break
 			}
 			if rel, ok := hashes.modCache(name); ok {
@@ -3071,6 +3071,80 @@ func identityWords(id string) map[string]string {
 	return words
 }
 
+// dropScratch removes from testlog every read of this run's scratch space, and
+// makes each name it keeps absolute. The next run can be on a machine with
+// another temporary directory. There the old run's scratch paths are not
+// scratch, and they would hash as files that are gone.
+func dropScratch(dir string, testlog []byte) []byte {
+	hashes := newFileHashMemo()
+	out := bytes.NewBuffer(make([]byte, 0, len(testlog)))
+	out.Write(testlogMagic)
+	pwd := dir
+	abs := func(name string) string {
+		if filepath.IsAbs(name) {
+			return name
+		}
+		return filepath.Join(pwd, name)
+	}
+	for line := range strings.Lines(string(bytes.TrimPrefix(testlog, testlogMagic))) {
+		op, name, found := strings.Cut(strings.TrimSuffix(line, "\n"), " ")
+		if !found {
+			out.WriteString(line)
+			continue
+		}
+		switch op {
+		case "chdir":
+			pwd = name
+			if hashes.scratch(name) {
+				continue
+			}
+		case "open", "stat":
+			name = abs(name)
+			if hashes.scratch(name) || (op == "stat" && isTempAncestor(name)) {
+				continue
+			}
+			line = op + " " + name + "\n"
+		case "parse":
+			parseOp, file, ok := strings.Cut(name, " ")
+			if !ok {
+				break
+			}
+			file = abs(file)
+			if hashes.scratch(file) {
+				continue
+			}
+			line = op + " " + parseOp + " " + file + "\n"
+		case "lookup":
+			if _, file, _, err := parseLookup(name); err == nil && hashes.scratch(abs(file)) {
+				continue
+			}
+		}
+		out.WriteString(line)
+	}
+	return out.Bytes()
+}
+
+// isTempAncestor reports whether name is a directory above the temporary
+// directory. A path lookup under the temporary directory stats each of them,
+// and on macOS they name the machine's own folder under /var/folders.
+func isTempAncestor(name string) bool {
+	for _, tmp := range tempDirs() {
+		if rel := str.TrimFilePathPrefix(tmp, name); rel != tmp && rel != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// tempDirs is the temporary directory as spelled and as resolved.
+var tempDirs = sync.OnceValue(func() []string {
+	tmp := filepath.Clean(os.TempDir())
+	if real, err := filepath.EvalSymlinks(tmp); err == nil && real != tmp {
+		return []string{tmp, real}
+	}
+	return []string{tmp}
+})
+
 // tempDirEnv names the variables os.TempDir reads. Their value only says where
 // the scratch space is, and isRunScratch already leaves that space out. A
 // macOS runner names a different directory on each machine.
@@ -3288,6 +3362,7 @@ func (c *runCache) saveOutput(a *work.Action) {
 		}
 		return
 	}
+	testlog = dropScratch(a.Package.Dir, testlog)
 	testInputsID, inputLines, err := computeTestInputsID(a, testlog)
 	if err != nil {
 		cache.MissNotice("testcache: %s: result not saved: %v", a.Package.ImportPath, err)

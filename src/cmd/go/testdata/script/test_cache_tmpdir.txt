@@ -29,9 +29,17 @@ package t
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 )
 
 func TestTemp(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "scratch")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.ReadFile(file); err != nil {
+		t.Fatal(err)
+	}
 	t.Log(os.TempDir(), os.Getenv("OTHER"))
 }
