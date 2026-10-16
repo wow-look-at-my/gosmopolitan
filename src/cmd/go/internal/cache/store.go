@@ -149,6 +149,7 @@ func MissNotice(format string, args ...any) {
 	if !MissNotices() {
 		return
 	}
+
 	cacheNotice(format, args...)
 }
 
