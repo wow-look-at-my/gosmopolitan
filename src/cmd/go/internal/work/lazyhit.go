@@ -99,7 +99,7 @@ func (b *Builder) fetchLazy(file string) error {
 		return nil
 	}
 	_, err := b.lazyFetch.Do(file, func() (struct{}, error) {
-		got, _, err := cache.GetFile(lazy.c, lazy.action)
+		got, _, err := cache.FetchFile(lazy.c, lazy.action)
 		if err != nil {
 			return struct{}{}, fmt.Errorf("the build cache named %s for a hit but cannot supply it: %w", file, err)
 		}

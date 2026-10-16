@@ -63,6 +63,22 @@ func GetFile(c Cache, id ActionID) (string, Entry, error) {
 	return cachedisk.GetFile(c, id)
 }
 
+// FetchFile is GetFile for an output the build already depends on. A cache
+// with a shared store waits out a store outage rather than answer a miss.
+func FetchFile(c Cache, id ActionID) (string, Entry, error) {
+	if traced, ok := c.(*tracedCache); ok {
+		c = traced.Cache
+	}
+	fetcher, ok := c.(interface{ Fetch(ActionID) (Entry, error) })
+	if !ok {
+		return GetFile(c, id)
+	}
+	if _, err := fetcher.Fetch(id); err != nil {
+		return "", Entry{}, err
+	}
+	return GetFile(c, id)
+}
+
 // GetBytes looks up an action and answers its output. Use it only for output
 // that fits in memory.
 func GetBytes(c Cache, id ActionID) ([]byte, Entry, error) {
