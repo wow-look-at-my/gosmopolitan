@@ -787,20 +787,33 @@ jobs:
         shell: bash
         run: git update-index -q --ignore-submodules --refresh
 
+      # log-streamer is private, so its stream action does not resolve here. These steps do what that action does.
+      - name: Download the log-streamer client
+        id: lsclient
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-download@master
+        with:
+          project: log-streamer/ls-client
+
       - name: The whole test suite (dist test)
         # Actions withholds this job's log for the hour it runs, so the command streams live instead.
-        uses: wow-look-at-my/log-streamer/.github/actions/stream@lkgb
-        with:
-          stream-key: ${{ secrets.LOG_STREAMER_STREAM_KEY }}
-          name: ${{ matrix.port }}
-          run: |
-            set -o pipefail
-            export PATH="$PWD/bin:$PWD/lib/wasm:$HOME/.wasmtime/bin:$PATH"
-            sh ./.github/resource-log.sh &
-            probe=$!
-            # the stream client reads until every holder of its pipe exits, so the probe goes when this script does.
-            trap 'kill "$probe"' EXIT
-            GOOS=${{ matrix.port }} GOARCH=wasm stdbuf -oL -eL go tool dist test 2>&1 | tee "$RUNNER_TEMP/suite.log"
+        shell: bash
+        env:
+          LOG_STREAMER_STREAM_KEY: ${{ secrets.LOG_STREAMER_STREAM_KEY }}
+          LOG_STREAMER_SERVER: wss://logs.pazer.io
+          LOG_STREAMER_NAME: ${{ matrix.port }}
+        run: |
+          set -euo pipefail
+          script="$RUNNER_TEMP/suite-step.sh"
+          cat > "$script" <<'EOF'
+          set -o pipefail
+          export PATH="$PWD/bin:$PWD/lib/wasm:$HOME/.wasmtime/bin:$PATH"
+          sh ./.github/resource-log.sh &
+          probe=$!
+          # the stream client reads until every holder of its pipe exits, so the probe goes when this script does.
+          trap 'kill "$probe"' EXIT
+          GOOS=${{ matrix.port }} GOARCH=wasm stdbuf -oL -eL go tool dist test 2>&1 | tee "$RUNNER_TEMP/suite.log"
+          EOF
+          "${{ steps.lsclient.outputs.path }}" shell "$script"
 
       - name: What ${{ matrix.port }} spent its time on
         # the per-package times are how the js and wasip1 ports get compared, and how a leg that overruns its budget names what overran.
