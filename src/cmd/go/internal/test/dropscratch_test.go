@@ -29,6 +29,7 @@ func TestDropScratch(t *testing.T) {
 		"open " + kept,
 		"stat " + tmp,
 		"stat " + filepath.Dir(tmp),
+		"stat " + filepath.Dir(tmp) + string(filepath.Separator) + ".." + string(filepath.Separator) + filepath.Base(filepath.Dir(tmp)),
 		"parse open " + filepath.Join(tmp, "work", "b.go"),
 	}
 	testlog := append([]byte(nil), testlogMagic...)

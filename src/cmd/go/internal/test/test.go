@@ -3128,6 +3128,8 @@ func dropScratch(dir string, testlog []byte) []byte {
 // directory. A path lookup under the temporary directory stats each of them,
 // and on macOS they name the machine's own folder under /var/folders.
 func isTempAncestor(name string) bool {
+	// A lookup can spell an ancestor with "..": /private/../private/var.
+	name = filepath.Clean(name)
 	for _, tmp := range tempDirs() {
 		if rel := str.TrimFilePathPrefix(tmp, name); rel != tmp && rel != "" {
 			return true
