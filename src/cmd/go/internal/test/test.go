@@ -2622,7 +2622,7 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, []byte
 				parsed["open "+name]--
 				break
 			}
-			if hashes.scratch(name) || isProcessLocal(name) {
+			if hashes.scratch(name) || isProcessLocal(name) || isTempAncestor(name) || isVolumeRoot(name) {
 				break
 			}
 			if rel, ok := hashes.modCache(name); ok {
@@ -3100,7 +3100,7 @@ func dropScratch(dir string, testlog []byte) []byte {
 			}
 		case "open", "stat":
 			name = abs(name)
-			if hashes.scratch(name) || (op == "stat" && isTempAncestor(name)) {
+			if hashes.scratch(name) || isTempAncestor(name) || (op == "open" && isVolumeRoot(name)) {
 				continue
 			}
 			line = op + " " + name + "\n"
@@ -3136,6 +3136,18 @@ func isTempAncestor(name string) bool {
 		}
 	}
 	return false
+}
+
+// isVolumeRoot reports whether name is the root of a Windows volume, in any
+// spelling. An open of a directory hashes its listing, and a volume root lists
+// whatever this machine and this run left at the top of the drive.
+func isVolumeRoot(name string) bool {
+	rest, _ := strings.CutPrefix(name, `\\?\`)
+	vol := filepath.VolumeName(rest)
+	if len(vol) != 2 || vol[1] != ':' {
+		return false
+	}
+	return strings.Trim(rest[len(vol):], `\/`) == ""
 }
 
 // tempDirs is the temporary directory as spelled and as resolved.

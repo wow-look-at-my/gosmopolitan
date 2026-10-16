@@ -97,3 +97,23 @@ func TestWindowsLiveState(t *testing.T) {
 		}
 	}
 }
+
+// TestVolumeRoot pins the spellings of a Windows volume root, whose listing the
+// test cache does not hash.
+func TestVolumeRoot(t *testing.T) {
+	onWindows := runtime.GOOS == "windows"
+	for path, want := range map[string]bool{
+		`C:\`:         onWindows,
+		`D:\`:         onWindows,
+		`\\?\C:\`:     onWindows,
+		`c:`:          onWindows,
+		`D:\a\_temp`:  false,
+		`\\?\C:\Go`:   false,
+		`\\srv\share`: false,
+		"/":           false,
+	} {
+		if got := isVolumeRoot(path); got != want {
+			t.Errorf("isVolumeRoot(%q) = %v, want %v", path, got, want)
+		}
+	}
+}
