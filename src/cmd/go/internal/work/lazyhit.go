@@ -5,6 +5,7 @@
 package work
 
 import (
+	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 
 	"cmd/go/internal/cache"
 	"cmd/go/internal/cfg"
+	"cmd/internal/buildid"
 )
 
 // A compile hit needs the build ID and the export ID of the archive, not
@@ -32,6 +34,7 @@ func lazyKey(id cache.ActionID) cache.ActionID {
 type lazyOutput struct {
 	c      cache.Cache
 	action cache.ActionID
+	a      *Action
 }
 
 // lazyEnabled reports whether a can hit through its lazy record. A listing
@@ -81,7 +84,7 @@ func (b *Builder) adoptLazy(a *Action, c cache.Cache, record lazyRecord) {
 	b.id.Lock()
 	b.buildIDCache[record.file] = record.buildID
 	if _, err := os.Stat(record.file); err != nil {
-		b.lazy[record.file] = lazyOutput{c: c, action: a.actionID}
+		b.lazy[record.file] = lazyOutput{c: c, action: a.actionID, a: a}
 	}
 	b.id.Unlock()
 	a.buildID = record.buildID
@@ -101,7 +104,15 @@ func (b *Builder) fetchLazy(file string) error {
 	_, err := b.lazyFetch.Do(file, func() (struct{}, error) {
 		got, _, err := cache.FetchFile(lazy.c, lazy.action)
 		if err != nil {
-			return struct{}{}, fmt.Errorf("the build cache named %s for a hit but cannot supply it: %w", file, err)
+			// The store's index can name an entry the server has evicted. The
+			// package compiles again, and a reproducible compile lands at file.
+			if rebuildErr := b.rebuildLazy(lazy.a); rebuildErr != nil {
+				return struct{}{}, fmt.Errorf("the build cache named %s for a hit but cannot supply it: %w; compiling it again failed: %v", file, err, rebuildErr)
+			}
+			got = file
+			if _, statErr := os.Stat(file); statErr != nil {
+				return struct{}{}, fmt.Errorf("the build cache named %s for a hit but cannot supply it: %w; compiling it again wrote %s", file, err, lazy.a.built)
+			}
 		}
 		if got != file {
 			return struct{}{}, fmt.Errorf("the build cache supplied %s for a hit that named %s", got, file)
@@ -112,6 +123,36 @@ func (b *Builder) fetchLazy(file string) error {
 		return struct{}{}, nil
 	})
 	return err
+}
+
+// rebuildLazy compiles a again, after a lazy hit named an archive the cache
+// cannot supply. The hit set a to its cached build ID and told its build to do
+// nothing, so both go back to how a miss leaves them. A package whose build
+// needs the cgo or cover work the hit skipped is not compiled again.
+func (b *Builder) rebuildLazy(a *Action) error {
+	if a == nil || a.Package == nil {
+		return errors.New("no action to compile")
+	}
+	if p := a.Package; p.UsesCgo() || p.UsesSwig() || p.Internal.Cover.Mode != "" {
+		return fmt.Errorf("%s needs the cgo or cover steps a hit skips", p.ImportPath)
+	}
+	var provider *checkCacheProvider
+	for _, dep := range a.Deps {
+		if pr, ok := dep.Provider.(*checkCacheProvider); ok {
+			provider = pr
+		}
+	}
+	if provider == nil {
+		return errors.New("no cache check to send back")
+	}
+	actionID := buildid.HashToString(a.actionID)
+	a.buildID = actionID + buildIDSeparator + actionID
+	a.output = []byte{}
+	provider.need = needBuild
+	if err := b.Shell(a).Mkdir(a.Objdir); err != nil {
+		return err
+	}
+	return b.build(context.Background(), a)
 }
 
 // fetchLazyDeps is fetchLazy for the archive of each action in deps. The
