@@ -1,7 +1,6 @@
 # cmd/dist names the port of a test that runs on the host with -target.
 # The result is cached, and the target is part of the test ID.
 
-env GOCACHE=$WORK/cache
 go test ./t -args -target=wasip1/wasm
 stdout '^ok\s+m/t\s+[0-9.]+s$'
 go test ./t -args -target=wasip1/wasm

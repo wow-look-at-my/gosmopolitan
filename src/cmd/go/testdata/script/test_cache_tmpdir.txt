@@ -2,7 +2,6 @@
 # variables name another directory. A macOS runner names a different one on
 # each machine. Windows reads TMP and TEMP, and the other systems TMPDIR.
 
-env GOCACHE=$WORK/cache
 mkdir $WORK/tmp1 $WORK/tmp2
 env TMPDIR=$WORK/tmp1
 env TMP=$WORK/tmp1
