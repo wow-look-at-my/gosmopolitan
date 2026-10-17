@@ -6,12 +6,19 @@ package test
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
 
 	"cmd/go/internal/cache"
+	"cmd/go/internal/cfg"
 )
 
 // fileHashMemo answers hashOpen, hashStat and the checks of where a name sits
@@ -31,6 +38,7 @@ type inputHash struct {
 	// found and rel are the answer of a check: scratch, or the module cache.
 	found bool
 	rel   string
+	sum   [sha256.Size]byte
 }
 
 func newFileHashMemo() *fileHashMemo {
@@ -61,18 +69,66 @@ func (hs *fileHashMemo) stat(name string) cache.ActionID {
 	return entry.id
 }
 
+// pathKinds holds the scratch and module cache checks for the whole process.
+// One check resolves every directory above a name, and each testlog kept for
+// each package names the same tree. The key carries the directories the check
+// reads, so a test that moves them gets new answers. GOCACHE is read once per
+// process.
+var pathKinds = newFileHashMemo()
+
 // scratch is isRunScratch(name) || isBuildCache(name): the name is no input.
 func (hs *fileHashMemo) scratch(name string) bool {
-	entry := hs.entry("scratch", name)
+	entry := pathKinds.entry("scratch "+os.TempDir(), name)
 	entry.once.Do(func() { entry.found = isRunScratch(name) || isBuildCache(name) })
 	return entry.found
 }
 
 // modCache is inModCache(name).
 func (hs *fileHashMemo) modCache(name string) (string, bool) {
-	entry := hs.entry("modcache", name)
+	entry := pathKinds.entry("modcache "+cfg.GOMODCACHE, name)
 	entry.once.Do(func() { entry.rel, entry.found = inModCache(name) })
 	return entry.rel, entry.found
+}
+
+// contentSums holds the digest of each regular file hashOpen has read in this
+// process, under its name, size and mtime. A test that runs go opens the whole
+// toolchain binary, and every testlog of every package names it.
+var contentSums = newFileHashMemo()
+
+// contentSum is the SHA-256 of the regular file name, whose stat is info. The
+// digest is kept only when a stat after the read still matches info.
+func contentSum(name string, info fs.FileInfo) ([sha256.Size]byte, error) {
+	key := fmt.Sprintf("%d %d", info.Size(), info.ModTime().UnixNano())
+	entry := contentSums.entry(key, name)
+	entry.once.Do(func() {
+		entry.sum, entry.err = readSum(name)
+		after, err := os.Stat(name)
+		if entry.err == nil && (err != nil || after.Size() != info.Size() || !after.ModTime().Equal(info.ModTime())) {
+			entry.err = errFileMoved
+		}
+	})
+	if entry.err == errFileMoved {
+		// The file changed while it was read. Read it again, and keep nothing.
+		return readSum(name)
+	}
+	return entry.sum, entry.err
+}
+
+var errFileMoved = errors.New("file changed while it was hashed")
+
+func readSum(name string) ([sha256.Size]byte, error) {
+	var sum [sha256.Size]byte
+	file, err := os.Open(name)
+	if err != nil {
+		return sum, err
+	}
+	defer file.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, file); err != nil {
+		return sum, err
+	}
+	h.Sum(sum[:0])
+	return sum, nil
 }
 
 // prefetch checks and hashes, in parallel, every name the testlog opens or
