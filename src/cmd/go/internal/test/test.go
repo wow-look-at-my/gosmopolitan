@@ -3272,6 +3272,9 @@ func isProcessLocal(name string) bool {
 	if isWindowsLiveState(name) {
 		return true
 	}
+	if dir := ipcRuntimeDir(); dir != "" && search.InDir(filepath.Clean(name), dir) != "" {
+		return true
+	}
 	rest, ok := strings.CutPrefix(name, "/proc/")
 	if !ok {
 		return false
@@ -3282,6 +3285,18 @@ func isProcessLocal(name string) bool {
 	}
 	return procCounters[rest]
 }
+
+// ipcRuntimeDir is where go-ipc keeps the events and life sockets of the
+// processes that run now, on a host with no /dev/shm. The build cache owner of
+// this run keeps its own there. It is the same path as runtimeDir in go-ipc's
+// path_windows.go and path_darwin.go.
+var ipcRuntimeDir = sync.OnceValue(func() string {
+	base, err := os.UserCacheDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(base, "gosmopolitan", "go-ipc")
+})
 
 // isWindowsLiveState reports whether name is Windows state that the system
 // rewrites as it runs: the device namespace, where the named pipes are, and the
