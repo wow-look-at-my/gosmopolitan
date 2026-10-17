@@ -6,6 +6,8 @@
 
 package runtime
 
+import "unsafe"
+
 // js/wasm without GOWASM=threads has no support for threads. There is no
 // preemption.
 //
@@ -81,9 +83,22 @@ func notewakeup(n *note) {
 	}
 	cleared := n.status == note_cleared
 	n.status = note_woken
-	if cleared {
+	if cleared && n.gp != nil {
 		goready(n.gp, 1)
 	}
+}
+
+// noteParkCommit names gp as the waiter on the note at nptr, unless the
+// note is no longer cleared. It runs on g0 after gp stops. A goroutine can
+// be preempted in gopark's prologue, so the waiter must not be published
+// before this point: a wakeup in that window would ready a runnable g.
+func noteParkCommit(gp *g, nptr unsafe.Pointer) bool {
+	n := (*note)(nptr)
+	if n.status != note_cleared {
+		return false
+	}
+	n.gp = gp
+	return true
 }
 
 func notesleep(n *note) {
@@ -111,7 +126,6 @@ func notetsleepg(n *note, ns int64) bool {
 
 		id := scheduleTimeoutEvent(delay)
 
-		n.gp = gp
 		n.deadline = deadline
 		if allDeadlineNotes != nil {
 			allDeadlineNotes.allprev = n
@@ -119,7 +133,7 @@ func notetsleepg(n *note, ns int64) bool {
 		n.allnext = allDeadlineNotes
 		allDeadlineNotes = n
 
-		gopark(nil, nil, waitReasonSleep, traceBlockSleep, 1)
+		gopark(noteParkCommit, unsafe.Pointer(n), waitReasonSleep, traceBlockSleep, 1)
 
 		clearTimeoutEvent(id) // note might have woken early, clear timeout
 
@@ -138,9 +152,7 @@ func notetsleepg(n *note, ns int64) bool {
 	}
 
 	for n.status != note_woken {
-		n.gp = gp
-
-		gopark(nil, nil, waitReasonZero, traceBlockGeneric, 1)
+		gopark(noteParkCommit, unsafe.Pointer(n), waitReasonZero, traceBlockGeneric, 1)
 
 		n.gp = nil
 	}
@@ -148,12 +160,15 @@ func notetsleepg(n *note, ns int64) bool {
 }
 
 // checkTimeouts resumes goroutines that are waiting on a note which has reached its deadline.
+// A note whose waiter has not parked yet only gets the timeout status.
 func checkTimeouts() {
 	now := nanotime()
 	for n := allDeadlineNotes; n != nil; n = n.allnext {
 		if n.status == note_cleared && n.deadline != 0 && now >= n.deadline {
 			n.status = note_timeout
-			goready(n.gp, 1)
+			if n.gp != nil {
+				goready(n.gp, 1)
+			}
 		}
 	}
 }
