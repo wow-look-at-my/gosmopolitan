@@ -70,27 +70,22 @@ runs:
         ln -s "$llvm/ld64.lld" "$llvm/llvm-strip" "$tools/"
         echo "$tools" >> "$GITHUB_PATH"
 
+    # A cache hit restores both directories and downloads nothing, as the other hosts do for zig.
     - name: Install zig and LLVM (NT)
       if: runner.os == 'Windows'
-      shell: pwsh
-      env:
-        ZIG_VERSION: 0.16.0
-        ZIG_SHA256: 68659eb5f1e4eb1437a722f1dd889c5a322c9954607f5edcf337bc3684a75a7e
-        LLVM_VERSION: 18.1.8
-        LLVM_SHA256: 94af030060d88cc17e9f00ef1663ebdc1126b35e16bebdfa1e807984b70abd8f
-      run: |
-        $ErrorActionPreference = 'Stop'
-        $zip = Join-Path $env:RUNNER_TEMP 'zig.zip'
-        Invoke-WebRequest "https://ziglang.org/download/$env:ZIG_VERSION/zig-x86_64-windows-$env:ZIG_VERSION.zip" -OutFile $zip
-        if ((Get-FileHash $zip -Algorithm SHA256).Hash -ne $env:ZIG_SHA256) { throw "zig.zip does not match its pinned SHA-256" }
-        7z x $zip "-o$env:RUNNER_TEMP" -y | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw "7z could not unpack zig.zip" }
-        # The image carries its own LLVM, at another version. The installer is a 7z archive, so the two tools come out of it without an install.
-        $exe = Join-Path $env:RUNNER_TEMP 'llvm.exe'
-        Invoke-WebRequest "https://github.com/llvm/llvm-project/releases/download/llvmorg-$env:LLVM_VERSION/LLVM-$env:LLVM_VERSION-win64.exe" -OutFile $exe
-        if ((Get-FileHash $exe -Algorithm SHA256).Hash -ne $env:LLVM_SHA256) { throw "the LLVM installer does not match its pinned SHA-256" }
-        $tools = Join-Path $env:RUNNER_TEMP 'apeld-tools'
-        7z e $exe "-o$tools" bin/ld64.lld.exe bin/llvm-strip.exe -y | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw "7z could not unpack ld64.lld.exe and llvm-strip.exe" }
-        $tools | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-        (Join-Path $env:RUNNER_TEMP "zig-x86_64-windows-$env:ZIG_VERSION") | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      uses: wow-look-at-my/actions@cached-run#latest
+      with:
+        save-on: any
+        paths: |
+          ${{ runner.temp }}/zig-x86_64-windows-0.16.0
+          ${{ runner.temp }}/apeld-tools
+        run: |
+          curl -fsSL "https://ziglang.org/download/0.16.0/zig-x86_64-windows-0.16.0.zip" -o "$RUNNER_TEMP/zig.zip"
+          echo "68659eb5f1e4eb1437a722f1dd889c5a322c9954607f5edcf337bc3684a75a7e  $RUNNER_TEMP/zig.zip" | sha256sum -c -
+          7z x "$RUNNER_TEMP/zig.zip" "-o$RUNNER_TEMP" -y >/dev/null
+          # The image carries its own LLVM, at another version. The installer is a 7z archive, so the two tools come out of it without an install.
+          curl -fsSL "https://github.com/llvm/llvm-project/releases/download/llvmorg-18.1.8/LLVM-18.1.8-win64.exe" -o "$RUNNER_TEMP/llvm.exe"
+          echo "94af030060d88cc17e9f00ef1663ebdc1126b35e16bebdfa1e807984b70abd8f  $RUNNER_TEMP/llvm.exe" | sha256sum -c -
+          7z e "$RUNNER_TEMP/llvm.exe" "-o$RUNNER_TEMP/apeld-tools" bin/ld64.lld.exe bin/llvm-strip.exe -y >/dev/null
+          echo "$RUNNER_TEMP/apeld-tools" >> "$GITHUB_PATH"
+          echo "$RUNNER_TEMP/zig-x86_64-windows-0.16.0" >> "$GITHUB_PATH"
