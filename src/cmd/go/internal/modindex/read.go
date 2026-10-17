@@ -116,6 +116,13 @@ func dirHash(modroot, pkgdir string) (cache.ActionID, error) {
 
 var ErrNotIndexed = errors.New("not in module index")
 
+// localCache is where an index is kept. The shared store refuses an index,
+// because dirHash keys it on file names, sizes and times, not file content.
+// Asking the store only spends a lookup, an upload and a manifest line.
+func localCache() cache.Cache {
+	return cache.Local(cache.Default())
+}
+
 var (
 	errDisabled           = fmt.Errorf("%w: module indexing disabled", ErrNotIndexed)
 	errNotFromModuleCache = fmt.Errorf("%w: not from module cache", ErrNotIndexed)
@@ -184,7 +191,7 @@ func openIndexModule(modroot string, ismodcache bool) (*Module, error) {
 		if err != nil {
 			return nil, err
 		}
-		data, _, opened, err := cache.GetMmap(cache.Default(), id)
+		data, _, opened, err := cache.GetMmap(localCache(), id)
 		if err != nil {
 			// Couldn't read from modindex. Assume we couldn't read from
 			// the index because the module hasn't been indexed yet.
@@ -196,7 +203,7 @@ func openIndexModule(modroot string, ismodcache bool) (*Module, error) {
 				return nil, err
 			}
 			if runtime.GOOS != "windows" || !opened {
-				if err = cache.PutBytes(cache.Default(), id, data); err != nil {
+				if err = cache.PutBytes(localCache(), id, data); err != nil {
 					return nil, err
 				}
 			}
@@ -218,7 +225,7 @@ func openIndexPackage(modroot, pkgdir string) (*IndexPackage, error) {
 		if err != nil {
 			return nil, err
 		}
-		data, _, opened, err := cache.GetMmap(cache.Default(), id)
+		data, _, opened, err := cache.GetMmap(localCache(), id)
 		if err != nil {
 			// Couldn't read from index. Assume we couldn't read from
 			// the index because the package hasn't been indexed yet.
@@ -227,7 +234,7 @@ func openIndexPackage(modroot, pkgdir string) (*IndexPackage, error) {
 			// Windows won't let us open an already opened file.
 			data = indexPackage(modroot, pkgdir)
 			if runtime.GOOS != "windows" || !opened {
-				if err = cache.PutBytes(cache.Default(), id, data); err != nil {
+				if err = cache.PutBytes(localCache(), id, data); err != nil {
 					return nil, err
 				}
 			}

@@ -2,10 +2,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// js and wasip1 do not support inter-process file locking.
-//
-//go:build !js && !wasip1
-
 package lockedfile_test
 
 import (
@@ -179,6 +175,8 @@ func TestSpuriousEDEADLK(t *testing.T) {
 	// 	Q.3 unlocks files A and B.
 	// 	P.2 unblocks and locks file B.
 	// 	P.2 unlocks file B.
+
+	testenv.MustHaveExec(t)
 
 	dirVar := t.Name() + "DIR"
 

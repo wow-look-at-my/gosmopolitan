@@ -1094,7 +1094,6 @@ func testPreemptionAfterSyscall(t *testing.T, syscallDuration time.Duration) {
 		c := make(chan bool, nroutines)
 		stop := uint32(0)
 
-		start := time.Now()
 		for g := 0; g < nroutines; g++ {
 			go func(stop *uint32) {
 				c <- true
@@ -1108,6 +1107,11 @@ func testPreemptionAfterSyscall(t *testing.T, syscallDuration time.Duration) {
 		for g := 0; g < nroutines; g++ {
 			<-c
 		}
+		// The bound is on the stop, which is what preemption after a syscall
+		// governs. The start of the goroutines is not part of it: under
+		// maymorestack=mayMoreStackPreempt every call preempts, and on a busy
+		// machine the start alone took most of the bound.
+		start := time.Now()
 		atomic.StoreUint32(&stop, 1)
 		// wait until all goroutines have finished.
 		for g := 0; g < nroutines; g++ {
@@ -1125,6 +1129,10 @@ func TestPreemptionAfterSyscall(t *testing.T) {
 	if runtime.GOOS == "plan9" {
 		testenv.SkipFlaky(t, 41015)
 	}
+	// It sets GOMAXPROCS for the whole process and bounds each round by the
+	// wall clock, so a test beside it changes both what it measures and the
+	// procs that test has.
+	t.Serial()
 
 	for _, i := range []time.Duration{10, 100, 1000} {
 		d := i * time.Microsecond

@@ -455,6 +455,8 @@ func TestTakeForkLogRecordsWhatTheChildRead(t *T) {
 	scratch := t.TempDir()
 	start := filepath.Join(scratch, "pkg")
 	moved := filepath.Join(scratch, "elsewhere")
+	// /etc/hosts is not absolute on Windows, which needs a drive.
+	hosts := filepath.Join(scratch, "etc", "hosts")
 	file := filepath.Join(scratch, "testlog.txt")
 	child := "# test log\n" +
 		"getenv HOME\n" +
@@ -463,7 +465,7 @@ func TestTakeForkLogRecordsWhatTheChildRead(t *T) {
 		"stat out.txt\n" +
 		"open " + filepath.Join(scratch, "abs.txt") + "\n" +
 		"parse open hosts\n" +
-		"lookup hostsname \"a \\\"b\\\"\" /etc/hosts\n" +
+		"lookup hostsname \"a \\\"b\\\"\" " + hosts + "\n" +
 		"lookup x509dir \"all\" certs\n"
 	if err := os.WriteFile(file, []byte(child), 0o666); err != nil {
 		t.Fatal(err)
@@ -479,7 +481,7 @@ func TestTakeForkLogRecordsWhatTheChildRead(t *T) {
 		"stat " + filepath.Join(moved, "out.txt"),
 		"open " + filepath.Join(scratch, "abs.txt"),
 		"parse open " + filepath.Join(moved, "hosts"),
-		"lookup hostsname \"a \\\"b\\\"\" /etc/hosts",
+		"lookup hostsname \"a \\\"b\\\"\" " + hosts,
 		"lookup x509dir \"all\" " + filepath.Join(moved, "certs"),
 	}
 	if !slices.Equal(log.events, want) {

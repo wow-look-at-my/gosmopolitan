@@ -400,6 +400,7 @@ package testing
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"flag"
@@ -2576,9 +2577,11 @@ func (t *T) Parallel() {
 	// later reader behind that pending writer.
 	t.releaseBarrier()
 
+	// The parent runs its subtests one at a time up to here, so seq follows the order of its Run calls.
+	seq := t.tstate.parallelSeq.Add(1)
 	t.signal <- true   // Release calling test.
 	<-t.parent.barrier // Wait for the parent test to complete.
-	t.tstate.waitParallel()
+	t.tstate.waitParallel(seq)
 	parallelStart.Add(1)
 
 	t.acquireBarrier()
@@ -2838,7 +2841,7 @@ func tRunner(t *T, fn func(t *T)) {
 			t.checkRaces()
 			if !t.isParallel {
 				// Reacquire the count for sequential tests. See comment in Run.
-				t.tstate.waitParallel()
+				t.tstate.waitParallel(0)
 			}
 		} else if t.isParallel {
 			// Only release the count for this test if it was run as a parallel
@@ -3048,51 +3051,66 @@ type testState struct {
 
 	mu sync.Mutex
 
-	// Channel used to signal tests that are ready to be run in parallel.
-	startParallel chan bool
-
 	// running is the number of tests currently running in parallel.
 	// This does not include tests that are waiting for subtests to complete.
 	running int
 
-	// numWaiting is the number tests waiting to be run in parallel.
-	numWaiting int
+	// waiting holds the tests that wait for a slot, sorted by seq. A freed
+	// slot goes to the first. The parallel subtests of a test all start to
+	// wait at once, so the order of their Parallel calls decides which runs
+	// first, not the order they wake in.
+	waiting []parallelWaiter
+
+	// parallelSeq numbers the Parallel calls.
+	parallelSeq atomic.Uint64
 
 	// maxParallel is a copy of the parallel flag.
 	maxParallel int
 }
 
+// parallelWaiter is one test that waits for a parallel slot.
+type parallelWaiter struct {
+	seq   uint64
+	start chan struct{}
+}
+
 func newTestState(maxParallel int, m *matcher) *testState {
 	return &testState{
-		match:         m,
-		startParallel: make(chan bool),
-		maxParallel:   maxParallel,
-		running:       1, // Set the count to 1 for the main (sequential) test.
+		match:       m,
+		maxParallel: maxParallel,
+		running:     1, // Set the count to 1 for the main (sequential) test.
 	}
 }
 
-func (s *testState) waitParallel() {
+// waitParallel takes a slot, after every waiting test with a lower seq. A
+// sequential test takes its slot back with seq 0, ahead of every parallel one.
+func (s *testState) waitParallel(seq uint64) {
 	s.mu.Lock()
 	if s.running < s.maxParallel {
 		s.running++
 		s.mu.Unlock()
 		return
 	}
-	s.numWaiting++
+	start := make(chan struct{})
+	at, _ := slices.BinarySearchFunc(s.waiting, seq, func(waiter parallelWaiter, seq uint64) int {
+		return cmp.Compare(waiter.seq, seq)
+	})
+	s.waiting = slices.Insert(s.waiting, at, parallelWaiter{seq: seq, start: start})
 	s.mu.Unlock()
-	<-s.startParallel
+	<-start
 }
 
 func (s *testState) release() {
 	s.mu.Lock()
-	if s.numWaiting == 0 {
+	if len(s.waiting) == 0 {
 		s.running--
 		s.mu.Unlock()
 		return
 	}
-	s.numWaiting--
+	next := s.waiting[0]
+	s.waiting = slices.Delete(s.waiting, 0, 1)
 	s.mu.Unlock()
-	s.startParallel <- true // Pick a waiting test to be run.
+	close(next.start)
 }
 
 // No one should be using func Main anymore.

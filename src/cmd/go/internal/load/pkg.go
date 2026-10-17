@@ -409,6 +409,11 @@ func (p *Package) copyBuild(opts PackageOpts, pp *build.Package) {
 
 	// TODO? Target
 	p.Goroot = pp.Goroot || fips140.Snapshot() && str.HasFilePathPrefix(p.Dir, fips140.Dir())
+	if p.Root == "" && p.Goroot && !pp.Goroot {
+		// A FIPS snapshot package sits in its module's directory, which is its
+		// root. With no root, go test never cached its result.
+		p.Root = fips140.Dir()
+	}
 	p.Standard = p.Goroot && p.ImportPath != "" && search.IsStandardImportPath(p.ImportPath)
 	p.GoFiles = pp.GoFiles
 	p.CgoFiles = pp.CgoFiles
