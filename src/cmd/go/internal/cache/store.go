@@ -6,9 +6,13 @@
 package cache
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -31,6 +35,9 @@ func openCache(dir string) (Cache, error) {
 	if err != nil {
 		return nil, err
 	}
+	if store != nil {
+		publishStore(store)
+	}
 	// A test binary and a `go run` program are started with the environment this command was started with, rather than with this process's own.
 	goCfg.OrigEnv = append(goCfg.OrigEnv[:len(goCfg.OrigEnv):len(goCfg.OrigEnv)], cacheclient.BrokerEnviron()...)
 	// A go command that never runs a build still opens the cache, and a failing
@@ -42,6 +49,22 @@ func openCache(dir string) (Cache, error) {
 	return cache, nil
 }
 
+// RunUploadSpool runs the upload spool this process was started for, when the
+// environment names one. It reports the exit status and whether it ran. Such
+// a process opens no cache and serves no build.
+func RunUploadSpool() (code int, ran bool) {
+	path := os.Getenv(cacheclient.UploadSpoolEnv)
+	if path == "" {
+		return 0, false
+	}
+	cacheclient.SetLogger(goLogger{})
+	if err := cacheclient.RunUploadSpool(path); err != nil {
+		fmt.Fprintf(os.Stderr, "go: %v\n", err)
+		return 1, true
+	}
+	return 0, true
+}
+
 // The store is configured by the environment. What the build IS comes from the
 // build itself: the target it produces and the module it builds. The store has
 // no other way to learn either. Its log would otherwise say how many objects
@@ -51,6 +74,11 @@ func openCache(dir string) (Cache, error) {
 // environment configures none. A CI run with none configured is an error: a
 // build that silently stops sharing is how a cache regression hides.
 func openStore(dir string) (*cacheclient.WebBackend, error) {
+	// A -n command runs no compile and reads no archive. A shared tier would
+	// prefetch archives for it that nothing reads.
+	if goCfg.BuildN {
+		return nil, nil
+	}
 	cfg := cacheclient.ConfigFromEnv()
 	if cfg.Bucket == "" {
 		if os.Getenv("CI") != "" {
@@ -62,17 +90,84 @@ func openStore(dir string) (*cacheclient.WebBackend, error) {
 	// The client keys its build manifest on this. A publish stamp alone changes no cache key, so it is left out.
 	cfg.Version = stripPublishStamp(runtime.Version()) + " compile=" + objabi.ToolBuildID("compile")
 	cfg.Module = mainModulePath()
-	// The key index's disk copy lives beside the cache it describes.
-	cfg.IndexDir = dir
+	cfg.Command = commandDigest()
+	cfg.IndexDir = indexDir(dir)
 	cacheclient.SetLogger(goLogger{})
+	// RunAs serves the spool, so Close need not wait for the uploads. A CI runner kills a detached uploader with the job, so on CI Close waits for them.
+	if os.Getenv("CI") == "" {
+		cacheclient.HandOffUploads()
+	}
 	store, err := cacheclient.NewWebBackend(cfg)
 	if err != nil {
 		// A store that cannot be reached is a slower build, not a broken one.
 		fmt.Fprintf(os.Stderr, "go: shared build cache disabled: %v\n", err)
 		return nil, nil
 	}
-	liveStore.Store(store)
 	return store, nil
+}
+
+// indexDir returns the directory for the key index's disk copy.
+func indexDir(dir string) string {
+	userCache, err := os.UserCacheDir()
+	if err != nil || userCache == "" {
+		return dir
+	}
+	shared := filepath.Join(userCache, "go-build-index")
+	if err := os.MkdirAll(shared, 0o777); err != nil {
+		return dir
+	}
+	return shared
+}
+
+// publishStore makes store the SetSharedModule names the module to. The
+// module loader can run while the cache opens.
+func publishStore(store *cacheclient.WebBackend) {
+	liveStore.Store(store)
+	if path := mainModulePath(); path != "" {
+		store.SetModule(path)
+	}
+}
+
+// commandDigest names what this go command builds: its arguments and the
+// directory they resolve in.
+func commandDigest() string {
+	wd, _ := os.Getwd()
+	return digestArgs(wd, os.Args[1:], os.TempDir())
+}
+
+// digestArgs digests the command line. A path under tmp names this run's
+// scratch space, which is new every run, so it digests as a placeholder. dist
+// runs its go commands in such a directory, and dist test names its output and
+// action graph there.
+func digestArgs(wd string, args []string, tmp string) string {
+	if underDir(wd, tmp) {
+		wd = "$TMP"
+	}
+	parts := []string{wd}
+	for _, arg := range args {
+		flag, value, isFlag := strings.Cut(arg, "=")
+		if !isFlag || !strings.HasPrefix(flag, "-") {
+			flag, value = "", arg
+		}
+		if underDir(value, tmp) {
+			value = "$TMP"
+		}
+		if flag != "" {
+			value = flag + "=" + value
+		}
+		parts = append(parts, value)
+	}
+	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
+	return hex.EncodeToString(sum[:16])
+}
+
+// underDir reports whether path is dir or names something below it.
+func underDir(path, dir string) bool {
+	if dir == "" || !filepath.IsAbs(path) {
+		return false
+	}
+	rel, err := filepath.Rel(filepath.Clean(dir), filepath.Clean(path))
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // liveStore is this command's store, once it has one.
