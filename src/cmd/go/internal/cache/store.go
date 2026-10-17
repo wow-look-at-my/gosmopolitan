@@ -134,11 +134,41 @@ func publishStore(store *cacheclient.WebBackend) {
 }
 
 // commandDigest names what this go command builds: its arguments and the
-// directory they resolve in. The store keeps one build manifest per command.
+// directory they resolve in.
 func commandDigest() string {
 	wd, _ := os.Getwd()
-	sum := sha256.Sum256([]byte(strings.Join(append([]string{wd}, os.Args[1:]...), "\x00")))
+	return digestArgs(wd, os.Args[1:], os.TempDir())
+}
+
+// digestArgs digests the command line. An argument that names a path under tmp
+// names this run's scratch space, which is new every run, so it digests as a
+// placeholder. dist test names its output and action graph that way.
+func digestArgs(wd string, args []string, tmp string) string {
+	parts := []string{wd}
+	for _, arg := range args {
+		flag, value, isFlag := strings.Cut(arg, "=")
+		if !isFlag || !strings.HasPrefix(flag, "-") {
+			flag, value = "", arg
+		}
+		if underDir(value, tmp) {
+			value = "$TMP"
+		}
+		if flag != "" {
+			value = flag + "=" + value
+		}
+		parts = append(parts, value)
+	}
+	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
 	return hex.EncodeToString(sum[:16])
+}
+
+// underDir reports whether path is dir or names something below it.
+func underDir(path, dir string) bool {
+	if dir == "" || !filepath.IsAbs(path) {
+		return false
+	}
+	rel, err := filepath.Rel(filepath.Clean(dir), filepath.Clean(path))
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // liveStore is this command's store, once it has one.
