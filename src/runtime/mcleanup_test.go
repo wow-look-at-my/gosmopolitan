@@ -6,6 +6,8 @@ package runtime_test
 
 import (
 	"internal/runtime/atomic"
+	"internal/testenv"
+	"os/exec"
 	"runtime"
 	"sync"
 	"testing"
@@ -339,6 +341,24 @@ func TestCleanupLost(t *testing.T) {
 
 	if got := int(got.Load()); got != want {
 		t.Errorf("%d cleanups executed, expected %d", got, want)
+	}
+}
+
+// ExampleAddCleanup waits on the main goroutine, which init locks to its
+// thread. A locked goroutine's M hands off its P when it blocks and never runs
+// findRunnable. The example must end while every other M sleeps, not when
+// sysmon wakes from its 60s sleep.
+func TestExampleAddCleanupEndsPromptly(t *testing.T) {
+	testenv.MustHaveExec(t)
+	cmd := testenv.CleanCmdEnv(exec.Command(testenv.Executable(t), "-test.run=^ExampleAddCleanup$"))
+	began := time.Now()
+	out, err := cmd.CombinedOutput()
+	took := time.Since(began)
+	if err != nil {
+		t.Fatalf("ExampleAddCleanup: %v\n%s", err, out)
+	}
+	if took > 10*time.Second {
+		t.Errorf("ExampleAddCleanup took %v, want under 10s\n%s", took, out)
 	}
 }
 

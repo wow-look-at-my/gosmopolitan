@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -207,12 +208,14 @@ func TestWroteNowhereSeparatesTheZipsShapeFromADefect(test *testing.T) {
 		"x509roots/gen_fallback_bundle.go": "package main\n",
 		"x509roots/nss/nss.go":             "package nss\n",
 	})
-	const x509roots = "exit status 1\n" +
-		`2026/09/20 16:52:50 failed to write to "fallback/bundle.go": open fallback/bundle.go: no such file or directory`
-	const nssRoots = "exit status 1\n" +
-		`2026/09/20 16:52:50 failed to write to "nss/roots.go": open nss/roots.go: no such file or directory`
-	const idna = "exit status 1\n" +
-		"Copying exported files failed: open ../../net/idna/idna.go: no such file or directory"
+	// A generator runs on this host, so it prints this host's text for ENOENT.
+	enoent := syscall.ENOENT.Error()
+	x509roots := "exit status 1\n" +
+		`2026/09/20 16:52:50 failed to write to "fallback/bundle.go": open fallback/bundle.go: ` + enoent
+	nssRoots := "exit status 1\n" +
+		`2026/09/20 16:52:50 failed to write to "nss/roots.go": open nss/roots.go: ` + enoent
+	idna := "exit status 1\n" +
+		"Copying exported files failed: open ../../net/idna/idna.go: " + enoent
 	cases := []struct {
 		why  string
 		err  error

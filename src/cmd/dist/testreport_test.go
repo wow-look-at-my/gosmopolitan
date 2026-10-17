@@ -22,6 +22,26 @@ func runReport(inp string) (string, *testTimings, []string) {
 	return out.String(), &timings, done
 }
 
+// TestReportKeepsBuildErrors: a package that does not build reports only
+// "[build failed]". The compile error comes in build-output events, which
+// carry ImportPath and no Package, and the report must still print it.
+func TestReportKeepsBuildErrors(t *testing.T) {
+	const inp = `{"ImportPath":"pkg [pkg.test]","Action":"build-output","Output":"# pkg [pkg.test]\n"}
+{"ImportPath":"pkg [pkg.test]","Action":"build-output","Output":"pkg/x_test.go:3:2: undefined: nope\n"}
+{"ImportPath":"pkg [pkg.test]","Action":"build-fail"}
+{"Action":"start","Package":"pkg"}
+{"Action":"output","Package":"pkg","Output":"FAIL\tpkg [build failed]\n"}
+{"Action":"fail","Package":"pkg","Elapsed":0,"FailedBuild":"pkg [pkg.test]"}
+`
+	got, _, _ := runReport(inp)
+	if !strings.Contains(got, "pkg/x_test.go:3:2: undefined: nope\n") {
+		t.Errorf("the build error did not reach the log: %q", got)
+	}
+	if !strings.Contains(got, "FAIL\tpkg [build failed]\n") {
+		t.Errorf("the package result did not reach the log: %q", got)
+	}
+}
+
 func TestReportDropsPassingOutput(t *testing.T) {
 	const inp = `{"Action":"run","Package":"pkg","Test":"TestOne"}
 {"Action":"output","Package":"pkg","Test":"TestOne","Output":"=== RUN   TestOne\n"}

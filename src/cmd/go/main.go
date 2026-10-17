@@ -20,6 +20,7 @@ import (
 
 	"cmd/go/internal/base"
 	"cmd/go/internal/bug"
+	"cmd/go/internal/cache"
 	"cmd/go/internal/cfg"
 	"cmd/go/internal/clean"
 	"cmd/go/internal/doc"
@@ -338,6 +339,16 @@ func invoke(cmd *base.Command, args []string) {
 		}()
 	}
 
+	// The cache opens while the modules load, so its index download does not wait behind them.
+	// A -n command opens no shared tier (see openStore). go test and go vet parse their own
+	// flags later, so their -n is read off the arguments here.
+	switch cfg.CmdName {
+	case "build", "install", "test", "run", "vet", "list":
+		if !cfg.BuildN && !(cmd.CustomFlags && printsOnly(args)) {
+			go cache.Default()
+		}
+	}
+
 	ctx := maybeStartTrace(context.Background())
 	ctx, span := trace.StartSpan(ctx, fmt.Sprint("Running ", cmd.Name(), " command"))
 	cmd.Run(ctx, cmd, args)
@@ -417,4 +428,18 @@ func handleChdirFlag() {
 	if err := os.Chdir(dir); err != nil {
 		base.Fatalf("go: %v", err)
 	}
+}
+
+// printsOnly reports whether args, the arguments of a command that parses its
+// own flags, set -n. The flags after -args belong to the test binary.
+func printsOnly(args []string) bool {
+	for _, arg := range args {
+		switch arg {
+		case "-args", "--args":
+			return false
+		case "-n", "--n", "-n=true", "--n=true":
+			return true
+		}
+	}
+	return false
 }
