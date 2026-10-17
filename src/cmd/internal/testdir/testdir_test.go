@@ -7,6 +7,7 @@ package testdir_test
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -129,26 +130,60 @@ func Test(t *testing.T) {
 		}
 	}
 
+	var cases []test
 	for _, dir := range dirs {
 		for _, goFile := range goFiles(t, dir) {
-			test := test{testCommon: common, dir: dir, goFile: goFile}
-			t.Run(path.Join(dir, goFile), func(t *testing.T) {
-				t.Parallel()
-				test.T = t
-				testError := test.run()
-				wantError := test.expectFail() && !*force
-				if testError != nil {
-					if wantError {
-						t.Log(testError.Error() + " (expected)")
-					} else {
-						t.Fatal(testError)
-					}
-				} else if wantError {
-					t.Fatal("unexpected success")
-				}
-			})
+			cases = append(cases, test{testCommon: common, dir: dir, goFile: goFile})
 		}
 	}
+	// A runoutput test builds and runs two programs, one after the other, and
+	// rangegen.go alone takes minutes on wasm. Parallel subtests start in the
+	// order of their Run calls, so these run first and end inside the corpus.
+	slices.SortStableFunc(cases, func(left, right test) int {
+		return cmp.Compare(isRunOutput(right), isRunOutput(left))
+	})
+	for _, test := range cases {
+		t.Run(path.Join(test.dir, test.goFile), func(t *testing.T) {
+			t.Parallel()
+			test.T = t
+			testError := test.run()
+			wantError := test.expectFail() && !*force
+			if testError != nil {
+				if wantError {
+					t.Log(testError.Error() + " (expected)")
+				} else {
+					t.Fatal(testError)
+				}
+			} else if wantError {
+				t.Fatal("unexpected success")
+			}
+		})
+	}
+}
+
+// isRunOutput answers 1 when test's file names the runoutput action, read the
+// way test.run reads it, and 0 otherwise.
+func isRunOutput(test test) int {
+	src, err := os.ReadFile(filepath.Join(test.gorootTestDir, test.goFileName()))
+	if err != nil {
+		return 0
+	}
+	for rest := string(src); rest != ""; {
+		var line string
+		line, rest, _ = strings.Cut(rest, "\n")
+		if constraint.IsGoBuild(line) || constraint.IsPlusBuild(line) {
+			continue
+		}
+		action := strings.Fields(strings.TrimPrefix(line, "//"))
+		if len(action) == 0 {
+			return 0
+		}
+		if action[0] == "runoutput" {
+			return 1
+		}
+		return 0
+	}
+	return 0
 }
 
 func shardMatch(name string) bool {
@@ -704,7 +739,9 @@ func (t test) run() error {
 		if goexp != goExperiment {
 			env = append(env, "GOEXPERIMENT="+goexp)
 		}
-		return &builder{flags: parsed, env: env, work: tempDir, omitDebug: omitDebug, run: runWith}, nil
+		// The source sits in a new temporary directory each run. Trimmed, a
+		// program is the same bytes every run, and a wasm runtime compiles it once.
+		return &builder{flags: parsed, env: env, work: tempDir, srcTrim: tempDir + "=>testdir", omitDebug: omitDebug, run: runWith}, nil
 	}
 
 	// goRun builds and runs what `go run flags args...` would: the leading
@@ -791,7 +828,7 @@ func (t test) run() error {
 			if parsed.race {
 				buildEnv = append(buildEnv, "CGO_ENABLED=1")
 			}
-			bld := &builder{flags: parsed, env: buildEnv, work: tempDir, run: func(extra []string, args ...string) ([]byte, error) {
+			bld := &builder{flags: parsed, env: buildEnv, work: tempDir, srcTrim: tempDir + "=>testdir", run: func(extra []string, args ...string) ([]byte, error) {
 				cmd := exec.Command(args[0], args[1:]...)
 				cmd.Env = append(os.Environ(), extra...)
 				var buf bytes.Buffer
@@ -1101,14 +1138,17 @@ func (t test) run() error {
 		if plain {
 			// The whole run corpus is ONE executable that ran in ONE process.
 			batched, joined, err := batchOutput(t.gorootTestDir, t.goFileName())
-			if joined && err != nil {
-				return fmt.Errorf("%s\n%s", err, batched)
-			}
 			if err != nil {
 				return err
 			}
+			// A shared process can change what a program prints: another
+			// program's state, and package names other than main. The program
+			// alone decides a result the batch does not match.
 			if joined {
-				return t.checkExpectedOutput(batched)
+				if t.checkExpectedOutput(batched) == nil {
+					return nil
+				}
+				fmt.Fprintf(os.Stderr, "testdir batch: %s printed other output in the batch, and runs alone\n", t.goFileName())
 			}
 		}
 		out, err := goRun(flags, append([]string{t.goFileName()}, args...), "run.exe")

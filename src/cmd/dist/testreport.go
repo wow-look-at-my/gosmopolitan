@@ -209,6 +209,9 @@ func (rep *testReport) process(line []byte) {
 
 	key := evt.Package + "\t" + evt.Test
 	switch evt.Action {
+	case "build-output":
+		// The compile and link errors of a package.
+		rep.dst.Write([]byte(evt.Output))
 	case "run":
 		if evt.Test != "" {
 			rep.timings.start()

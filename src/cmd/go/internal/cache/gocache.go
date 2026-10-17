@@ -63,6 +63,22 @@ func GetFile(c Cache, id ActionID) (string, Entry, error) {
 	return cachedisk.GetFile(c, id)
 }
 
+// FetchFile is GetFile for an output the build already depends on. A cache
+// with a shared store waits out a store outage rather than answer a miss.
+func FetchFile(c Cache, id ActionID) (string, Entry, error) {
+	if traced, ok := c.(*tracedCache); ok {
+		c = traced.Cache
+	}
+	fetcher, ok := c.(interface{ Fetch(ActionID) (Entry, error) })
+	if !ok {
+		return GetFile(c, id)
+	}
+	if _, err := fetcher.Fetch(id); err != nil {
+		return "", Entry{}, err
+	}
+	return GetFile(c, id)
+}
+
 // GetBytes looks up an action and answers its output. Use it only for output
 // that fits in memory.
 func GetBytes(c Cache, id ActionID) ([]byte, Entry, error) {
@@ -72,6 +88,12 @@ func GetBytes(c Cache, id ActionID) ([]byte, Entry, error) {
 // PutBytes stores bytes as an action's output.
 func PutBytes(c Cache, id ActionID, data []byte) error {
 	return cachedisk.PutBytes(c, id, data)
+}
+
+// Local answers the part of c that stays on this machine, for an output the
+// shared store must not see.
+func Local(c Cache) Cache {
+	return cachedisk.Local(c)
 }
 
 // PutNoVerify stores an output that is not reproducible, such as test output.
