@@ -31,6 +31,7 @@ import (
 	"cmd/go/internal/base"
 	"cmd/go/internal/cache"
 	"cmd/go/internal/cfg"
+	"cmd/go/internal/fips140"
 	"cmd/go/internal/load"
 	"cmd/go/internal/lockedfile"
 	"cmd/go/internal/modload"
@@ -3086,6 +3087,9 @@ func inputHashes(lines []byte) map[string]string {
 func identityKey(a *work.Action, cacheArgs []string, kind string) cache.ActionID {
 	h := cache.NewHash("testIdentity")
 	fmt.Fprintf(h, "package %s args %q execcmd %q kind %s", a.Package.ImportPath, cacheArgs, work.ExecCmd, kind)
+	// dist runs one package under several GOFIPS140 snapshots and GOFLAGS
+	// hooks. Each one compares with its own last binary, not a sibling's.
+	fmt.Fprintf(h, " fips %q goflags %q goexperiment %q", fips140.Version(), cfg.Getenv("GOFLAGS"), cfg.RawGOEXPERIMENT)
 	return h.Sum()
 }
 
