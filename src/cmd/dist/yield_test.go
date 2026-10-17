@@ -16,7 +16,7 @@ import (
 	"testing"
 )
 
-// A command started to yield runs at nice 10, above dist's own.
+// A command started to yield runs at yieldNice, above dist's own.
 func TestStartYieldingLowersPriority(t *testing.T) {
 	testenv.MustHaveExec(t)
 	marker := filepath.Join(t.TempDir(), "marker")
@@ -37,7 +37,7 @@ func TestStartYieldingLowersPriority(t *testing.T) {
 		// The Linux system call answers 20 less the nice value.
 		nice = 20 - prio
 	}
-	if nice != 10 {
-		t.Errorf("the yielding command runs at nice %d, want 10", nice)
+	if nice != yieldNice {
+		t.Errorf("the yielding command runs at nice %d, want %d", nice, yieldNice)
 	}
 }

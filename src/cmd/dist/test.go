@@ -1103,7 +1103,7 @@ func (t *tester) registerStdTest(pkg string) {
 				timeoutSec = 0
 			}
 		}
-		// cmd/go runs last and alone, because its scripts each build with -p and fill the machine.
+		// cmd/go is a binary of its own, because its scripts each build with -p and fill the machine.
 		rest, alone := withoutCmdGo(stdMatches)
 
 		// One binary holds the tests of every package, is kept, and starts again for the tests that differ from a package's run only in flags.
@@ -1111,6 +1111,13 @@ func (t *tester) registerStdTest(pkg string) {
 		test.timeout = timeoutSec
 		test.yield = true
 		test.keep = filepath.Join(workdir, "std.test")
+		// cmd/go runs beside std.test. Its output waits in a buffer, and it
+		// prints after std.test's.
+		var cmdGoDone func() error
+		if alone {
+			cmdGoDone = t.startCmdGo(timeoutSec)
+		}
+
 		// One step builds and runs every package here, so its own line is the only thing that accounts for the compile.
 		var err error
 		if len(rest) > 0 {
@@ -1127,25 +1134,40 @@ func (t *tester) registerStdTest(pkg string) {
 			t.recordOneBinary(false, test.keep, rest)
 		}
 
-		if alone {
-			cmdGo := oneBinaryTest([]string{"cmd/go"}, goos)
-			cmdGo.timeout = timeoutSec
-			cmdGo.yield = true
-			if !t.json {
-				cmdGo.actionGraph = filepath.Join(workdir, "cmd-go.test.actions.json")
-			}
-			started := time.Now()
-			state, errCmdGo := cmdGo.runState(t)
-			if !t.json {
-				reportTestStep("cmd-go.test", time.Since(started), state)
-				reportSlowActions(os.Stdout, "cmd-go.test", cmdGo.actionGraph)
-			}
-			if err == nil {
+		if cmdGoDone != nil {
+			if errCmdGo := cmdGoDone(); err == nil {
 				err = errCmdGo
 			}
 		}
 		return err
 	})
+}
+
+// startCmdGo starts cmd/go's one-binary test and answers a function that
+// waits for it, prints its output and reports its step.
+func (t *tester) startCmdGo(timeoutSec time.Duration) func() error {
+	cmdGo := oneBinaryTest([]string{"cmd/go"}, goos)
+	cmdGo.timeout = timeoutSec
+	if !t.json {
+		cmdGo.actionGraph = filepath.Join(workdir, "cmd-go.test.actions.json")
+	}
+	var out bytes.Buffer
+	cmd, flush := cmdGo.bgCommand(t, &out, &out)
+	started := time.Now()
+	startErr := startYielding(cmd)
+	return func() error {
+		err := startErr
+		if err == nil {
+			err = cmd.Wait()
+		}
+		flush()
+		os.Stdout.Write(out.Bytes())
+		if !t.json {
+			reportTestStep("cmd-go.test", time.Since(started), cmd.ProcessState)
+			reportSlowActions(os.Stdout, "cmd-go.test", cmdGo.actionGraph)
+		}
+		return err
+	}
 }
 
 // withoutCmdGo answers pkgs without cmd/go, and whether cmd/go was there.
