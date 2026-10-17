@@ -87,5 +87,6 @@ runs:
           curl -fsSL "https://github.com/llvm/llvm-project/releases/download/llvmorg-18.1.8/LLVM-18.1.8-win64.exe" -o "$RUNNER_TEMP/llvm.exe"
           echo "94af030060d88cc17e9f00ef1663ebdc1126b35e16bebdfa1e807984b70abd8f  $RUNNER_TEMP/llvm.exe" | sha256sum -c -
           7z e "$RUNNER_TEMP/llvm.exe" "-o$RUNNER_TEMP/apeld-tools" bin/ld64.lld.exe bin/llvm-strip.exe -y >/dev/null
-          echo "$RUNNER_TEMP/apeld-tools" >> "$GITHUB_PATH"
-          echo "$RUNNER_TEMP/zig-x86_64-windows-0.16.0" >> "$GITHUB_PATH"
+          # A test that reads PATH keys its cached result on the string, so these keep the backslashes every other entry has.
+          echo "$RUNNER_TEMP\\apeld-tools" >> "$GITHUB_PATH"
+          echo "$RUNNER_TEMP\\zig-x86_64-windows-0.16.0" >> "$GITHUB_PATH"
