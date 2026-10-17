@@ -3086,6 +3086,9 @@ func inputHashes(lines []byte) map[string]string {
 func identityKey(a *work.Action, cacheArgs []string, kind string) cache.ActionID {
 	h := cache.NewHash("testIdentity")
 	fmt.Fprintf(h, "package %s args %q execcmd %q kind %s", a.Package.ImportPath, cacheArgs, work.ExecCmd, kind)
+	// dist runs one package under several GOFIPS140 snapshots and GOFLAGS
+	// hooks. Each one compares with its own last binary, not a sibling's.
+	fmt.Fprintf(h, " gofips140 %q goflags %q goexperiment %q", cfg.Getenv("GOFIPS140"), cfg.Getenv("GOFLAGS"), cfg.RawGOEXPERIMENT)
 	return h.Sum()
 }
 

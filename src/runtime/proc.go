@@ -4003,9 +4003,15 @@ func stoplockedm() {
 		throw("stoplockedm: inconsistent locking")
 	}
 	if gp.m.p != 0 {
-		// Schedule another M to run this p.
-		pp := releasep()
-		handoffp(pp)
+		keep, handed := handoffLocked(gp.m)
+		if keep {
+			return
+		}
+		if !handed {
+			// Schedule another M to run this p.
+			pp := releasep()
+			handoffp(pp)
+		}
 	}
 	incidlelocked(1)
 	// Wait until another thread schedules lockedg again.
@@ -4018,6 +4024,51 @@ func stoplockedm() {
 	}
 	acquirep(gp.m.nextp.ptr())
 	gp.m.nextp = 0
+}
+
+// handoffLocked looks at the head of the global run queue for stoplockedm.
+// keep reports that the head is mp's own locked goroutine, which mp runs with
+// the P it holds. handed reports that the head is locked to another M, which
+// now holds mp's P. handoffp would wake an M only for it to find that
+// goroutine and wake its M in turn. A locked goroutine that the scheduler
+// preempts at every call pays those two thread wakes per call.
+//
+// It acts only when findRunnable would return that goroutine first: no GC,
+// trace or safe-point work, and an empty local run queue. On wasm it does not
+// act: the main thread there cannot block, and its M wakes through the JS
+// event loop, not through a note.
+//
+//go:nowritebarrierrec
+func handoffLocked(mp *m) (keep, handed bool) {
+	pp := mp.p.ptr()
+	if goarch.IsWasm == 1 || !runqempty(pp) || gcBlackenEnabled != 0 || traceEnabled() || traceShuttingDown() || pp.runSafePointFn != 0 || sched.gcwaiting.Load() {
+		return false, false
+	}
+	if gcCleanups.needsWake() || fingStatus.Load()&(fingWait|fingWake) == fingWait|fingWake {
+		return false, false
+	}
+	lock(&sched.lock)
+	next := globrunqget()
+	if next == nil {
+		unlock(&sched.lock)
+		return false, false
+	}
+	if next == mp.lockedg.ptr() {
+		unlock(&sched.lock)
+		return true, false
+	}
+	other := next.lockedm.ptr()
+	if other == nil || other.nextp != 0 {
+		globrunqputhead(next)
+		unlock(&sched.lock)
+		return false, false
+	}
+	unlock(&sched.lock)
+	// The rest of startlockedm: this M parks in stoplockedm, so it does not stop here.
+	incidlelocked(-1)
+	other.nextp.set(releasep())
+	notewakeup(&other.park)
+	return false, true
 }
 
 // Schedules the locked m to run the locked gp.
