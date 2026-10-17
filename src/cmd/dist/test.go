@@ -1154,16 +1154,23 @@ func (t *tester) startCmdGo(timeoutSec time.Duration) func() error {
 	var out bytes.Buffer
 	cmd, flush := cmdGo.bgCommand(t, &out, &out)
 	started := time.Now()
-	startErr := startYielding(cmd)
-	return func() error {
-		err := startErr
+	err := startYielding(cmd)
+	// The step's time ends when cmd/go exits, not when std.test lets its output print.
+	var elapsed time.Duration
+	ended := make(chan struct{})
+	go func() {
 		if err == nil {
 			err = cmd.Wait()
 		}
+		elapsed = time.Since(started)
+		close(ended)
+	}()
+	return func() error {
+		<-ended
 		flush()
 		os.Stdout.Write(out.Bytes())
 		if !t.json {
-			reportTestStep("cmd-go.test", time.Since(started), cmd.ProcessState)
+			reportTestStep("cmd-go.test", elapsed, cmd.ProcessState)
 			reportSlowActions(os.Stdout, "cmd-go.test", cmdGo.actionGraph)
 		}
 		return err
