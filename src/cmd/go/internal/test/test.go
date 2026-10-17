@@ -21,6 +21,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -3089,6 +3090,8 @@ func identityKey(a *work.Action, cacheArgs []string, kind string) cache.ActionID
 	// dist runs one package under several GOFIPS140 snapshots and GOFLAGS
 	// hooks. Each one compares with its own last binary, not a sibling's.
 	fmt.Fprintf(h, " gofips140 %q goflags %q goexperiment %q", cfg.Getenv("GOFIPS140"), cfg.Getenv("GOFLAGS"), cfg.RawGOEXPERIMENT)
+	// The store is shared by every CI host, and each host builds another binary.
+	fmt.Fprintf(h, " target %s/%s host %s/%s", cfg.Goos, cfg.Goarch, runtime.GOOS, runtime.GOARCH)
 	return h.Sum()
 }
 
