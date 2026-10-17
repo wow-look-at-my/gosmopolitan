@@ -3,6 +3,6 @@ description: Move every org submodule onto its branch head, because a checkout r
 runs:
   using: composite
   steps:
-    # make.bash runs this same script; the step is for the jobs that compile without it, make.bat among them.
+    # dist runs this same script too. A job that runs make.bash or make.bat after this step sets GOSUBMODULEBRANCH=off, so the script runs once.
     - shell: bash
       run: bash ./src/submodulebranch.bash "${{ github.ref_name }}"

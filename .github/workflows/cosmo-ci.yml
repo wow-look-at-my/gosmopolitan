@@ -99,6 +99,8 @@ jobs:
           windows: cd src && .\make.bat -v
         env:
           GOROOT_BOOTSTRAP: ${{ env.GOROOT }}
+          # The track-submodules step put every org submodule on its branch head. dist runs the same script again otherwise, 35s on NT.
+          GOSUBMODULEBRANCH: 'off'
 
       - name: Count the bootstrap build cache after the build
         id: bootstrap-after
@@ -169,6 +171,8 @@ jobs:
         run: cd src && ./make.bash -v
         env:
           GOROOT_BOOTSTRAP: ${{ env.GOROOT }}
+          # The track-submodules step put every org submodule on its branch head. dist runs the same script again otherwise, 35s on NT.
+          GOSUBMODULEBRANCH: 'off'
 
       - name: Count the bootstrap build cache after the build
         id: bootstrap-after
