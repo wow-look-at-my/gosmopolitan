@@ -4034,12 +4034,14 @@ func stoplockedm() {
 // preempts at every call pays those two thread wakes per call.
 //
 // It acts only when findRunnable would return that goroutine first: no GC,
-// trace or safe-point work, and an empty local run queue.
+// trace or safe-point work, and an empty local run queue. On wasm it does not
+// act: the main thread there cannot block, and its M wakes through the JS
+// event loop, not through a note.
 //
 //go:nowritebarrierrec
 func handoffLocked(mp *m) (keep, handed bool) {
 	pp := mp.p.ptr()
-	if !runqempty(pp) || gcBlackenEnabled != 0 || traceEnabled() || traceShuttingDown() || pp.runSafePointFn != 0 || sched.gcwaiting.Load() {
+	if goarch.IsWasm == 1 || !runqempty(pp) || gcBlackenEnabled != 0 || traceEnabled() || traceShuttingDown() || pp.runSafePointFn != 0 || sched.gcwaiting.Load() {
 		return false, false
 	}
 	if gcCleanups.needsWake() || fingStatus.Load()&(fingWait|fingWake) == fingWait|fingWake {
