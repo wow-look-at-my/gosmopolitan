@@ -99,10 +99,16 @@ jobs:
           # The track-submodules step put every org submodule on its branch head. dist runs the same script again otherwise, 35s on NT.
           GOSUBMODULEBRANCH: 'off'
 
+      # A read refreshes an entry's mtime once it is an hour old, so an entry older than 90 minutes is one this build never read.
       - name: Count the bootstrap build cache after the build
         id: bootstrap-after
         shell: bash
-        run: echo "files=$(find pkg/obj/go-build -type f 2>/dev/null | wc -l)" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "before: ${{ steps.bootstrap-before.outputs.files }} files"
+          find pkg/obj/go-build -type f -mmin +90 -delete
+          files="$(find pkg/obj/go-build -type f | wc -l)"
+          echo "after the prune: $files files, $(du -sk pkg/obj/go-build | cut -f1) KB"
+          echo "files=$files" >> "$GITHUB_OUTPUT"
       # The upload takes up to a minute. A build that added no entry and trimmed none has nothing new to keep.
       - name: Keep the bootstrap build cache between runs
         if: steps.bootstrap-before.outputs.files != steps.bootstrap-after.outputs.files
@@ -169,10 +175,16 @@ jobs:
           # The track-submodules step put every org submodule on its branch head. dist runs the same script again otherwise, 35s on NT.
           GOSUBMODULEBRANCH: 'off'
 
+      # A read refreshes an entry's mtime once it is an hour old, so an entry older than 90 minutes is one this build never read.
       - name: Count the bootstrap build cache after the build
         id: bootstrap-after
         shell: bash
-        run: echo "files=$(find pkg/obj/go-build -type f 2>/dev/null | wc -l)" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "before: ${{ steps.bootstrap-before.outputs.files }} files"
+          find pkg/obj/go-build -type f -mmin +90 -delete
+          files="$(find pkg/obj/go-build -type f | wc -l)"
+          echo "after the prune: $files files, $(du -sk pkg/obj/go-build | cut -f1) KB"
+          echo "files=$files" >> "$GITHUB_OUTPUT"
       # The upload takes up to a minute. A build that added no entry and trimmed none has nothing new to keep.
       - name: Keep the bootstrap build cache between runs
         if: steps.bootstrap-before.outputs.files != steps.bootstrap-after.outputs.files
