@@ -51,6 +51,8 @@ type Builder struct {
 	NeedExport          bool // list needs p.Export
 	NeedCompiledGoFiles bool // list needs p.CompiledGoFiles
 	AllowErrors         bool // errors don't immediately exit the program
+	// HoldCache keeps the cache open past Do. A fat build sets it, because its sibling and its merge still use the store after Do returns.
+	HoldCache bool
 
 	objdirSeq int // counter for NewObjdir
 	pkgSeq    int

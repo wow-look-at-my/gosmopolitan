@@ -92,18 +92,20 @@ func fullyCached(a *Action) bool {
 	return false
 }
 
+// closeCache settles the store's uploads and trims the cache.
+func closeCache() {
+	if err := cache.Default().Close(); err != nil {
+		base.Fatalf("go: failed to trim cache: %v", err)
+	}
+}
+
 func (b *Builder) Do(ctx context.Context, root *Action) {
 	ctx, span := trace.StartSpan(ctx, "exec.Builder.Do ("+root.Mode+" "+root.Target+")")
 	defer span.Done()
 
-	if !b.IsCmdList {
+	if !b.IsCmdList && !b.HoldCache {
 		// If we're doing real work, take time at the end to trim the cache.
-		c := cache.Default()
-		defer func() {
-			if err := c.Close(); err != nil {
-				base.Fatalf("go: failed to trim cache: %v", err)
-			}
-		}()
+		defer closeCache()
 	}
 
 	// Build list of all actions, assigning depth-first post-order priority.
