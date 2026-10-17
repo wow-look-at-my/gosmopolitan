@@ -12,6 +12,9 @@ import "github.com/wow-look-at-my/go-s3-server/cacheclient/cachedisk"
 // openCache answers the directory alone, with nothing under it.
 func openCache(dir string) (Cache, error) { return cachedisk.Open(dir) }
 
+// RunUploadSpool never runs: go_bootstrap has no store to upload to.
+func RunUploadSpool() (code int, ran bool) { return 0, false }
+
 // SetSharedModule has no store to name a module to.
 func SetSharedModule(string) {}
 
