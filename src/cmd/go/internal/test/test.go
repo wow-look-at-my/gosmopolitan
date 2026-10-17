@@ -2972,6 +2972,21 @@ func explainInputsMiss(a *work.Action, testID cache.ActionID, tried []triedTestl
 	if len(nearest) == 0 {
 		cache.MissNotice("testcache: %s: every input matches the last run's, and its result is not in the cache", a.Package.ImportPath)
 	}
+	// The nearest testlog can be a stale one from another setup. The newest is
+	// the last run's, and what moved since then is what keeps this run missing.
+	if len(tried) < 2 {
+		return
+	}
+	saved, _, err := cache.GetBytes(cache.Default(), inputLinesKey(testID, tried[0].testlog))
+	if err != nil {
+		cache.MissNotice("testcache: %s: newest of %d testlogs: no saved inputs: %v", a.Package.ImportPath, len(tried), err)
+		return
+	}
+	newest := movedInputs(inputHashes(saved), inputHashes(tried[0].lines))
+	cache.MissNotice("testcache: %s: newest of %d testlogs: %d inputs moved", a.Package.ImportPath, len(tried), len(newest))
+	for _, line := range newest[:min(len(newest), 20)] {
+		cache.MissNotice("testcache: %s: newest: %s", a.Package.ImportPath, line)
+	}
 }
 
 // movedInputs says, one line each, which inputs are new, changed or gone
