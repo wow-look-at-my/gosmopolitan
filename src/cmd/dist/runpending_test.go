@@ -198,8 +198,9 @@ func TestStartEarlyHoldsNoSlot(t *testing.T) {
 	if tester.failed {
 		t.Fatal("a work failed")
 	}
-	if !early.began.Before(writer.began) {
-		t.Errorf("the early work began at %v, not before the work behind it at %v", early.began, writer.began)
+	// The early goroutine can start after the writer, so only the end is fixed.
+	if earlyEnd := early.began.Add(early.elapsed); !writer.began.Before(earlyEnd) {
+		t.Errorf("the early work ended at %v, before the writer began at %v", earlyEnd, writer.began)
 	}
 }
 
