@@ -1409,7 +1409,9 @@ func TestCgoShowsFullPathNames(t *testing.T) {
 		func f() {`)
 	tg.setenv("GOPATH", tg.path("."))
 	tg.runFail("build", "x/y/dirname")
-	tg.grepBoth("x/y/dirname", "error did not use full path")
+	// The error names the file, not the package: no "# package" header carries
+	// the import path. A Windows path uses backslashes, so match the host's form.
+	tg.grepBoth(regexp.QuoteMeta(filepath.Join("x", "y", "dirname", "foo.go")), "error did not use full path")
 }
 
 func TestCgoHandlesWlORIGIN(t *testing.T) {

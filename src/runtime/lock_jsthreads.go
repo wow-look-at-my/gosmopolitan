@@ -692,7 +692,20 @@ func beforeIdle(now, pollUntil int64) (gp *g, otherReady bool) {
 			// The main M needs a P: goroutines are waiting on the migrate queue (only the main M's findRunnable can pop them).
 			return nil, false
 		}
-		pp := getg().m.p.ptr()
+		mp := getg().m
+		if mp.spinning {
+			// wakep sends no nudge while an M spins, so a spinning M must not sleep here.
+			mp.spinning = false
+			if sched.nmspinning.Add(-1) < 0 {
+				throw("beforeIdle: negative nmspinning")
+			}
+			for _, other := range allp {
+				if other != nil && !runqempty(other) {
+					return nil, true
+				}
+			}
+		}
+		pp := mp.p.ptr()
 		if sched.runq.size != 0 || sched.gcwaiting.Load() || pp.runSafePointFn != 0 {
 			return nil, true
 		}
