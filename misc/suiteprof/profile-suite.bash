@@ -62,7 +62,14 @@ hottest() {
 start=$SECONDS
 (
 	reported=""
-	while sleep "$interval"; do
+	# The sleep holds this script's stdout, and the step waits for that pipe to close.
+	# So the kill that stops this loop stops the sleep too.
+	sleeper=""
+	trap 'kill "$sleeper" 2>/dev/null; exit 0' TERM
+	while :; do
+		sleep "$interval" &
+		sleeper=$!
+		wait "$sleeper"
 		latest=""
 		for data in "$out"/perf.data.*; do
 			[ -e "$data" ] && latest=$data

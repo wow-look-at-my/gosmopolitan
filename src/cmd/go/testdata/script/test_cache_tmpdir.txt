@@ -1,0 +1,44 @@
+# A test that reads the temporary directory keeps its cached result when the
+# variables name another directory. A macOS runner names a different one on
+# each machine. Windows reads TMP and TEMP, and the other systems TMPDIR.
+
+mkdir $WORK/tmp1 $WORK/tmp2
+env TMPDIR=$WORK/tmp1
+env TMP=$WORK/tmp1
+env TEMP=$WORK/tmp1
+go test ./t
+stdout '^ok\s+m/t\s+[0-9.]+s$'
+env TMPDIR=$WORK/tmp2
+env TMP=$WORK/tmp2
+env TEMP=$WORK/tmp2
+go test ./t
+stdout '^ok\s+m/t\s+\(cached\)'
+
+# Another variable the test reads still decides the result.
+env OTHER=changed
+go test ./t
+! stdout '\(cached\)'
+
+-- go.mod --
+module m
+
+go 1.20
+-- t/t_test.go --
+package t
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestTemp(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "scratch")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.ReadFile(file); err != nil {
+		t.Fatal(err)
+	}
+	t.Log(os.TempDir(), os.Getenv("OTHER"))
+}

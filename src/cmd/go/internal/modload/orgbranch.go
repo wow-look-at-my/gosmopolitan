@@ -11,9 +11,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"cmd/go/internal/base"
 	"cmd/go/internal/cfg"
+	"cmd/go/internal/modfetch/codehost"
 	"cmd/go/internal/orgmod"
 	"cmd/internal/par"
 
@@ -97,6 +99,9 @@ func orgMainDir(ld *Loader) string {
 // containing dir, or "" if there is none. Dir is not in a repository, git is
 // not installed, or HEAD is detached.
 func gitCheckedOutBranch(dir string) string {
+	if name, ok := readGitHeadBranch(dir); ok {
+		return name
+	}
 	cmd := exec.Command("git", "-C", dir, "rev-parse", "--abbrev-ref", "HEAD")
 	cmd.Stderr = io.Discard
 	out, err := cmd.Output()
@@ -110,6 +115,60 @@ func gitCheckedOutBranch(dir string) string {
 		return ""
 	}
 	return name
+}
+
+// readGitHeadBranch reads the branch from the HEAD file of the repository that
+// holds dir, with no git process. It returns ok=false when it cannot decide,
+// and the caller then asks git.
+func readGitHeadBranch(dir string) (name string, ok bool) {
+	if os.Getenv("GIT_DIR") != "" || os.Getenv("GIT_WORK_TREE") != "" {
+		return "", false
+	}
+	for cur := dir; ; {
+		dotGit := filepath.Join(cur, ".git")
+		info, err := os.Lstat(dotGit)
+		if err == nil {
+			gitDir := dotGit
+			if !info.IsDir() {
+				// A worktree or a submodule names its git directory in a file.
+				data, err := os.ReadFile(dotGit)
+				if err != nil {
+					return "", false
+				}
+				target, found := strings.CutPrefix(strings.TrimSpace(string(data)), "gitdir: ")
+				if !found {
+					return "", false
+				}
+				if !filepath.IsAbs(target) {
+					target = filepath.Join(cur, target)
+				}
+				gitDir = target
+			}
+			head, err := os.ReadFile(filepath.Join(gitDir, "HEAD"))
+			if err != nil {
+				return "", false
+			}
+			ref, symbolic := strings.CutPrefix(strings.TrimSpace(string(head)), "ref: ")
+			if !symbolic {
+				// A detached HEAD names no branch.
+				return "", true
+			}
+			branch, isBranch := strings.CutPrefix(ref, "refs/heads/")
+			if !isBranch {
+				return "", false
+			}
+			return branch, true
+		}
+		if !os.IsNotExist(err) {
+			return "", false
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			// No repository holds dir.
+			return "", true
+		}
+		cur = parent
+	}
 }
 
 // orgVersion returns the pseudo-version of the head of the branch the org
@@ -128,6 +187,7 @@ func orgVersion(ld *Loader, ctx context.Context, path string) (string, error) {
 			return version, nil
 		}
 		resolve := func() (string, error) {
+			codehost.Prewarm()
 			version, err := orgBranchVersion(ld, ctx, path, branch)
 			if err == nil || branch == orgDefaultRev {
 				return version, err
@@ -232,9 +292,28 @@ func resolvedToDirectory(ld *Loader, m module.Version) bool {
 	return repl.Path != "" && repl.Version == ""
 }
 
+// prefetchOrgHeads resolves the head of every org module in mods at the same
+// time. Each head is a network round trip. A caller then reads each from
+// orgVersionCache, errors included.
+func prefetchOrgHeads(ld *Loader, ctx context.Context, mods []module.Version) {
+	var wg sync.WaitGroup
+	for _, m := range mods {
+		if !orgmod.IsOrg(m.Path) || !orgResolvable() || resolvedToDirectory(ld, m) {
+			continue
+		}
+		wg.Add(1)
+		go func(path string) {
+			defer wg.Done()
+			orgVersion(ld, ctx, path)
+		}(m.Path)
+	}
+	wg.Wait()
+}
+
 // resolveOrgRequires returns mods with every org module resolved. It returns
 // mods itself when no module in mods changes.
 func resolveOrgRequires(ld *Loader, ctx context.Context, mods []module.Version) ([]module.Version, error) {
+	prefetchOrgHeads(ld, ctx, mods)
 	out := mods
 	cloned := false
 	for idx, m := range mods {

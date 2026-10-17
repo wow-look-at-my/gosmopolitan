@@ -3,12 +3,14 @@
 # differ from host to host, so each file stands in the inputs as its lookups,
 # not as a stat and an open.
 
-env GOCACHE=$WORK/gocache
 env GODEBUG=gocachetest=1
 go test -run=TestResolvesLocalhost .
 stdout '^ok\s+m\s+[0-9.]+s$'
 stderr 'testcache: m: input lookup hostsname "localhost" \S+ [0-9a-f]+$'
-stderr 'testcache: m: input lookup resolvorder "" \S+ [0-9a-f]+$'
+# Windows keeps its resolver settings outside any file, so a test there reads
+# no resolv.conf.
+[!GOOS:windows] stderr 'testcache: m: input lookup resolvorder "" \S+ [0-9a-f]+$'
+[GOOS:windows] ! stderr 'resolvorder'
 ! stderr 'testcache: m: input (stat|open) \S*(hosts|resolv\.conf) [0-9a-f]+$'
 
 go test -run=TestResolvesLocalhost .
