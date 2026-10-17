@@ -50,6 +50,8 @@ runs:
       shell: bash
       run: |
         export PATH="$PWD/bin:$PATH"
+        # A probe module builds inside this repository, so go stamps the commit into it, and each commit relinks every probe. No probe reads that stamp.
+        export GOFLAGS=-buildvcs=false
         # -trimpath: without it each host's checkout path rides in the binary, and no two hosts can build the same bytes.
         # The builds are independent, so they run at once. Each wait fails the step when its build fails.
         GOOS=cosmo go build -trimpath -o fizzbuzz.com testdata/fizzbuzz/fizzbuzz.go &
@@ -101,7 +103,7 @@ runs:
       shell: bash
       run: |
         export PATH="$PWD/bin:/opt/cosmocc/bin:$PATH"
-        cd testdata/cgoprobe && GOOS=cosmo go build -trimpath -o "${{ runner.temp }}/handoff/cgoprobe.com" .
+        cd testdata/cgoprobe && GOOS=cosmo go build -buildvcs=false -trimpath -o "${{ runner.temp }}/handoff/cgoprobe.com" .
 
     - name: Hand the APE binaries to the test job
       uses: wow-look-at-my/actions@cache-upload#latest

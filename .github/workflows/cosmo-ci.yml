@@ -54,13 +54,10 @@ jobs:
     runs-on: ${{ matrix.build-os }}
 
     steps:
-      # A checkout fetches its submodules one at a time unless git says otherwise.
-      - run: git config --global submodule.fetchJobs 16
-        shell: bash
-      # src/cmd/vendor holds three submodules; without them cmd/go cannot build.
+      # The track-submodules step checks out the submodules. Without the ones under src/cmd/vendor, cmd/go cannot build.
       - uses: actions/checkout@v4
         with:
-          submodules: true
+          submodules: false
           lfs: true
       - uses: wow-look-at-my/actions@disable-windows-defender#latest
       - uses: wow-look-at-my/actions@secret-server#latest
@@ -131,11 +128,9 @@ jobs:
       actions: write
     runs-on: ${{ github.event.repository.visibility == 'public' && 'ubuntu-latest' || vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
-      - run: git config --global submodule.fetchJobs 16
-        shell: bash
       - uses: actions/checkout@v4
         with:
-          submodules: true
+          submodules: false
           lfs: true
       - uses: wow-look-at-my/actions@disable-windows-defender#latest
       - uses: wow-look-at-my/actions@secret-server#latest
@@ -227,11 +222,9 @@ jobs:
           }
           Get-PSDrive C, D | ForEach-Object { Write-Host ("{0}: {1:N1} GB free" -f $_.Name, ($_.Free/1GB)) }
 
-      - run: git config --global submodule.fetchJobs 16
-        shell: bash
       - uses: actions/checkout@v4
         with:
-          submodules: true
+          submodules: false
           lfs: true
       - uses: wow-look-at-my/actions@disable-windows-defender#latest
       - uses: wow-look-at-my/actions@secret-server#latest
@@ -488,11 +481,9 @@ jobs:
     runs-on: ${{ github.event.repository.visibility == 'public' && 'ubuntu-latest' || vars.CI_RUNNER || 'ubuntu-latest' }}
 
     steps:
-      - run: git config --global submodule.fetchJobs 16
-        shell: bash
       - uses: actions/checkout@v4
         with:
-          submodules: true
+          submodules: false
           lfs: true
       - uses: wow-look-at-my/actions@secret-server#latest
       # embedded-std.dats rebuilds the go command from this tree, so the submodules carry their branch heads here too.
@@ -565,13 +556,13 @@ jobs:
     runs-on: ${{ (github.event.repository.visibility == 'public' || !contains(fromJSON('["ubuntu-latest"]'), matrix.test-os)) && matrix.test-os || vars.CI_RUNNER || matrix.test-os }}
 
     steps:
-      - run: git config --global submodule.fetchJobs 16
-        shell: bash
       - name: Checkout code (for Go tests)
         uses: actions/checkout@v4
         with:
-          submodules: true
+          submodules: false
           lfs: true
+      - run: bash ./src/submodulefetch.bash
+        shell: bash
 
       - uses: wow-look-at-my/actions@disable-windows-defender#latest
 
@@ -683,12 +674,10 @@ jobs:
     runs-on: ${{ github.event.repository.visibility == 'public' && 'ubuntu-latest' || vars.CI_RUNNER || 'ubuntu-latest' }}
 
     steps:
-      - run: git config --global submodule.fetchJobs 16
-        shell: bash
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          submodules: true
+          submodules: false
           lfs: true
 
       - uses: wow-look-at-my/actions@secret-server#latest
@@ -755,12 +744,10 @@ jobs:
         port: [js, wasip1]
 
     steps:
-      - run: git config --global submodule.fetchJobs 16
-        shell: bash
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          submodules: true
+          submodules: false
           lfs: true
 
       - uses: wow-look-at-my/actions@secret-server#latest
@@ -949,12 +936,10 @@ jobs:
       version: ${{ steps.release.outputs.version }}
 
     steps:
-      - run: git config --global submodule.fetchJobs 16
-        shell: bash
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          submodules: true
+          submodules: false
           lfs: true
 
       - name: Create buildhost release
@@ -1038,12 +1023,10 @@ jobs:
       artifact-metadata: write
 
     steps:
-      - run: git config --global submodule.fetchJobs 16
-        shell: bash
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          submodules: true
+          submodules: false
           lfs: true
 
       - name: Publish buildhost release
