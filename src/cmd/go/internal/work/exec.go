@@ -92,8 +92,8 @@ func fullyCached(a *Action) bool {
 	return false
 }
 
-// closeCache settles the store's uploads and trims the cache.
-func closeCache() {
+// closeCache settles the store's uploads and trims the cache. A test replaces it.
+var closeCache = func() {
 	if err := cache.Default().Close(); err != nil {
 		base.Fatalf("go: failed to trim cache: %v", err)
 	}
