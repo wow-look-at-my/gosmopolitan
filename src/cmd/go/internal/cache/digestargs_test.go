@@ -34,4 +34,8 @@ func TestDigestArgsIgnoresScratchPaths(t *testing.T) {
 	if digestArgs(wd, runOne, tmp) == digestArgs(filepath.Join(wd, "cmd"), runOne, tmp) {
 		t.Fatal("the same command in another directory digests the same")
 	}
+	install := []string{"install", "std", "cmd"}
+	if digestArgs(first, install, tmp) != digestArgs(second, install, tmp) {
+		t.Fatal("one command run in two scratch directories digests apart")
+	}
 }

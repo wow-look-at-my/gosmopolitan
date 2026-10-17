@@ -140,10 +140,14 @@ func commandDigest() string {
 	return digestArgs(wd, os.Args[1:], os.TempDir())
 }
 
-// digestArgs digests the command line. An argument that names a path under tmp
-// names this run's scratch space, which is new every run, so it digests as a
-// placeholder. dist test names its output and action graph that way.
+// digestArgs digests the command line. A path under tmp names this run's
+// scratch space, which is new every run, so it digests as a placeholder. dist
+// runs its go commands in such a directory, and dist test names its output and
+// action graph there.
 func digestArgs(wd string, args []string, tmp string) string {
+	if underDir(wd, tmp) {
+		wd = "$TMP"
+	}
 	parts := []string{wd}
 	for _, arg := range args {
 		flag, value, isFlag := strings.Cut(arg, "=")
