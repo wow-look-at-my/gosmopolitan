@@ -1154,6 +1154,11 @@ func rootsFromModFile(ld *Loader, ctx context.Context, m module.Version, modFile
 		padding = 1
 	}
 	roots = make([]module.Version, 0, padding+len(modFile.Require))
+	required := make([]module.Version, 0, len(modFile.Require))
+	for _, r := range modFile.Require {
+		required = append(required, r.Mod)
+	}
+	prefetchOrgHeads(ld, ctx, required)
 	for _, r := range modFile.Require {
 		if index := ld.MainModules.Index(m); index != nil && index.exclude[r.Mod] {
 			if cfg.BuildMod == "mod" {

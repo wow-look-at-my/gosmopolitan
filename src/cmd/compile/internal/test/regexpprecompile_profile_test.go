@@ -150,8 +150,10 @@ func TestRegexpPrecompileInstrumentation(t *testing.T) {
 		if !isFirst && !isShared || isShared != (match[6] != "") {
 			t.Errorf("unexpected site line: %s", match[0])
 		}
+		// The Windows clock ticks in steps longer than a small compile, so 0s
+		// is a true reading there.
 		took, err := time.ParseDuration(match[4])
-		if err != nil || took <= 0 {
+		if err != nil || took < 0 {
 			t.Errorf("site at line %d reports compile time %q", line, match[4])
 		}
 		size, _ := strconv.ParseInt(match[5], 10, 64)
