@@ -1766,10 +1766,11 @@ func cmdbootstrap() {
 	// that: go_bootstrap must find nothing stale in what bin/go just installed.
 	//
 	// go_bootstrap sees the local cache alone, which a fresh machine has empty.
-	// bin/go builds cmd/go first, from the shared cache, and the link brings
-	// every archive down. bin/go cannot install itself: NT refuses to replace a
-	// running executable.
-	goReported("warm-go", toolenv(), gorootBinGo, "build", "-o", pathf("%s/go-warm%s", workdir, exe), "cmd/go/main")
+	// bin/go first brings every archive of cmd/go down from the shared cache.
+	// A build would not: its hits are lazy, and a cached link reads no archive.
+	// list -export takes no lazy hit. bin/go cannot install itself: NT refuses
+	// to replace a running executable.
+	goReported("warm-go", toolenv(), gorootBinGo, "list", "-export", "-deps", "-f={{if false}}{{end}}", "cmd/go/main")
 	goInstallReported("install-go", toolenv(), goBootstrap, "cmd/go/main")
 	linkTools()
 	goInstallReported("install-std", nil, gorootBinGo, "std")
