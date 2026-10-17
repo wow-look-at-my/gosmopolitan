@@ -3766,6 +3766,12 @@ func handoffp(pp *p) {
 		startm(pp, false, false)
 		return
 	}
+	// findRunnable wakes the cleanup and finalizer goroutines. With every
+	// other M asleep, no M runs it until sysmon wakes from its long sleep.
+	if gcCleanups.needsWake() || fingStatus.Load()&(fingWait|fingWake) == fingWait|fingWake {
+		startm(pp, false, false)
+		return
+	}
 	// no local work, check that there are no spinning/idle M's,
 	// otherwise our help is not required
 	if sched.nmspinning.Load()+sched.npidle.Load() == 0 && sched.nmspinning.CompareAndSwap(0, 1) { // TODO: fast atomic
