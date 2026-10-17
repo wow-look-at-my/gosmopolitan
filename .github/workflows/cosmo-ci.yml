@@ -79,12 +79,16 @@ jobs:
       - uses: ./.github/actions/apeld-tools
 
       # toolchain1 and toolchain2 build with no shared cache. Kept, they take 2.4s instead of 88s.
-      - name: Keep the bootstrap build cache between runs
-        uses: actions/cache@v4
+      - name: Restore the bootstrap build cache
+        uses: actions/cache/restore@v4
         with:
           path: pkg/obj/go-build
           key: dist-bootstrap-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
           restore-keys: dist-bootstrap-${{ runner.os }}-${{ runner.arch }}-
+      - name: Count the bootstrap build cache
+        id: bootstrap-before
+        shell: bash
+        run: echo "files=$(find pkg/obj/go-build -type f 2>/dev/null | wc -l)" >> "$GITHUB_OUTPUT"
 
       - name: Build Go toolchain
         # A cold build, with the shared cache unreachable, takes over 8 minutes on macOS.
@@ -95,6 +99,18 @@ jobs:
           windows: cd src && .\make.bat -v
         env:
           GOROOT_BOOTSTRAP: ${{ env.GOROOT }}
+
+      - name: Count the bootstrap build cache after the build
+        id: bootstrap-after
+        shell: bash
+        run: echo "files=$(find pkg/obj/go-build -type f 2>/dev/null | wc -l)" >> "$GITHUB_OUTPUT"
+      # The upload takes up to a minute. A build that added no entry and trimmed none has nothing new to keep.
+      - name: Keep the bootstrap build cache between runs
+        if: steps.bootstrap-before.outputs.files != steps.bootstrap-after.outputs.files
+        uses: actions/cache/save@v4
+        with:
+          path: pkg/obj/go-build
+          key: dist-bootstrap-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
 
       - uses: ./.github/actions/build-leg
 
@@ -136,12 +152,16 @@ jobs:
       - uses: ./.github/actions/apeld-tools
 
       # toolchain1 and toolchain2 build with no shared cache. Kept, they take 2.4s instead of 88s.
-      - name: Keep the bootstrap build cache between runs
-        uses: actions/cache@v4
+      - name: Restore the bootstrap build cache
+        uses: actions/cache/restore@v4
         with:
           path: pkg/obj/go-build
           key: dist-bootstrap-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
           restore-keys: dist-bootstrap-${{ runner.os }}-${{ runner.arch }}-
+      - name: Count the bootstrap build cache
+        id: bootstrap-before
+        shell: bash
+        run: echo "files=$(find pkg/obj/go-build -type f 2>/dev/null | wc -l)" >> "$GITHUB_OUTPUT"
 
       - name: Build Go toolchain
         timeout-minutes: ${{ github.ref == 'refs/heads/master' && 40 || 20 }}
@@ -149,6 +169,18 @@ jobs:
         run: cd src && ./make.bash -v
         env:
           GOROOT_BOOTSTRAP: ${{ env.GOROOT }}
+
+      - name: Count the bootstrap build cache after the build
+        id: bootstrap-after
+        shell: bash
+        run: echo "files=$(find pkg/obj/go-build -type f 2>/dev/null | wc -l)" >> "$GITHUB_OUTPUT"
+      # The upload takes up to a minute. A build that added no entry and trimmed none has nothing new to keep.
+      - name: Keep the bootstrap build cache between runs
+        if: steps.bootstrap-before.outputs.files != steps.bootstrap-after.outputs.files
+        uses: actions/cache/save@v4
+        with:
+          path: pkg/obj/go-build
+          key: dist-bootstrap-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
 
       - uses: ./.github/actions/build-leg
 
