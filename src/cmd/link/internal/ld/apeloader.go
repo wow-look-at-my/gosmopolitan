@@ -89,7 +89,7 @@ func apeBlockCeil(n int) int {
 // apeGzip compresses bin at the fixed level every link uses, so links of
 // the same input produce the same APE. A header extra field pads the stream to
 // whole blocks. A gzip can refuse bytes after the stream, and every gzip
-// skips the extra field. A comment cannot pad: Go's reader refuses one of 512 bytes or more.
+// skips the extra field. A comment cannot pad, because Go's reader refuses a long one.
 func apeGzip(bin []byte, name string) []byte {
 	stream := apeGzipWith(bin, name, nil)
 	if len(stream)%apeLoaderBlock == 0 {
