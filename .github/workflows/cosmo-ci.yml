@@ -359,6 +359,8 @@ jobs:
           Write-Host "PATH=$env:Path"
           # -NoNewWindow gives the probe this step's console, so its lines stream here as the suite runs.
           $probe = Start-Process pwsh -ArgumentList '-NoProfile', '-File', "$env:GITHUB_WORKSPACE/.github/resource-log.ps1" -NoNewWindow -PassThru
+          # A test that reads bin\go.exe keys its cached result on these bytes, so the log shows whether the suite rewrote them.
+          Get-FileHash bin\go.exe | ForEach-Object { Write-Host "before the suite: $($_.Hash) bin\go.exe" }
           try {
             cd src
             .\run.bat 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP/suite.log"
@@ -366,6 +368,7 @@ jobs:
           } finally {
             Stop-Process -Id $probe.Id -Force -ErrorAction SilentlyContinue
           }
+          Get-FileHash ..\bin\go.exe | ForEach-Object { Write-Host "after the suite: $($_.Hash) bin\go.exe" }
           exit $status
 
       - name: Test coverage, and what the suite spent its time on
