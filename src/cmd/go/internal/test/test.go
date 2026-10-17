@@ -3317,7 +3317,9 @@ func isProcessLocal(name string) bool {
 	if isWindowsLiveState(name) {
 		return true
 	}
-	if dir := ipcRuntimeDir(); dir != "" && search.InDir(filepath.Clean(name), dir) != "" {
+	// A plain prefix test: search.InDir resolves the symlinks of both paths
+	// whenever the name is outside, which is nearly every input line.
+	if dir := ipcRuntimeDir(); dir != "" && str.HasFilePathPrefix(filepath.Clean(name), dir) {
 		return true
 	}
 	rest, ok := strings.CutPrefix(name, "/proc/")
