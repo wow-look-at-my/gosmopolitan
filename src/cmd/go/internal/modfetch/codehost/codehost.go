@@ -247,7 +247,7 @@ func (e *RunError) Error() string {
 var dirLock sync.Map
 
 type RunArgs struct {
-	cmdline []any    // the command to run
+	cmdline []any // the command to run
 	dir     string
 	local   bool     // true if the VCS information is local
 	env     []string // environment variables for the command

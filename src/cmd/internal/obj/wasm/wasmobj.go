@@ -446,23 +446,19 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 			// large stack: SP-framesize <= stackguard-StackSmall
 			//              SP <= stackguard+(framesize-StackSmall)
 			//
-			// stackguard0 may hold the stackPreempt sentinel (~0). The
-			// 32-bit add below would wrap past it and silently SKIP the
-			// stack check, letting a large frame run below stack.lo
-			// (caught later as a bogus "split stack overflow" when a
-			// callee's morestack fires). Without GOWASM=threads this
-			// cannot happen - nothing arms preemption while a wasm
-			// goroutine is running - but with it another thread's
-			// preemptone/suspendG can set the sentinel exactly while
-			// this prologue runs. Test the sentinel explicitly (full
-			// 64-bit compare; the wrapped-add hazard is exactly the old
-			// "TODO: handle wraparound case").
+			// stackguard0 may hold a poison value (stackPreempt,
+			// stackForceMove, ...), all at or above stackPoisonMin. The
+			// 32-bit add below wraps past one and would SKIP the stack
+			// check, so a large frame would run below stack.lo. A
+			// maymorestack hook, or another thread under GOWASM=threads,
+			// sets one just before this check. So test for a poison value
+			// first, with a full 64-bit compare.
 			//
 			// Get g
 			// I32WrapI64
 			// I64Load $stackguard0
-			// I64Const $stackPreempt
-			// I64Eq
+			// I64Const $stackPoisonMin
+			// I64GeU
 			// Get SP
 			// Get g
 			// I32WrapI64
@@ -475,8 +471,8 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 			p = appendp(p, AGet, regAddr(REGG))
 			p = appendp(p, AI32WrapI64)
 			p = appendp(p, AI64Load, constAddr(2*int64(ctxt.Arch.PtrSize))) // G.stackguard0
-			p = appendp(p, AI64Const, constAddr(-1314))                     // runtime.stackPreempt (uintptrMask & -1314)
-			p = appendp(p, AI64Eq)
+			p = appendp(p, AI64Const, constAddr(-4096))                     // runtime.stackPoisonMin (uintptrMask & -4096)
+			p = appendp(p, AI64GeU)
 
 			p = appendp(p, AGet, regAddr(REG_SP))
 			p = appendp(p, AGet, regAddr(REGG))
