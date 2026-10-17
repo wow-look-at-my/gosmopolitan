@@ -79,11 +79,22 @@ func TestProcessLocal(t *testing.T) {
 // Windows and macOS it holds the life sockets of whichever processes run now,
 // so a test that lists it never hit the cache.
 func TestProcessLocalIPCDir(t *testing.T) {
-	base, err := os.UserCacheDir()
-	if err != nil {
-		t.Fatal(err)
+	t.Serial() // it replaces ipcRuntimeDir
+	// A host with no HOME, such as wasip1, has no user cache directory, and
+	// then no directory is go-ipc's.
+	wantDir := ""
+	if userCache, err := os.UserCacheDir(); err == nil {
+		wantDir = filepath.Join(userCache, "gosmopolitan", "go-ipc")
 	}
+	if got := ipcRuntimeDir(); got != wantDir {
+		t.Errorf("ipcRuntimeDir() = %q, want %q", got, wantDir)
+	}
+
+	base := t.TempDir()
 	dir := filepath.Join(base, "gosmopolitan", "go-ipc")
+	saved := ipcRuntimeDir
+	ipcRuntimeDir = func() string { return dir }
+	defer func() { ipcRuntimeDir = saved }()
 	for path, want := range map[string]bool{
 		dir:                                   true,
 		filepath.Join(dir, "go-ipc-x-1.life"): true,
