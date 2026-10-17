@@ -119,9 +119,6 @@ jobs:
 
       - uses: ./.github/actions/build-leg
 
-      - if: always()
-        uses: ./.github/actions/drain-cache-uploads
-
       - if: failure()
         uses: wow-look-at-my/actions@fail-fast#latest
 
@@ -194,9 +191,6 @@ jobs:
           key: dist-bootstrap-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
 
       - uses: ./.github/actions/build-leg
-
-      - if: always()
-        uses: ./.github/actions/drain-cache-uploads
 
       - if: failure()
         uses: wow-look-at-my/actions@fail-fast#latest
@@ -476,9 +470,6 @@ jobs:
             fs.appendFileSync(summaryPath, lines.join('\n') + '\n');
             core.info(`recorded ${rows.length} package timings`);
 
-      - if: always()
-        uses: ./.github/actions/drain-cache-uploads
-
       - if: failure()
         uses: wow-look-at-my/actions@fail-fast#latest
 
@@ -544,9 +535,6 @@ jobs:
         uses: wow-look-at-my/dats@lkgb
         with:
           tests: dats/checks
-
-      - if: always()
-        uses: ./.github/actions/drain-cache-uploads
 
       - if: failure()
         uses: wow-look-at-my/actions@fail-fast#latest
@@ -734,9 +722,6 @@ jobs:
         uses: wow-look-at-my/dats@lkgb
         with:
           tests: dats/wasm
-
-      - if: always()
-        uses: ./.github/actions/drain-cache-uploads
 
       - if: failure()
         uses: wow-look-at-my/actions@fail-fast#latest
@@ -926,9 +911,6 @@ jobs:
         with:
           path: ~/.cache/wasmtime
           key: wasmtime-modules-${{ matrix.port }}-${{ github.sha }}
-
-      - if: always()
-        uses: ./.github/actions/drain-cache-uploads
 
       - if: failure()
         uses: wow-look-at-my/actions@fail-fast#latest

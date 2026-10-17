@@ -58,18 +58,6 @@ func RunUploadSpool() (code int, ran bool) {
 		return 0, false
 	}
 	cacheclient.SetLogger(goLogger{})
-	if path == cacheclient.UploadSpoolAll {
-		// A CI job's last step: the runner ends a detached uploader with the job.
-		dir, _, err := DefaultDir()
-		if err == nil {
-			err = cacheclient.DrainSpools(dir)
-		}
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "go: %v\n", err)
-			return 1, true
-		}
-		return 0, true
-	}
 	if err := cacheclient.RunUploadSpool(path); err != nil {
 		fmt.Fprintf(os.Stderr, "go: %v\n", err)
 		return 1, true
@@ -105,8 +93,10 @@ func openStore(dir string) (*cacheclient.WebBackend, error) {
 	cfg.Command = commandDigest()
 	cfg.IndexDir = indexDir(dir)
 	cacheclient.SetLogger(goLogger{})
-	// RunAs serves the spool, so Close need not wait for the uploads.
-	cacheclient.HandOffUploads()
+	// RunAs serves the spool, so Close need not wait for the uploads. A CI runner kills a detached uploader with the job, so on CI Close waits for them.
+	if os.Getenv("CI") == "" {
+		cacheclient.HandOffUploads()
+	}
 	store, err := cacheclient.NewWebBackend(cfg)
 	if err != nil {
 		// A store that cannot be reached is a slower build, not a broken one.
