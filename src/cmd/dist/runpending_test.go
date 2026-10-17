@@ -4,9 +4,11 @@
 package main
 
 import (
+	"internal/testenv"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -45,6 +47,7 @@ func TestRunPendingHelper(t *testing.T) {
 // still running. A scheduler that frees a slot only when the oldest work ends
 // never starts the third, and this test times out.
 func TestRunPendingStartsOnAnyEnd(t *testing.T) {
+	testenv.MustHaveExec(t)
 	t.Serial()
 	marker := filepath.Join(t.TempDir(), "marker")
 	saved := maxbg
@@ -84,6 +87,7 @@ func pendingWork(name, mode, file string) *work {
 // start while the second waits. A scheduler that holds the works behind a
 // waiting one never starts the third, and this test times out.
 func TestRunPendingAfterWaitsAlone(t *testing.T) {
+	testenv.MustHaveExec(t)
 	t.Serial()
 	marker := filepath.Join(t.TempDir(), "marker")
 	saved := maxbg
@@ -109,6 +113,7 @@ func TestRunPendingAfterWaitsAlone(t *testing.T) {
 
 // A work marked first starts before the works queued ahead of it.
 func TestRunPendingStartsFirstAhead(t *testing.T) {
+	testenv.MustHaveExec(t)
 	t.Serial()
 	marker := filepath.Join(t.TempDir(), "marker")
 	saved := maxbg
@@ -127,6 +132,75 @@ func TestRunPendingStartsFirstAhead(t *testing.T) {
 	}
 	if !ahead.began.Before(queued.began) {
 		t.Errorf("the work marked first began at %v, not before the one queued ahead of it at %v", ahead.began, queued.began)
+	}
+}
+
+// A work queued alone starts after the works queued before it end, though a
+// slot is free beside them.
+func TestQueueAloneWaitsForEarlierWorks(t *testing.T) {
+	testenv.MustHaveExec(t)
+	t.Serial()
+	marker := filepath.Join(t.TempDir(), "marker")
+	saved := maxbg
+	maxbg = 2
+	defer func() { maxbg = saved }()
+
+	earlier := pendingWork("earlier", "wait", marker)
+	alone := pendingWork("alone", "noop", marker)
+	writeMarker := time.AfterFunc(200*time.Millisecond, func() {
+		if err := os.WriteFile(marker, nil, 0o666); err != nil {
+			t.Error(err)
+		}
+	})
+	defer writeMarker.Stop()
+
+	var tester tester
+	tester.queue(earlier, false)
+	tester.queue(alone, true)
+	tester.runPending(nil)
+	if tester.failed {
+		t.Fatal("a work failed")
+	}
+	earlierEnd := earlier.began.Add(earlier.elapsed)
+	if alone.began.Before(earlierEnd) {
+		t.Errorf("the alone work began at %v, before the earlier work ended at %v", alone.began, earlierEnd)
+	}
+}
+
+// An early work runs from startEarly, and runPending waits for it without a
+// slot. With one slot, the work behind it must start while it waits for the
+// file that work writes. An early work that held a slot never lets it start.
+func TestStartEarlyHoldsNoSlot(t *testing.T) {
+	testenv.MustHaveExec(t)
+	t.Serial()
+	marker := filepath.Join(t.TempDir(), "marker")
+	saved := maxbg
+	maxbg = 1
+	defer func() { maxbg = saved }()
+
+	var tester tester
+	early := pendingWork("early", "wait", marker)
+	tester.tests = []distTest{{name: "early", heading: "runpending", early: true, fn: func(*distTest) error {
+		tester.worklist = append(tester.worklist, early)
+		return nil
+	}}}
+	tester.startEarly()
+	if len(tester.worklist) != 0 {
+		t.Fatalf("startEarly left %d works in the worklist, want 0", len(tester.worklist))
+	}
+	started := tester.started["early"]
+	if started == nil || len(started.works) != 1 || started.works[0] != early {
+		t.Fatalf("startEarly recorded %+v for the early test, want its one work", started)
+	}
+	writer := pendingWork("writer", "touch", marker)
+	tester.worklist = append(slices.Clone(started.works), writer)
+	tester.runPending(nil)
+	if tester.failed {
+		t.Fatal("a work failed")
+	}
+	// The early goroutine can start after the writer, so only the end is fixed.
+	if earlyEnd := early.began.Add(early.elapsed); !writer.began.Before(earlyEnd) {
+		t.Errorf("the early work ended at %v, before the writer began at %v", earlyEnd, writer.began)
 	}
 }
 
