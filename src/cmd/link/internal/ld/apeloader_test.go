@@ -42,9 +42,9 @@ func TestApeLoaderRegionsAreWholeBlocks(t *testing.T) {
 	}
 }
 
-// TestApeGzipPadsEveryLength runs the padding over input sizes that cover
-// every compressed length modulo a block, the edge where the comment must
-// fill a whole block included.
+// TestApeGzipPadsEveryLength runs the padding over input sizes. Those
+// sizes cover every compressed length modulo a block, the edge where the
+// comment must fill a whole block included.
 func TestApeGzipPadsEveryLength(t *testing.T) {
 	rng := rand.New(rand.NewSource(1))
 	data := make([]byte, 3*apeLoaderBlock)

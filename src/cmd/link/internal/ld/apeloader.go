@@ -35,9 +35,7 @@ type apeLoader struct {
 	tag    string
 }
 
-// apeLoaderBlock is the dd block size the script copies a loader with. Each
-// region starts on a block and fills whole blocks. POSIX dd counts in
-// blocks, so an unaligned region costs one read and one write per byte.
+// apeLoaderBlock is the dd block size the script copies a loader with.
 const apeLoaderBlock = 512
 
 // Loader regions of the 64K APE header.
