@@ -5,6 +5,7 @@
 package auth
 
 import (
+	"internal/testenv"
 	"os"
 	"path/filepath"
 	"testing"
@@ -14,6 +15,7 @@ import (
 // would otherwise run git presents to a plain HTTPS request. The helper is
 // git's own store, so the test owns every file git reads.
 func TestGitBasicAuthReadsTheGitCredential(t *testing.T) {
+	testenv.MustHaveExecPath(t, "git")
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(home, "gitconfig"))
@@ -40,6 +42,7 @@ func TestGitBasicAuthReadsTheGitCredential(t *testing.T) {
 // TestGitBasicAuthWithoutACredential reports the absence rather than an empty
 // credential, so the caller can fall back to git itself.
 func TestGitBasicAuthWithoutACredential(t *testing.T) {
+	testenv.MustHaveExecPath(t, "git")
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(home, "gitconfig"))

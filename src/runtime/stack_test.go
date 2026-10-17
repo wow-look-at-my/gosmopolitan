@@ -79,6 +79,18 @@ func TestStackMem(t *testing.T) {
 }
 
 // Test stack growing in different contexts.
+// A large frame must grow the stack when stackguard0 holds a poison value.
+// On wasm, a 32-bit add of the frame size wraps past a poison value.
+func TestLargeFrameAfterPoison(t *testing.T) {
+	inStack := make(chan bool)
+	go func() {
+		inStack <- LargeFrameAfterPoison()
+	}()
+	if !<-inStack {
+		t.Error("a large frame entered with a poisoned stackguard0 ran below the stack")
+	}
+}
+
 func TestStackGrowth(t *testing.T) {
 	if *flagQuick {
 		t.Skip("-quick")
