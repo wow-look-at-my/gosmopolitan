@@ -86,6 +86,11 @@ func RunUploadSpool() (code int, ran bool) {
 // environment configures none. A CI run with none configured is an error: a
 // build that silently stops sharing is how a cache regression hides.
 func openStore(dir string) (*cacheclient.WebBackend, error) {
+	// A -n command runs no compile and reads no archive. A shared tier would
+	// prefetch archives for it that nothing reads.
+	if goCfg.BuildN {
+		return nil, nil
+	}
 	cfg := cacheclient.ConfigFromEnv()
 	if cfg.Bucket == "" {
 		if os.Getenv("CI") != "" {

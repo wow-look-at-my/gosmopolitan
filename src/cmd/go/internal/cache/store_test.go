@@ -6,6 +6,8 @@ package cache
 import (
 	"testing"
 
+	goCfg "cmd/go/internal/cfg"
+
 	"github.com/wow-look-at-my/go-s3-server/cacheclient"
 )
 
@@ -36,5 +38,24 @@ func TestStoreLearnsTheModuleInEitherOrder(t *testing.T) {
 		if got := store.Module(); got != "example.com/m" {
 			t.Errorf("module first %v: the store names module %q, want example.com/m", moduleFirst, got)
 		}
+	}
+}
+
+// A -n command opens no shared tier, even where a CI run without one is an
+// error: it reads no archive, and the tier would prefetch for nothing.
+func TestBuildNOpensNoStore(t *testing.T) {
+	t.Setenv("CI", "true")
+	t.Setenv(cacheclient.ConfigEnv, "")
+	saved := goCfg.BuildN
+	t.Cleanup(func() { goCfg.BuildN = saved })
+
+	goCfg.BuildN = false
+	if _, err := openStore(t.TempDir()); err == nil {
+		t.Fatal("openStore in CI with no store configured succeeded, want the error that names GO_BUILDCACHE_CONFIG")
+	}
+	goCfg.BuildN = true
+	store, err := openStore(t.TempDir())
+	if err != nil || store != nil {
+		t.Fatalf("openStore under -n = %v, %v; want no store and no error", store, err)
 	}
 }
