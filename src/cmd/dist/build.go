@@ -1764,6 +1764,12 @@ func cmdbootstrap() {
 	// The two drivers must agree on every action ID, or bin/go writes entries
 	// go_bootstrap cannot use. The checkNotStale calls below assert exactly
 	// that: go_bootstrap must find nothing stale in what bin/go just installed.
+	//
+	// go_bootstrap sees the local cache alone, which a fresh machine has empty.
+	// bin/go builds cmd/go first, from the shared cache, and the link brings
+	// every archive down. bin/go cannot install itself: NT refuses to replace a
+	// running executable.
+	goCmd(toolenv(), gorootBinGo, "build", "-o", pathf("%s/go-warm%s", workdir, exe), "cmd/go/main")
 	goInstallReported("install-go", toolenv(), goBootstrap, "cmd/go/main")
 	linkTools()
 	goInstallReported("install-std", nil, gorootBinGo, "std")
