@@ -71,36 +71,29 @@ func TestTestState(t *T) {
 		},
 	}}
 	for i, tc := range testCases {
-		tstate := &testState{
-			startParallel: make(chan bool),
-			maxParallel:   tc.max,
-		}
+		tstate := &testState{maxParallel: tc.max}
+		// blocked holds the return signal of each add1 that waits, oldest first.
+		var blocked []chan bool
 		for j, call := range tc.run {
-			doCall := func(f func()) chan bool {
-				done := make(chan bool)
-				go func() {
-					f()
-					done <- true
-				}()
-				return done
-			}
 			started := false
 			switch call.typ {
 			case add1:
-				signal := doCall(tstate.waitParallel)
-				select {
-				case <-signal:
-					started = true
-				case tstate.startParallel <- true:
-					<-signal
+				signal := make(chan bool)
+				go func(seq uint64) {
+					tstate.waitParallel(seq)
+					signal <- true
+				}(uint64(j + 1))
+				started = startsOrWaits(tstate, signal, len(blocked))
+				if !started {
+					blocked = append(blocked, signal)
 				}
 			case done:
-				signal := doCall(tstate.release)
-				select {
-				case <-signal:
-				case <-tstate.startParallel:
+				tstate.release()
+				if len(blocked) > waitingCount(tstate) {
+					// The oldest add1 has the lowest seq, so it starts.
+					<-blocked[0]
+					blocked = blocked[1:]
 					started = true
-					<-signal
 				}
 			}
 			if started != call.started {
@@ -109,10 +102,63 @@ func TestTestState(t *T) {
 			if tstate.running != call.running {
 				t.Errorf("%d:%d:running: got %v; want %v", i, j, tstate.running, call.running)
 			}
-			if tstate.numWaiting != call.waiting {
-				t.Errorf("%d:%d:waiting: got %v; want %v", i, j, tstate.numWaiting, call.waiting)
+			if got := waitingCount(tstate); got != call.waiting {
+				t.Errorf("%d:%d:waiting: got %v; want %v", i, j, got, call.waiting)
 			}
 		}
+	}
+}
+
+// waitingCount answers how many tests wait in tstate for a slot.
+func waitingCount(tstate *testState) int {
+	tstate.mu.Lock()
+	defer tstate.mu.Unlock()
+	return len(tstate.waiting)
+}
+
+// startsOrWaits answers true once the waitParallel call behind signal
+// returns, or false once it waits in tstate beside the given count of others.
+func startsOrWaits(tstate *testState, signal chan bool, others int) bool {
+	for {
+		select {
+		case <-signal:
+			return true
+		default:
+		}
+		if waitingCount(tstate) > others {
+			return false
+		}
+		runtime.Gosched()
+	}
+}
+
+// A freed slot goes to the waiting test with the lowest seq, whatever order
+// the tests began to wait in.
+func TestTestStateStartsInSeqOrder(t *T) {
+	tstate := &testState{maxParallel: 1, running: 1}
+	var order []uint64
+	var mu sync.Mutex
+	signals := map[uint64]chan bool{}
+	for _, seq := range []uint64{3, 1, 2} {
+		signal := make(chan bool)
+		signals[seq] = signal
+		go func() {
+			tstate.waitParallel(seq)
+			mu.Lock()
+			order = append(order, seq)
+			mu.Unlock()
+			signal <- true
+		}()
+		if startsOrWaits(tstate, signal, len(signals)-1) {
+			t.Fatalf("waitParallel(%d) took a slot that is full", seq)
+		}
+	}
+	for _, seq := range []uint64{1, 2, 3} {
+		tstate.release()
+		<-signals[seq]
+	}
+	if !slices.Equal(order, []uint64{1, 2, 3}) {
+		t.Errorf("the tests started in seq order %v, want [1 2 3]", order)
 	}
 }
 
@@ -627,8 +673,8 @@ func TestTRun(t *T) {
 			if ok != !root.Failed() {
 				t.Errorf("%s:root failed: got %v; want %v", tc.desc, !ok, root.Failed())
 			}
-			if tstate.running != 0 || tstate.numWaiting != 0 {
-				t.Errorf("%s:running and waiting non-zero: got %d and %d", tc.desc, tstate.running, tstate.numWaiting)
+			if tstate.running != 0 || len(tstate.waiting) != 0 {
+				t.Errorf("%s:running and waiting non-zero: got %d and %d", tc.desc, tstate.running, len(tstate.waiting))
 			}
 			got := strings.TrimSpace(buf.String())
 			want := strings.TrimSpace(tc.output)

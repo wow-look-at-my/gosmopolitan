@@ -28,6 +28,16 @@ type tracedCache struct {
 	lane trace.Lane
 }
 
+// Retrievable reports whether c can supply the output of id with no build.
+// A cache that cannot tell answers false.
+func Retrievable(c Cache, id ActionID) bool {
+	if traced, ok := c.(*tracedCache); ok {
+		c = traced.Cache
+	}
+	answers, ok := c.(interface{ Retrievable(ActionID) bool })
+	return ok && answers.Retrievable(id)
+}
+
 func (c *tracedCache) Get(id ActionID) (Entry, error) {
 	start := time.Now()
 	var (
