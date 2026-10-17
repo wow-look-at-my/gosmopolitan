@@ -75,6 +75,27 @@ func TestProcessLocal(t *testing.T) {
 	}
 }
 
+// TestProcessLocalIPCDir pins go-ipc's runtime directory as process-local. On
+// Windows and macOS it holds the life sockets of whichever processes run now,
+// so a test that lists it never hit the cache.
+func TestProcessLocalIPCDir(t *testing.T) {
+	base, err := os.UserCacheDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(base, "gosmopolitan", "go-ipc")
+	for path, want := range map[string]bool{
+		dir:                                   true,
+		filepath.Join(dir, "go-ipc-x-1.life"): true,
+		filepath.Join(base, "gosmopolitan"):   false,
+		dir + "x":                             false,
+	} {
+		if got := isProcessLocal(path); got != want {
+			t.Errorf("isProcessLocal(%q) = %v, want %v", path, got, want)
+		}
+	}
+}
+
 // TestWindowsLiveState pins the Windows paths the system rewrites as it runs.
 // A drive letter is a volume only on Windows, so the paging files answer there.
 func TestWindowsLiveState(t *testing.T) {
