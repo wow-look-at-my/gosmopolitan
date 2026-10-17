@@ -564,7 +564,9 @@ type pgoActor struct {
 }
 
 func (p *pgoActor) Act(b *Builder, ctx context.Context, a *Action) error {
-	if b.useCache(a, b.pgoActionID(p.input), a.Target, !b.IsCmdList) || b.IsCmdList {
+	// list -export compiles, so its compiles need the profile a build would use.
+	// Without it they compile under keys no build of the same package computes.
+	if b.useCache(a, b.pgoActionID(p.input), a.Target, !b.IsCmdList) || b.IsCmdList && !b.NeedExport {
 		return nil
 	}
 	defer b.flushOutput(a)
