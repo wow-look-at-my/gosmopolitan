@@ -54,6 +54,9 @@ jobs:
     runs-on: ${{ matrix.build-os }}
 
     steps:
+      # A checkout fetches its submodules one at a time unless git says otherwise.
+      - run: git config --global submodule.fetchJobs 16
+        shell: bash
       # src/cmd/vendor holds three submodules; without them cmd/go cannot build.
       - uses: actions/checkout@v4
         with:
@@ -110,6 +113,8 @@ jobs:
       actions: write
     runs-on: ${{ github.event.repository.visibility == 'public' && 'ubuntu-latest' || vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
+      - run: git config --global submodule.fetchJobs 16
+        shell: bash
       - uses: actions/checkout@v4
         with:
           submodules: true
@@ -186,6 +191,8 @@ jobs:
           }
           Get-PSDrive C, D | ForEach-Object { Write-Host ("{0}: {1:N1} GB free" -f $_.Name, ($_.Free/1GB)) }
 
+      - run: git config --global submodule.fetchJobs 16
+        shell: bash
       - uses: actions/checkout@v4
         with:
           submodules: true
@@ -445,6 +452,8 @@ jobs:
     runs-on: ${{ github.event.repository.visibility == 'public' && 'ubuntu-latest' || vars.CI_RUNNER || 'ubuntu-latest' }}
 
     steps:
+      - run: git config --global submodule.fetchJobs 16
+        shell: bash
       - uses: actions/checkout@v4
         with:
           submodules: true
@@ -520,6 +529,8 @@ jobs:
     runs-on: ${{ (github.event.repository.visibility == 'public' || !contains(fromJSON('["ubuntu-latest"]'), matrix.test-os)) && matrix.test-os || vars.CI_RUNNER || matrix.test-os }}
 
     steps:
+      - run: git config --global submodule.fetchJobs 16
+        shell: bash
       - name: Checkout code (for Go tests)
         uses: actions/checkout@v4
         with:
@@ -636,6 +647,8 @@ jobs:
     runs-on: ${{ github.event.repository.visibility == 'public' && 'ubuntu-latest' || vars.CI_RUNNER || 'ubuntu-latest' }}
 
     steps:
+      - run: git config --global submodule.fetchJobs 16
+        shell: bash
       - name: Checkout code
         uses: actions/checkout@v4
         with:
@@ -706,6 +719,8 @@ jobs:
         port: [js, wasip1]
 
     steps:
+      - run: git config --global submodule.fetchJobs 16
+        shell: bash
       - name: Checkout code
         uses: actions/checkout@v4
         with:
@@ -898,6 +913,8 @@ jobs:
       version: ${{ steps.release.outputs.version }}
 
     steps:
+      - run: git config --global submodule.fetchJobs 16
+        shell: bash
       - name: Checkout code
         uses: actions/checkout@v4
         with:
@@ -985,6 +1002,8 @@ jobs:
       artifact-metadata: write
 
     steps:
+      - run: git config --global submodule.fetchJobs 16
+        shell: bash
       - name: Checkout code
         uses: actions/checkout@v4
         with:
