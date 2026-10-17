@@ -3467,7 +3467,14 @@ func hashStat(name string) cache.ActionID {
 // hashWriteStat writes what a stat says about a file, less its mtime. The
 // mtime records when this checkout was made, not what the file holds.
 func hashWriteStat(h io.Writer, info fs.FileInfo) {
-	fmt.Fprintf(h, "stat %d %x %v\n", info.Size(), uint64(info.Mode()), info.IsDir())
+	size := info.Size()
+	if info.IsDir() {
+		// A directory's size is the file system's, not the test's: APFS grows
+		// it with each entry, so a run that adds one under GOROOT/pkg missed
+		// on macOS. A listing is its own open line.
+		size = 0
+	}
+	fmt.Fprintf(h, "stat %d %x %v\n", size, uint64(info.Mode()), info.IsDir())
 }
 
 // testAndInputKey returns the actual cache key for the pair (testID, testInputsID).
