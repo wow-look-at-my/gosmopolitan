@@ -51,20 +51,35 @@ runs:
       run: |
         export PATH="$PWD/bin:$PATH"
         # -trimpath: without it each host's checkout path rides in the binary, and no two hosts can build the same bytes.
-        GOOS=cosmo go build -trimpath -o fizzbuzz.com testdata/fizzbuzz/fizzbuzz.go
+        # The builds are independent, so they run at once. Each wait fails the step when its build fails.
+        GOOS=cosmo go build -trimpath -o fizzbuzz.com testdata/fizzbuzz/fizzbuzz.go &
+        fizz=$!
         # The probe is a multi-file package, so build its module directory.
-        (cd testdata/runtimeprobe && GOOS=cosmo go build -trimpath -o "$GITHUB_WORKSPACE/runtimeprobe.com" .)
-        (cd testdata/sqliteprobe && GOOS=cosmo go build -trimpath -o "$GITHUB_WORKSPACE/sqliteprobe.com" .)
+        (cd testdata/runtimeprobe && GOOS=cosmo go build -trimpath -o "$GITHUB_WORKSPACE/runtimeprobe.com" .) &
+        probe=$!
+        (cd testdata/sqliteprobe && GOOS=cosmo go build -trimpath -o "$GITHUB_WORKSPACE/sqliteprobe.com" .) &
+        sqlite=$!
+        # The platform subsets, tri and amd -- see docs/CI.md "build job" for what each drops.
+        GOCOSMOPLATFORMS=linux/amd64,darwin/arm64,windows/amd64 GOOS=cosmo go build -trimpath -o fizzbuzz-tri.com testdata/fizzbuzz/fizzbuzz.go &
+        fizztri=$!
+        (cd testdata/runtimeprobe && GOCOSMOPLATFORMS=linux/amd64,darwin/arm64,windows/amd64 GOOS=cosmo go build -trimpath -o "$GITHUB_WORKSPACE/runtimeprobe-tri.com" .) &
+        probetri=$!
+        GOCOSMOPLATFORMS=linux/amd64,windows/amd64 GOOS=cosmo GOARCH=amd64 go build -trimpath -o fizzbuzz-amd.com testdata/fizzbuzz/fizzbuzz.go &
+        fizzamd=$!
+        (cd testdata/runtimeprobe && GOCOSMOPLATFORMS=linux/amd64,windows/amd64 GOOS=cosmo GOARCH=amd64 go build -trimpath -o "$GITHUB_WORKSPACE/runtimeprobe-amd.com" .) &
+        probeamd=$!
+        wait "$fizz"
+        wait "$probe"
+        wait "$sqlite"
+        wait "$fizztri"
+        wait "$probetri"
+        wait "$fizzamd"
+        wait "$probeamd"
         echo "=== APE Header ==="
         head -c 200 fizzbuzz.com
         echo ""
         echo "=== File info ==="
         file fizzbuzz.com runtimeprobe.com 2>/dev/null || true
-        # The platform subsets, tri and amd -- see docs/CI.md "build job" for what each drops.
-        GOCOSMOPLATFORMS=linux/amd64,darwin/arm64,windows/amd64 GOOS=cosmo go build -trimpath -o fizzbuzz-tri.com testdata/fizzbuzz/fizzbuzz.go
-        (cd testdata/runtimeprobe && GOCOSMOPLATFORMS=linux/amd64,darwin/arm64,windows/amd64 GOOS=cosmo go build -trimpath -o "$GITHUB_WORKSPACE/runtimeprobe-tri.com" .)
-        GOCOSMOPLATFORMS=linux/amd64,windows/amd64 GOOS=cosmo GOARCH=amd64 go build -trimpath -o fizzbuzz-amd.com testdata/fizzbuzz/fizzbuzz.go
-        (cd testdata/runtimeprobe && GOCOSMOPLATFORMS=linux/amd64,windows/amd64 GOOS=cosmo GOARCH=amd64 go build -trimpath -o "$GITHUB_WORKSPACE/runtimeprobe-amd.com" .)
         echo "=== sizes ==="
         ls -l fizzbuzz.com fizzbuzz-tri.com fizzbuzz-amd.com
         export GOOS="$(go env GOHOSTOS)" GOARCH="$(go env GOHOSTARCH)"

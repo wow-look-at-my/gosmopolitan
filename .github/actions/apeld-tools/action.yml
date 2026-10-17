@@ -55,20 +55,24 @@ runs:
           tar -xf "$RUNNER_TEMP/zig.tar.xz" -C "$RUNNER_TEMP"
           echo "$RUNNER_TEMP/zig-aarch64-macos-0.16.0" >> "$GITHUB_PATH"
 
+    # The release archive links LLVM statically, so the four files it names run on their own.
     - name: Install LLVM 18 (darwin)
       if: runner.os == 'macOS'
-      shell: bash
-      env:
-        HOMEBREW_NO_AUTO_UPDATE: 1
-        HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: 1
-      run: |
-        set -euo pipefail
-        brew install llvm@18
-        llvm="$(brew --prefix llvm@18)/bin"
-        tools="$RUNNER_TEMP/apeld-tools"
-        mkdir -p "$tools"
-        ln -s "$llvm/ld64.lld" "$llvm/llvm-strip" "$tools/"
-        echo "$tools" >> "$GITHUB_PATH"
+      uses: wow-look-at-my/actions@cached-run#latest
+      with:
+        save-on: any
+        paths: ${{ runner.temp }}/apeld-tools
+        run: |
+          llvm=clang+llvm-18.1.8-arm64-apple-macos11
+          curl -fsSL "https://github.com/llvm/llvm-project/releases/download/llvmorg-18.1.8/$llvm.tar.xz" -o "$RUNNER_TEMP/llvm.tar.xz"
+          echo "4573b7f25f46d2a9c8882993f091c52f416c83271db6f5b213c93f0bd0346a10  $RUNNER_TEMP/llvm.tar.xz" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/apeld-tools"
+          tar -xJf "$RUNNER_TEMP/llvm.tar.xz" -C "$RUNNER_TEMP/apeld-tools" --strip-components 2 \
+            "$llvm/bin/lld" "$llvm/bin/ld64.lld" "$llvm/bin/llvm-objcopy" "$llvm/bin/llvm-strip"
+          rm "$RUNNER_TEMP/llvm.tar.xz"
+          "$RUNNER_TEMP/apeld-tools/ld64.lld" --version
+          "$RUNNER_TEMP/apeld-tools/llvm-strip" --version
+          echo "$RUNNER_TEMP/apeld-tools" >> "$GITHUB_PATH"
 
     # A cache hit restores both directories and downloads nothing, as the other hosts do for zig.
     - name: Install zig and LLVM (NT)
