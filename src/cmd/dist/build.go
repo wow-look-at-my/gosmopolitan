@@ -1764,10 +1764,10 @@ func cmdbootstrap() {
 	// The two drivers must agree on every action ID, or bin/go writes entries
 	// go_bootstrap cannot use. The checkNotStale calls below assert exactly
 	// that: go_bootstrap must find nothing stale in what bin/go just installed.
-	goInstall(toolenv(), goBootstrap, "cmd/go/main")
+	goInstallReported("install-go", toolenv(), goBootstrap, "cmd/go/main")
 	linkTools()
-	goInstall(nil, gorootBinGo, "std")
-	goInstall(toolenv(), goInstaller(), toolsToInstall...)
+	goInstallReported("install-std", nil, gorootBinGo, "std")
+	goInstallReported("install-tools", toolenv(), goInstaller(), toolsToInstall...)
 	linkTools()
 	checkNotStale(toolenv(), goBootstrap, toolchain...)
 	checkNotStale(nil, goBootstrap, "std")
@@ -1849,6 +1849,15 @@ func wrapperPathFor(goos, goarch string) string {
 
 func goInstall(env []string, goBinary string, args ...string) {
 	goCmd(env, goBinary, "install", args...)
+}
+
+// goInstallReported is goInstall, followed by the actions of that install
+// that took the most wall time. A warm make.bash spends most of its last phase
+// here, and the step line alone does not say on what.
+func goInstallReported(step string, env []string, goBinary string, args ...string) {
+	graph := pathf("%s/%s.actions.json", workdir, step)
+	goInstall(env, goBinary, append([]string{"-debug-actiongraph=" + graph}, args...)...)
+	reportSlowActions(os.Stdout, step, graph)
 }
 
 func appendCompilerFlags(args []string) []string {
