@@ -9,9 +9,9 @@ import (
 	"compress/gzip"
 	"crypto/sha256"
 	_ "embed"
+	"encoding/binary"
 	"encoding/hex"
 	"os"
-	"strings"
 )
 
 // cmd/dist compiles the loaders into apeld/bin before it builds this package. Git does not track them.
@@ -87,26 +87,29 @@ func apeBlockCeil(n int) int {
 }
 
 // apeGzip compresses bin at the fixed level every link uses, so links of
-// the same input produce the same APE. A header comment pads the stream to
+// the same input produce the same APE. A header extra field pads the stream to
 // whole blocks. A gzip can refuse bytes after the stream, and every gzip
-// skips the comment.
+// skips the extra field. A comment cannot pad: Go's reader refuses one of 512 bytes or more.
 func apeGzip(bin []byte, name string) []byte {
-	stream := apeGzipWith(bin, name, "")
+	stream := apeGzipWith(bin, name, nil)
 	if len(stream)%apeLoaderBlock == 0 {
 		return stream
 	}
-	// A comment adds its length plus a NUL. gzip.Writer writes no empty comment, so the comment holds at least a byte.
-	pad := apeBlockCeil(len(stream)+2) - len(stream) - 1
-	return apeGzipWith(bin, name, strings.Repeat(" ", pad))
+	// The extra field adds its 2-byte length and then itself: a subfield ID, a 2-byte length and the zeros.
+	size := apeBlockCeil(len(stream)+6) - len(stream) - 2
+	extra := make([]byte, size)
+	extra[0], extra[1] = 'A', 'P'
+	binary.LittleEndian.PutUint16(extra[2:], uint16(size-4))
+	return apeGzipWith(bin, name, extra)
 }
 
-func apeGzipWith(bin []byte, name, comment string) []byte {
+func apeGzipWith(bin []byte, name string, extra []byte) []byte {
 	var buf bytes.Buffer
 	zw, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
 	if err != nil {
 		Exitf("APE: compressing the %s loader: %v", name, err)
 	}
-	zw.Comment = comment
+	zw.Extra = extra
 	if _, err := zw.Write(bin); err != nil {
 		Exitf("APE: compressing the %s loader: %v", name, err)
 	}
