@@ -141,3 +141,17 @@ func TestSetupLinesKey(t *testing.T) {
 		t.Error("the setup key is the key every setup shares")
 	}
 }
+
+// TestIdentityKeyPerVariant: dist runs one package under several GOFLAGS
+// hooks. Each keeps its own last identity, so an explanation never compares
+// a binary with a sibling variant's.
+func TestIdentityKeyPerVariant(t *testing.T) {
+	a := inputsAction(t.TempDir())
+	t.Setenv("GOFLAGS", "")
+	plain := identityKey(a, nil, "compiles")
+	t.Setenv("GOFLAGS", "-gcflags=runtime=-d=maymorestack=runtime.mayMoreStackMove")
+	hooked := identityKey(a, nil, "compiles")
+	if plain == hooked {
+		t.Error("a GOFLAGS hook kept the identity key of the plain run")
+	}
+}
