@@ -2489,7 +2489,7 @@ func (c *runCache) tryCacheWithID(b *work.Builder, a *work.Action, id string) bo
 			profile, readErr = os.ReadFile(cpData)
 		}
 		if readErr == nil {
-			saveTestlog(cache.Default(), c.id1, inputList, testlogShape(inputLines))
+			saveTestlog(cache.Default(), c.id1, inputList, testlogShape(inputLines), currentShape(a))
 			cache.PutNoVerify(cache.Default(), inputLinesKey(c.id1, inputList), bytes.NewReader(inputLines))
 			cache.PutNoVerify(cache.Default(), testAndInputKey(c.id1, testInputsID), bytes.NewReader(data))
 			if testCoverProfile != "" || c.covMeta != (cache.ActionID{}) {
@@ -2889,11 +2889,23 @@ func testlogShape(inputLines []byte) string {
 // saveTestlog keeps testlog under testID, unless a testlog of its shape is
 // kept already. A slot another run took first holds that run's shape, and
 // this testlog goes in the next free slot.
-func saveTestlog(store cache.Cache, testID cache.ActionID, testlog []byte, shape string) {
+//
+// shapeNow, when not nil, answers the shape a kept testlog has on this
+// machine now. A kept testlog can name paths that were scratch when it was
+// saved and are not scratch now, such as an old temporary directory. Its
+// stored shape then matches, but its inputs never do, and every run misses.
+func saveTestlog(store cache.Cache, testID cache.ActionID, testlog []byte, shape string, shapeNow func([]byte) string) {
 	for slot := range maxTestlogs {
 		saved, _, err := cache.GetBytes(store, testlogShapeKey(testID, slot))
 		if err == nil {
-			if string(saved) == shape {
+			if string(saved) != shape {
+				continue
+			}
+			if shapeNow == nil {
+				return
+			}
+			kept, _, keptErr := cache.GetBytes(store, testlogSlotKey(testID, slot))
+			if keptErr == nil && shapeNow(kept) == shape {
 				return
 			}
 			continue
@@ -2901,6 +2913,18 @@ func saveTestlog(store cache.Cache, testID cache.ActionID, testlog []byte, shape
 		cache.PutNoVerify(store, testlogSlotKey(testID, slot), bytes.NewReader(testlog))
 		cache.PutNoVerify(store, testlogShapeKey(testID, slot), strings.NewReader(shape))
 		return
+	}
+}
+
+// currentShape answers the shape of a kept testlog of a's test, as its input
+// lines are computed now. A testlog that cannot be read has no shape.
+func currentShape(a *work.Action) func([]byte) string {
+	return func(kept []byte) string {
+		_, lines, err := computeTestInputsID(a, kept)
+		if err != nil {
+			return ""
+		}
+		return testlogShape(lines)
 	}
 }
 
@@ -3452,7 +3476,7 @@ func (c *runCache) saveOutput(a *work.Action) {
 		if cache.DebugTest {
 			fmt.Fprintf(os.Stderr, "testcache: %s: save test ID %x => input ID %x => %x\n", a.Package.ImportPath, c.id1, testInputsID, testAndInputKey(c.id1, testInputsID))
 		}
-		saveTestlog(cache.Default(), c.id1, testlog, testlogShape(inputLines))
+		saveTestlog(cache.Default(), c.id1, testlog, testlogShape(inputLines), currentShape(a))
 		cache.PutNoVerify(cache.Default(), inputLinesKey(c.id1, testlog), bytes.NewReader(inputLines))
 		cache.PutNoVerify(cache.Default(), testAndInputKey(c.id1, testInputsID), bytes.NewReader(a.TestOutput.Bytes()))
 		if coverProfile != nil {
@@ -3467,7 +3491,7 @@ func (c *runCache) saveOutput(a *work.Action) {
 		if cache.DebugTest {
 			fmt.Fprintf(os.Stderr, "testcache: %s: save test ID %x => input ID %x => %x\n", a.Package.ImportPath, c.id2, testInputsID, testAndInputKey(c.id2, testInputsID))
 		}
-		saveTestlog(cache.Default(), c.id2, testlog, testlogShape(inputLines))
+		saveTestlog(cache.Default(), c.id2, testlog, testlogShape(inputLines), currentShape(a))
 		cache.PutNoVerify(cache.Default(), inputLinesKey(c.id2, testlog), bytes.NewReader(inputLines))
 		cache.PutNoVerify(cache.Default(), testAndInputKey(c.id2, testInputsID), bytes.NewReader(a.TestOutput.Bytes()))
 		if coverProfile != nil {
