@@ -9,9 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -38,22 +36,15 @@ func skipWhereNoLoaderBoots(t *testing.T) {
 // file it signed.
 func embeddedLoader(t *testing.T) string {
 	t.Helper()
-	head := first8K(t)
-	re := regexp.MustCompile(`dd if="\$o" bs=1 skip=(\d+) count=(\d+) 2>/dev/null (\| gzip -dc )?>`)
 	bin := loadBinary(t)
-	for _, m := range re.FindAllSubmatch(head, -1) {
-		gzipped := len(m[3]) != 0
-		if gzipped != (runtime.GOOS == "darwin") {
+	for _, region := range loaderRegions(t) {
+		if region.gzipped != (runtime.GOOS == "darwin") {
 			continue
 		}
-		skip, err := strconv.Atoi(string(m[1]))
-		require.NoError(t, err)
-		count, err := strconv.Atoi(string(m[2]))
-		require.NoError(t, err)
-		require.LessOrEqual(t, skip+count, len(bin), "the loader region must be inside the file")
+		require.LessOrEqual(t, region.offset+region.size, len(bin), "the loader region must be inside the file")
 
-		raw := bin[skip : skip+count]
-		if gzipped {
+		raw := bin[region.offset : region.offset+region.size]
+		if region.gzipped {
 			gz, err := gzip.NewReader(bytes.NewReader(raw))
 			require.NoError(t, err)
 			raw, err = io.ReadAll(gz)

@@ -11,6 +11,7 @@ import (
 	_ "embed"
 	"encoding/hex"
 	"os"
+	"strings"
 )
 
 // cmd/dist compiles the loaders into apeld/bin before it builds this package. Git does not track them.
@@ -33,6 +34,11 @@ type apeLoader struct {
 	offset int    // where in the header those bytes go
 	tag    string
 }
+
+// apeLoaderBlock is the dd block size the script copies a loader with. Each
+// region starts on a block and fills whole blocks. POSIX dd counts in
+// blocks, so an unaligned region costs one read and one write per byte.
+const apeLoaderBlock = 512
 
 // Loader regions of the 64K APE header.
 const (
@@ -63,22 +69,46 @@ func newApeLoader(name string, bin []byte, compress bool, offset int) *apeLoader
 	if len(bin) == 0 {
 		Exitf("APE: the %s loader is empty; run make.bash (make.bat on Windows) in src, which compiles it with zig and LLVM", name)
 	}
+	if offset%apeLoaderBlock != 0 {
+		Exitf("APE: the %s loader region at %#x is not %d-aligned", name, offset, apeLoaderBlock)
+	}
 	sum := sha256.Sum256(bin)
-	l := &apeLoader{name: name, blob: bin, gzip: compress, offset: offset, tag: hex.EncodeToString(sum[:4])}
+	l := &apeLoader{name: name, gzip: compress, offset: offset, tag: hex.EncodeToString(sum[:4])}
 	if compress {
 		l.blob = apeGzip(bin, name)
+	} else {
+		// Bytes past the end of an ELF file are never mapped.
+		l.blob = make([]byte, apeBlockCeil(len(bin)))
+		copy(l.blob, bin)
 	}
 	return l
 }
 
+func apeBlockCeil(n int) int {
+	return (n + apeLoaderBlock - 1) / apeLoaderBlock * apeLoaderBlock
+}
+
 // apeGzip compresses bin at the fixed level every link uses, so links of
-// the same input produce the same APE.
+// the same input produce the same APE. A header comment pads the stream to
+// whole blocks. A gzip can refuse bytes after the stream, and every gzip
+// skips the comment.
 func apeGzip(bin []byte, name string) []byte {
+	stream := apeGzipWith(bin, name, "")
+	if len(stream)%apeLoaderBlock == 0 {
+		return stream
+	}
+	// A comment adds its length plus a NUL. gzip.Writer writes no empty comment, so the comment holds at least a byte.
+	pad := apeBlockCeil(len(stream)+2) - len(stream) - 1
+	return apeGzipWith(bin, name, strings.Repeat(" ", pad))
+}
+
+func apeGzipWith(bin []byte, name, comment string) []byte {
 	var buf bytes.Buffer
 	zw, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
 	if err != nil {
 		Exitf("APE: compressing the %s loader: %v", name, err)
 	}
+	zw.Comment = comment
 	if _, err := zw.Write(bin); err != nil {
 		Exitf("APE: compressing the %s loader: %v", name, err)
 	}
