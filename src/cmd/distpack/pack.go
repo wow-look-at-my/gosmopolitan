@@ -43,6 +43,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"cmd/internal/telemetry/counter"
@@ -239,14 +240,15 @@ func main() {
 		log.Fatal(err)
 	}
 
-	writeTgz(distpack(version+".src.tar.gz"), srcArch)
-
+	// Each archive compresses on one thread, so the three are written at once.
+	var wg sync.WaitGroup
+	wg.Go(func() { writeTgz(distpack(version+".src.tar.gz"), srcArch) })
 	// Upstream writes a .zip here for windows, which go.dev serves. This fork
 	// publishes to buildhost, which stores the one archive and serves any
 	// format from it, so windows takes the same gzipped tar as every host.
-	writeTgz(distpack(version+"."+goosDashGoarch+".tar.gz"), zipArch)
-
-	writeZip(distpack(modVers+".zip"), modArch)
+	wg.Go(func() { writeTgz(distpack(version+"."+goosDashGoarch+".tar.gz"), zipArch) })
+	wg.Go(func() { writeZip(distpack(modVers+".zip"), modArch) })
+	wg.Wait()
 	writeFile(distpack(modVers+".mod"),
 		[]byte(fmt.Sprintf("module %s\n", modPath)))
 	writeFile(distpack(modVers+".info"),
@@ -344,7 +346,8 @@ func writeTgz(name string, a *Archive) {
 		}
 	}()
 
-	zw := check(gzip.NewWriterLevel(out, gzip.BestCompression))
+	// Best compression costs several times the time of the default for a few percent of size.
+	zw := check(gzip.NewWriterLevel(out, gzip.DefaultCompression))
 	tw := tar.NewWriter(zw)
 
 	// Find the mode and mtime to use for directory entries,
@@ -442,7 +445,7 @@ func writeZip(name string, a *Archive) {
 
 	zw := zip.NewWriter(out)
 	zw.RegisterCompressor(zip.Deflate, func(out io.Writer) (io.WriteCloser, error) {
-		return flate.NewWriter(out, flate.BestCompression)
+		return flate.NewWriter(out, flate.DefaultCompression)
 	})
 	for _, f = range a.Files {
 		h := check(zip.FileInfoHeader(f.Info()))

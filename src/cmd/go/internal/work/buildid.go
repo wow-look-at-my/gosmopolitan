@@ -767,8 +767,30 @@ func (b *Builder) useCache(a *Action, actionHash cache.ActionID, target string, 
 		return true
 	}
 
+	// A compile hit through its lazy record reads no archive.
+	if b.lazyEnabled(a) && cache.Retrievable(c, a.actionID) {
+		if record, ok := readLazy(a, c); ok {
+			if printOutput {
+				if err := showStdout(b, c, a, compileOutputKey); err != nil {
+					a.output = []byte{}
+					return false
+				}
+			}
+			b.adoptLazy(a, c, record)
+			a.Target = "DO NOT USE - using cache"
+			if a.json != nil {
+				a.json.BuildID = a.buildID
+			}
+			if p := a.Package; p != nil && target != "" {
+				p.Stale = true
+				p.StaleReason = "not installed but available in build cache"
+			}
+			return true
+		}
+	}
+
 	// Check to see if the action output is cached.
-	if file, _, err := cache.GetFile(c, actionHash); err == nil {
+	if file, entry, err := cache.GetFile(c, actionHash); err == nil {
 		if a.Mode == "preprocess PGO profile" {
 			// Preprocessed PGO profiles don't embed a build ID, so
 			// skip the build ID lookup.
@@ -804,6 +826,10 @@ func (b *Builder) useCache(a *Action, actionHash cache.ActionID, target string, 
 			a.built = file
 			a.Target = "DO NOT USE - using cache"
 			a.buildID = buildID
+			if b.lazyEnabled(a) {
+				// The lazy record is missing, or the hit above would have used it. The next build then reads no archive.
+				storeLazy(c, a, entry.OutputID, entry.Size)
+			}
 			if a.json != nil {
 				a.json.BuildID = a.buildID
 			}
@@ -991,8 +1017,11 @@ func (b *Builder) cacheOutput(a *Action, target string) error {
 	if a.output == nil {
 		panic("internal error: a.output not set")
 	}
-	outputID, _, err := c.Put(a.actionID, r)
+	outputID, size, err := c.Put(a.actionID, r)
 	r.Close()
+	if err == nil && a.Mode == "build" && cfg.BuildToolchainName == "gc" {
+		storeLazy(c, a, outputID, size)
+	}
 	if err == nil && cfg.BuildX {
 		b.Shell(a).ShowCmd("", "%s # internal", joinUnambiguously(str.StringList("cp", target, c.OutputFile(outputID))))
 	}
