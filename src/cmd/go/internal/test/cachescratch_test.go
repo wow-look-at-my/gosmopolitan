@@ -83,17 +83,37 @@ func TestWindowsLiveState(t *testing.T) {
 		`\\.\pipe\`:             true,
 		`\\.\pipe\go-test-1234`: true,
 		`\\.\NUL`:               true,
-		`c:\pagefile.sys`:       onWindows,
-		`C:\PAGEFILE.SYS`:       onWindows,
-		`d:\swapfile.sys`:       onWindows,
-		`c:\hiberfil.sys`:       onWindows,
-		`c:\data\pagefile.sys`:  false,
-		`c:\Windows\win.ini`:    false,
-		`\\server\share\a.sys`:  false,
-		"/etc/hosts":            false,
+		`\\?\Volume{2f14af21-6683-4c83-b3a4-67a0cc7ecac5}\a\_temp`: true,
+		`\\?\volume{2f14af21-6683-4c83-b3a4-67a0cc7ecac5}\`:        true,
+		`c:\pagefile.sys`:      onWindows,
+		`C:\PAGEFILE.SYS`:      onWindows,
+		`d:\swapfile.sys`:      onWindows,
+		`c:\hiberfil.sys`:      onWindows,
+		`c:\data\pagefile.sys`: false,
+		`c:\Windows\win.ini`:   false,
+		`\\server\share\a.sys`: false,
+		"/etc/hosts":           false,
 	} {
 		if got := isWindowsLiveState(path); got != want {
 			t.Errorf("isWindowsLiveState(%q) = %v, want %v", path, got, want)
+		}
+	}
+}
+
+// TestSystemListing pins the directories whose listing the test cache does not
+// hash: the Windows directory and its System32, which the system rewrites.
+func TestSystemListing(t *testing.T) {
+	root := filepath.Join(string(filepath.Separator), "Windows")
+	t.Setenv("SystemRoot", root)
+	for path, want := range map[string]bool{
+		root:                            true,
+		filepath.Join(root, "System32"): true,
+		filepath.Join(root, "system32"): true,
+		filepath.Join(root, "System32", "drivers"): false,
+		filepath.Join(root, "Fonts"):               false,
+	} {
+		if got := isSystemListing(path); got != want {
+			t.Errorf("isSystemListing(%q) = %v, want %v", path, got, want)
 		}
 	}
 }

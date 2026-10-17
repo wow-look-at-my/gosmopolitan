@@ -2622,7 +2622,7 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, []byte
 				parsed["open "+name]--
 				break
 			}
-			if hashes.scratch(name) || isProcessLocal(name) || isTempAncestor(name) || isVolumeRoot(name) {
+			if hashes.scratch(name) || isProcessLocal(name) || isTempAncestor(name) || isSystemListing(name) {
 				break
 			}
 			if rel, ok := hashes.modCache(name); ok {
@@ -3100,7 +3100,7 @@ func dropScratch(dir string, testlog []byte) []byte {
 			}
 		case "open", "stat":
 			name = abs(name)
-			if hashes.scratch(name) || isTempAncestor(name) || (op == "open" && isVolumeRoot(name)) {
+			if hashes.scratch(name) || isTempAncestor(name) || (op == "open" && isSystemListing(name)) {
 				continue
 			}
 			line = op + " " + name + "\n"
@@ -3136,6 +3136,21 @@ func isTempAncestor(name string) bool {
 		}
 	}
 	return false
+}
+
+// isSystemListing reports whether name is a directory whose listing the
+// system rewrites as it runs: a volume root, or the Windows directory and its
+// System32. An open of a directory hashes its listing.
+func isSystemListing(name string) bool {
+	if isVolumeRoot(name) {
+		return true
+	}
+	root := os.Getenv("SystemRoot")
+	if root == "" {
+		return false
+	}
+	clean := filepath.Clean(name)
+	return strings.EqualFold(clean, filepath.Clean(root)) || strings.EqualFold(clean, filepath.Join(root, "System32"))
 }
 
 // isVolumeRoot reports whether name is the root of a Windows volume, in any
@@ -3235,6 +3250,10 @@ func isProcessLocal(name string) bool {
 // without this rule they never hit the cache on Windows.
 func isWindowsLiveState(name string) bool {
 	if strings.HasPrefix(name, `\\.\`) || strings.HasPrefix(name, `//./`) {
+		return true
+	}
+	// A volume GUID names this runner's disk, so the same path spells differently on the next machine.
+	if strings.HasPrefix(strings.ToLower(name), `\\?\volume{`) {
 		return true
 	}
 	vol := filepath.VolumeName(name)
