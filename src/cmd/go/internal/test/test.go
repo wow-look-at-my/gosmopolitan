@@ -2544,12 +2544,20 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, []byte
 	if cache.DebugTest {
 		fmt.Fprintf(os.Stderr, "testcache: %s: GODEBUG=%q\n", a.Package.ImportPath, os.Getenv("GODEBUG"))
 	}
+	started := time.Now()
 	parsed, err := parsedReads(a.Package.Dir, testlog)
 	if err != nil {
 		return cache.ActionID{}, nil, err
 	}
 	hashes := newFileHashMemo()
 	hashes.prefetch(a.Package.Dir, testlog, parsed)
+	prefetched := time.Since(started)
+	defer func() {
+		if took := time.Since(started); took > slowInputsNotice {
+			opens, stats := hashes.counts()
+			cache.MissNotice("testcache: %s: hashing the inputs took %v (prefetch %v): %d opens, %d stats, %d testlog bytes", a.Package.ImportPath, took.Round(time.Millisecond), prefetched.Round(time.Millisecond), opens, stats, len(testlog))
+		}
+	}()
 	sources := make(map[string][]rootCert)
 	pwd := a.Package.Dir
 	for _, line := range bytes.Split(testlog, []byte("\n")) {
@@ -3309,7 +3317,9 @@ func isProcessLocal(name string) bool {
 	if isWindowsLiveState(name) {
 		return true
 	}
-	if dir := ipcRuntimeDir(); dir != "" && search.InDir(filepath.Clean(name), dir) != "" {
+	// A plain prefix test: search.InDir resolves the symlinks of both paths
+	// whenever the name is outside, which is nearly every input line.
+	if dir := ipcRuntimeDir(); dir != "" && str.HasFilePathPrefix(filepath.Clean(name), dir) {
 		return true
 	}
 	rest, ok := strings.CutPrefix(name, "/proc/")

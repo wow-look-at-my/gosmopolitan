@@ -16,6 +16,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 
 	"cmd/go/internal/cache"
 	"cmd/go/internal/cfg"
@@ -55,6 +56,25 @@ func (hs *fileHashMemo) entry(op, name string) *inputHash {
 		hs.files[key] = entry
 	}
 	return entry
+}
+
+// slowInputsNotice is how long a test's input hashing runs before the go
+// command names its cost in a cache notice.
+const slowInputsNotice = 2 * time.Second
+
+// counts answers how many distinct names this memo opened and stated.
+func (hs *fileHashMemo) counts() (opens, stats int) {
+	hs.mu.Lock()
+	defer hs.mu.Unlock()
+	for key := range hs.files {
+		switch {
+		case strings.HasPrefix(key, "open "):
+			opens++
+		case strings.HasPrefix(key, "stat "):
+			stats++
+		}
+	}
+	return opens, stats
 }
 
 func (hs *fileHashMemo) open(name string) (cache.ActionID, error) {
