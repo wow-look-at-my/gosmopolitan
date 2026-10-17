@@ -1769,7 +1769,7 @@ func cmdbootstrap() {
 	// bin/go builds cmd/go first, from the shared cache, and the link brings
 	// every archive down. bin/go cannot install itself: NT refuses to replace a
 	// running executable.
-	goCmd(toolenv(), gorootBinGo, "build", "-o", pathf("%s/go-warm%s", workdir, exe), "cmd/go/main")
+	goReported("warm-go", toolenv(), gorootBinGo, "build", "-o", pathf("%s/go-warm%s", workdir, exe), "cmd/go/main")
 	goInstallReported("install-go", toolenv(), goBootstrap, "cmd/go/main")
 	linkTools()
 	goInstallReported("install-std", nil, gorootBinGo, "std")
@@ -1861,8 +1861,13 @@ func goInstall(env []string, goBinary string, args ...string) {
 // that took the most wall time. A warm make.bash spends most of its last phase
 // here, and the step line alone does not say on what.
 func goInstallReported(step string, env []string, goBinary string, args ...string) {
+	goReported(step, env, goBinary, "install", args...)
+}
+
+// goReported is goCmd for the build verb cmd, reported as goInstallReported is.
+func goReported(step string, env []string, goBinary string, cmd string, args ...string) {
 	graph := pathf("%s/%s.actions.json", workdir, step)
-	goInstall(env, goBinary, append([]string{"-debug-actiongraph=" + graph}, args...)...)
+	goCmd(env, goBinary, cmd, append([]string{"-debug-actiongraph=" + graph}, args...)...)
 	reportSlowActions(os.Stdout, step, graph)
 }
 
