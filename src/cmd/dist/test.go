@@ -110,7 +110,7 @@ type tester struct {
 	// start of the run and join the worklist at the test's own turn.
 	started map[string]*earlyTest
 
-	shardStr string         // the -shard flag, K/N
+	shardStr string          // the -shard flag, K/N
 	shardSet map[string]bool // the tests in part K; nil means every test
 
 	// oneBinaries holds the binary that every package's tests compile into,
@@ -145,6 +145,19 @@ type work struct {
 	// early is set when the command started ahead of the run's loop. Such a
 	// work holds no slot, and runPending waits for its ended.
 	early bool
+
+	yield bool // see goTest.yield
+}
+
+// runCmd runs cmd, at a lower priority than dist's own when yield is set.
+func runCmd(cmd *exec.Cmd, yield bool) error {
+	if !yield {
+		return cmd.Run()
+	}
+	if err := startYielding(cmd); err != nil {
+		return err
+	}
+	return cmd.Wait()
 }
 
 // earlyTest is what an early dist test queued when the run started it.
@@ -157,7 +170,7 @@ type earlyTest struct {
 func (w *work) execute(t *tester) {
 	timelog("start", w.dt.name)
 	w.began = time.Now()
-	w.err = w.cmd.Run()
+	w.err = runCmd(w.cmd, w.yield)
 	w.elapsed = time.Since(w.began)
 	if w.flush != nil {
 		w.flush()
@@ -628,6 +641,11 @@ type goTest struct {
 	// early starts this test when the run starts (see tester.startEarly).
 	early bool
 
+	// yield runs this test at a lower priority than dist's. A test that fills
+	// the machine yields, so an early test that runs on one CPU keeps it and
+	// ends inside its deadline.
+	yield bool
+
 	// alone starts this test once every test queued before it has ended. Its
 	// command fills the machine, so a test beside it gets too little of the
 	// CPU to finish inside its deadline.
@@ -726,7 +744,7 @@ func (opts *goTest) run(t *tester) error {
 // runState is run, and also answers what the command cost the machine.
 func (opts *goTest) runState(t *tester) (*os.ProcessState, error) {
 	cmd, flush := opts.bgCommand(t, os.Stdout, os.Stderr)
-	err := cmd.Run()
+	err := runCmd(cmd, opts.yield)
 	flush()
 	return cmd.ProcessState, err
 }
@@ -1091,6 +1109,7 @@ func (t *tester) registerStdTest(pkg string) {
 		// One binary holds the tests of every package, is kept, and starts again for the tests that differ from a package's run only in flags.
 		test := oneBinaryTest(rest, goos)
 		test.timeout = timeoutSec
+		test.yield = true
 		test.keep = filepath.Join(workdir, "std.test")
 		// One step builds and runs every package here, so its own line is the only thing that accounts for the compile.
 		var err error
@@ -1111,6 +1130,7 @@ func (t *tester) registerStdTest(pkg string) {
 		if alone {
 			cmdGo := oneBinaryTest([]string{"cmd/go"}, goos)
 			cmdGo.timeout = timeoutSec
+			cmdGo.yield = true
 			if !t.json {
 				cmdGo.actionGraph = filepath.Join(workdir, "cmd-go.test.actions.json")
 			}
@@ -1613,6 +1633,7 @@ func (t *tester) registerTests() {
 					// go test caches its result.
 					// The corpus waits on the cache and on single long programs, and the package tests fill those gaps.
 					early: true,
+					yield: true,
 				},
 			)
 		}
@@ -1697,7 +1718,7 @@ func (t *tester) registerTest(heading string, test *goTest, opts ...registerTest
 				// The package's own run compiles what this test would start.
 				return nil
 			}
-			w := &work{dt: dt, first: test.first, after: t.queued(test.after)}
+			w := &work{dt: dt, first: test.first, after: t.queued(test.after), yield: test.yield}
 			w.cmd, w.flush = test.bgCommand(t, &w.out, &w.out)
 			if test.shared {
 				flush := w.flush
