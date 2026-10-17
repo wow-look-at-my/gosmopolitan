@@ -109,14 +109,22 @@ func TestGitHubArchiveSources(t *testing.T) {
 // commitTime is the time every test commit carries.
 var commitTime = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 
+// gitCommand is git in dir with no user or system config. GitHub's own git
+// has none, so a host setting such as core.autocrlf=true must not reach
+// what the fake serves.
+func gitCommand(dir string, args ...string) *exec.Cmd {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_NOSYSTEM=1")
+	return cmd
+}
+
 // gitIn runs git in dir with a fixed identity and date, and no user config.
 func gitIn(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
+	cmd := gitCommand(dir, args...)
 	date := commitTime.Format(time.RFC3339)
-	cmd.Env = append(os.Environ(),
-		"GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_NOSYSTEM=1",
+	cmd.Env = append(cmd.Env,
 		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.com", "GIT_AUTHOR_DATE="+date,
 		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@example.com", "GIT_COMMITTER_DATE="+date,
 	)
@@ -165,8 +173,7 @@ func makeSourceRepo(t *testing.T, files map[string]string) (string, string) {
 // repository's own attributes and a "<repo>-<name>/" prefix.
 func archiveOf(t *testing.T, dir, format, rev string) []byte {
 	t.Helper()
-	cmd := exec.Command("git", "archive", "--format="+format, "--prefix=repo-1.0.0/", rev)
-	cmd.Dir = dir
+	cmd := gitCommand(dir, "archive", "--format="+format, "--prefix=repo-1.0.0/", rev)
 	out, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("git archive: %v", err)
@@ -243,6 +250,12 @@ func referenceZip(t *testing.T, dir, rev string) []byte {
 }
 
 func TestGitHubArchiveConversion(t *testing.T) {
+	// The host config of a Windows runner: it must reach neither side.
+	hostConfig := filepath.Join(t.TempDir(), "gitconfig")
+	if err := os.WriteFile(hostConfig, []byte("[core]\n\tautocrlf = true\n"), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", hostConfig)
 	dir, hash := makeSourceRepo(t, sourceFilesWithLink())
 	want := zipEntries(t, referenceZip(t, dir, hash))
 
@@ -360,7 +373,7 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			http.Error(w, "no refs", f.infoRefsStatus)
 			return
 		}
-		cmd := exec.Command("git", "upload-pack", "--advertise-refs", f.dir)
+		cmd := gitCommand(f.dir, "upload-pack", "--advertise-refs", f.dir)
 		refs, err := cmd.Output()
 		if err != nil {
 			panic(err)
@@ -465,8 +478,7 @@ func (f *fakeGitHub) serveAPI(w http.ResponseWriter, req *http.Request, apiURL *
 		} `json:"commit"`
 	}
 	list := func(prefix string) []named {
-		cmd := exec.Command("git", "for-each-ref", "--format=%(refname:strip=2) %(if)%(*objectname)%(then)%(*objectname)%(else)%(objectname)%(end)", prefix)
-		cmd.Dir = f.dir
+		cmd := gitCommand(f.dir, "for-each-ref", "--format=%(refname:strip=2) %(if)%(*objectname)%(then)%(*objectname)%(else)%(objectname)%(end)", prefix)
 		out, err := cmd.Output()
 		if err != nil {
 			panic(err)
@@ -568,8 +580,7 @@ func codeloadPath(urlPath string) (format, name string) {
 }
 
 func (f *fakeGitHub) serveArchive(w http.ResponseWriter, req *http.Request, via, format, name string) {
-	cmd := exec.Command("git", "archive", "--format="+format, "--prefix=repo-x/", name)
-	cmd.Dir = f.dir
+	cmd := gitCommand(f.dir, "archive", "--format="+format, "--prefix=repo-x/", name)
 	served, err := cmd.Output()
 	if err != nil {
 		http.NotFound(w, req)

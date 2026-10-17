@@ -586,6 +586,24 @@ func Goid() uint64 {
 	return getg().goid
 }
 
+// LargeFrameAfterPoison sets stackguard0 to stackForceMove, then calls a
+// function whose frame is larger than the default stack. It reports
+// whether that frame lay inside the goroutine's stack.
+func LargeFrameAfterPoison() bool {
+	gp := getg()
+	if gp.stackguard0 < stackPoisonMin {
+		gp.stackguard0 = stackForceMove
+	}
+	return largeFrameInStack()
+}
+
+//go:noinline
+func largeFrameInStack() bool {
+	var frame [16 << 10]byte
+	gp := getg()
+	return uintptr(unsafe.Pointer(&frame[0])) >= gp.stack.lo
+}
+
 func GIsWaitingOnMutex(gp *G) bool {
 	return readgstatus(gp) == _Gwaiting && gp.waitreason.isMutexWait()
 }
