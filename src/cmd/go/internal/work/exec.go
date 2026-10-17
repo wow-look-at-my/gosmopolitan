@@ -92,18 +92,20 @@ func fullyCached(a *Action) bool {
 	return false
 }
 
+// closeCache settles the store's uploads and trims the cache. A test replaces it.
+var closeCache = func() {
+	if err := cache.Default().Close(); err != nil {
+		base.Fatalf("go: failed to trim cache: %v", err)
+	}
+}
+
 func (b *Builder) Do(ctx context.Context, root *Action) {
 	ctx, span := trace.StartSpan(ctx, "exec.Builder.Do ("+root.Mode+" "+root.Target+")")
 	defer span.Done()
 
-	if !b.IsCmdList {
+	if !b.IsCmdList && !b.HoldCache {
 		// If we're doing real work, take time at the end to trim the cache.
-		c := cache.Default()
-		defer func() {
-			if err := c.Close(); err != nil {
-				base.Fatalf("go: failed to trim cache: %v", err)
-			}
-		}()
+		defer closeCache()
 	}
 
 	// Build list of all actions, assigning depth-first post-order priority.
@@ -1007,6 +1009,9 @@ func (b *Builder) build(ctx context.Context, a *Action) (err error) {
 			fmt.Fprintf(&icfg, "importmap %s=%s\n", raw, final)
 		}
 	}
+	if err := b.fetchLazyDeps(a.Deps); err != nil {
+		return err
+	}
 	for _, a1 := range a.Deps {
 		p1 := a1.Package
 		if p1 == nil || p1.ImportPath == "" || a1.built == "" {
@@ -1644,6 +1649,15 @@ func (b *Builder) vet(ctx context.Context, a *Action) error {
 	}
 cachemiss:
 
+	// The vet tool reads the archives of the imports.
+	packageFiles := make([]string, 0, len(vcfg.PackageFile))
+	for _, file := range vcfg.PackageFile {
+		packageFiles = append(packageFiles, file)
+	}
+	if err := b.fetchLazyFiles(packageFiles); err != nil {
+		return err
+	}
+
 	js, err := json.MarshalIndent(vcfg, "", "\t")
 	if err != nil {
 		return fmt.Errorf("internal error marshaling vet config: %v", err)
@@ -1877,6 +1891,9 @@ func (b *Builder) link(ctx context.Context, a *Action) (err error) {
 }
 
 func (b *Builder) writeLinkImportcfg(a *Action, file string) error {
+	if err := b.fetchLazyDeps(a.Deps); err != nil {
+		return err
+	}
 	// Prepare Go import cfg.
 	var icfg bytes.Buffer
 	for _, a1 := range a.Deps {
@@ -2262,6 +2279,9 @@ func BuildInstallFunc(b *Builder, ctx context.Context, a *Action) (err error) {
 		defer b.cleanup(a1)
 	}
 
+	if err := b.fetchLazy(a1.built); err != nil {
+		return err
+	}
 	return sh.moveOrCopyFile(a.Target, a1.built, perm, false)
 }
 

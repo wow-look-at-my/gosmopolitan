@@ -10,6 +10,8 @@ runs:
       run: |
         out="$(./bin/go tool compile -V=full)"
         echo "compile -V=full: $out"
+        # Two runs over the same source must build the same bytes, or every test that reads bin/go misses.
+        sha256sum bin/go* 2>/dev/null || shasum -a 256 bin/go*
         case "$out" in
           *" buildID="?*) echo "OK: tool ID is content-derived" ;;
           *) echo "FAIL: compile -V=full lacks a content-derived buildID field; two different fork builds would share tool IDs and poison warm build caches (see cmd/go/internal/work parseToolID)"; exit 1 ;;
@@ -48,21 +50,51 @@ runs:
       shell: bash
       run: |
         export PATH="$PWD/bin:$PATH"
+        # A probe module builds inside this repository, so go stamps the commit into it, and each commit relinks every probe. No probe reads that stamp.
+        export GOFLAGS=-buildvcs=false
         # -trimpath: without it each host's checkout path rides in the binary, and no two hosts can build the same bytes.
-        GOOS=cosmo go build -trimpath -o fizzbuzz.com testdata/fizzbuzz/fizzbuzz.go
+        # The builds are independent, so they run at once. Each wait fails the step when its build fails.
+        # Each build writes its own log. The exit trap names what each one compiled and linked, which is what a cache miss costs.
+        logs="$RUNNER_TEMP/ape-builds"
+        mkdir -p "$logs"
+        report() {
+          for log in "$logs"/*; do
+            echo "=== ${log##*/}: $(grep -c -E '(/link|tool link) ' "$log") links, compiled:$(grep -oE 'compile .* -p [^ ]+' "$log" | grep -oE -- '-p [^ ]+$' | cut -c4- | tr '\n' ' ')"
+            grep -E '^go: cache: |^go: cacheprog: ' "$log" || true
+          done
+        }
+        # A failed build's error is in its log, so the failure path prints the end of every log.
+        trap 'for log in "$logs"/*; do echo "=== ${log##*/}"; tail -n 40 "$log"; done' EXIT
+        GOOS=cosmo go build -x -trimpath -o fizzbuzz.com testdata/fizzbuzz/fizzbuzz.go 2>"$logs/fizzbuzz" &
+        fizz=$!
         # The probe is a multi-file package, so build its module directory.
-        (cd testdata/runtimeprobe && GOOS=cosmo go build -trimpath -o "$GITHUB_WORKSPACE/runtimeprobe.com" .)
-        (cd testdata/sqliteprobe && GOOS=cosmo go build -trimpath -o "$GITHUB_WORKSPACE/sqliteprobe.com" .)
+        (cd testdata/runtimeprobe && GOOS=cosmo go build -x -trimpath -o "$GITHUB_WORKSPACE/runtimeprobe.com" .) 2>"$logs/runtimeprobe" &
+        probe=$!
+        (cd testdata/sqliteprobe && GOOS=cosmo go build -x -trimpath -o "$GITHUB_WORKSPACE/sqliteprobe.com" .) 2>"$logs/sqliteprobe" &
+        sqlite=$!
+        # The platform subsets, tri and amd -- see docs/CI.md "build job" for what each drops.
+        GOCOSMOPLATFORMS=linux/amd64,darwin/arm64,windows/amd64 GOOS=cosmo go build -x -trimpath -o fizzbuzz-tri.com testdata/fizzbuzz/fizzbuzz.go 2>"$logs/fizzbuzz-tri" &
+        fizztri=$!
+        (cd testdata/runtimeprobe && GOCOSMOPLATFORMS=linux/amd64,darwin/arm64,windows/amd64 GOOS=cosmo go build -x -trimpath -o "$GITHUB_WORKSPACE/runtimeprobe-tri.com" .) 2>"$logs/runtimeprobe-tri" &
+        probetri=$!
+        GOCOSMOPLATFORMS=linux/amd64,windows/amd64 GOOS=cosmo GOARCH=amd64 go build -x -trimpath -o fizzbuzz-amd.com testdata/fizzbuzz/fizzbuzz.go 2>"$logs/fizzbuzz-amd" &
+        fizzamd=$!
+        (cd testdata/runtimeprobe && GOCOSMOPLATFORMS=linux/amd64,windows/amd64 GOOS=cosmo GOARCH=amd64 go build -x -trimpath -o "$GITHUB_WORKSPACE/runtimeprobe-amd.com" .) 2>"$logs/runtimeprobe-amd" &
+        probeamd=$!
+        wait "$fizz"
+        wait "$probe"
+        wait "$sqlite"
+        wait "$fizztri"
+        wait "$probetri"
+        wait "$fizzamd"
+        wait "$probeamd"
+        trap - EXIT
+        report
         echo "=== APE Header ==="
         head -c 200 fizzbuzz.com
         echo ""
         echo "=== File info ==="
         file fizzbuzz.com runtimeprobe.com 2>/dev/null || true
-        # The platform subsets, tri and amd -- see docs/CI.md "build job" for what each drops.
-        GOCOSMOPLATFORMS=linux/amd64,darwin/arm64,windows/amd64 GOOS=cosmo go build -trimpath -o fizzbuzz-tri.com testdata/fizzbuzz/fizzbuzz.go
-        (cd testdata/runtimeprobe && GOCOSMOPLATFORMS=linux/amd64,darwin/arm64,windows/amd64 GOOS=cosmo go build -trimpath -o "$GITHUB_WORKSPACE/runtimeprobe-tri.com" .)
-        GOCOSMOPLATFORMS=linux/amd64,windows/amd64 GOOS=cosmo GOARCH=amd64 go build -trimpath -o fizzbuzz-amd.com testdata/fizzbuzz/fizzbuzz.go
-        (cd testdata/runtimeprobe && GOCOSMOPLATFORMS=linux/amd64,windows/amd64 GOOS=cosmo GOARCH=amd64 go build -trimpath -o "$GITHUB_WORKSPACE/runtimeprobe-amd.com" .)
         echo "=== sizes ==="
         ls -l fizzbuzz.com fizzbuzz-tri.com fizzbuzz-amd.com
         export GOOS="$(go env GOHOSTOS)" GOARCH="$(go env GOHOSTARCH)"
@@ -84,7 +116,7 @@ runs:
       shell: bash
       run: |
         export PATH="$PWD/bin:/opt/cosmocc/bin:$PATH"
-        cd testdata/cgoprobe && GOOS=cosmo go build -trimpath -o "${{ runner.temp }}/handoff/cgoprobe.com" .
+        cd testdata/cgoprobe && GOOS=cosmo go build -buildvcs=false -trimpath -o "${{ runner.temp }}/handoff/cgoprobe.com" .
 
     - name: Hand the APE binaries to the test job
       uses: wow-look-at-my/actions@cache-upload#latest

@@ -528,6 +528,7 @@ func runBuild(ctx context.Context, cmd *base.Command, args []string) {
 			// Start the sibling-architecture build alongside this one;
 			// the two share no ordering constraint (see cosmoSibling).
 			sib := cosmoFatStart(ctx, true)
+			cosmoHoldCache(b, sib)
 			b.Do(ctx, a)
 			// Exit before fattening if the primary build failed: the
 			// sibling is failing on the same source, and replaying its
@@ -551,6 +552,7 @@ func runBuild(ctx context.Context, cmd *base.Command, args []string) {
 		if p.Name == "main" {
 			sib = cosmoFatStart(ctx, false)
 		}
+		cosmoHoldCache(b, sib)
 		b.Do(ctx, a)
 		base.ExitIfErrors() // see the -o directory branch above
 		cosmoFatten(ctx, b, sib, []*load.Package{p})
@@ -834,6 +836,7 @@ func InstallPackages(ld *modload.Loader, ctx context.Context, patterns []string,
 		}
 	}
 	sib := cosmoFatStartInstall(ctx, len(cosmoMains) > 0)
+	cosmoHoldCache(b, sib)
 
 	b.Do(ctx, a)
 	base.ExitIfErrors()

@@ -326,30 +326,48 @@ func lookupGorootExport(pkgDir string) (string, error) {
 		)
 		f, _ = exportMap.LoadOrStore(pkgDir, func() (string, error) {
 			listOnce.Do(func() {
-				cmd := exec.Command(filepath.Join(build.Default.GOROOT, "bin", "go"), "list", "-export", "-f", "{{.Export}}", pkgDir)
-				cmd.Dir = build.Default.GOROOT
-				cmd.Env = append(os.Environ(), "PWD="+cmd.Dir, "GOROOT="+build.Default.GOROOT)
-				var output []byte
-				output, err = cmd.Output()
-				if err != nil {
-					if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
-						err = errors.New(string(ee.Stderr))
-					}
-					return
-				}
-
-				exports := strings.Split(string(bytes.TrimSpace(output)), "\n")
-				if len(exports) != 1 {
-					err = fmt.Errorf("go list reported %d exports; expected 1", len(exports))
-					return
-				}
-
-				exportPath = exports[0]
+				exportPath, err = listGorootExports(pkgDir)
 			})
-
 			return exportPath, err
 		})
 	}
 
 	return f.(func() (string, error))()
+}
+
+// listGorootExports returns the export data of the package in pkgDir. One go
+// command starts per call, and a type check imports many packages, so it also
+// records the export data of every dependency of that package. A later lookup
+// of one of them then starts no go command.
+func listGorootExports(pkgDir string) (string, error) {
+	cmd := exec.Command(filepath.Join(build.Default.GOROOT, "bin", "go"), "list", "-export", "-deps", "-f", "{{.Dir}}\t{{.Export}}", pkgDir)
+	cmd.Dir = build.Default.GOROOT
+	cmd.Env = append(os.Environ(), "PWD="+cmd.Dir, "GOROOT="+build.Default.GOROOT)
+	output, err := cmd.Output()
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
+			err = errors.New(string(ee.Stderr))
+		}
+		return "", err
+	}
+
+	lines := strings.Split(string(bytes.TrimSpace(output)), "\n")
+	for _, line := range lines {
+		dir, export, found := strings.Cut(line, "\t")
+		if !found {
+			return "", fmt.Errorf("go list reported %q; expected a directory and an export file", line)
+		}
+		if dir == "" || export == "" {
+			continue
+		}
+		exportMap.LoadOrStore(dir, func() (string, error) { return export, nil })
+	}
+
+	// -deps lists the named package last. Its directory as go list spells it
+	// can differ from pkgDir, so the line itself answers the request.
+	_, export, _ := strings.Cut(lines[len(lines)-1], "\t")
+	if export == "" {
+		return "", fmt.Errorf("go list reported no export data for %s", pkgDir)
+	}
+	return export, nil
 }

@@ -346,6 +346,10 @@ func (f *Fetcher) downloadZip(ctx context.Context, mod module.Version, zipfile s
 		return zipfile, hashZip(f, mod, zipfile, ziphashfile)
 	}
 
+	if f.zipFromCache(ctx, cache.DefaultIfEnabled(), mod, zipfile, ziphashfile) {
+		return zipfile, nil
+	}
+
 	// From here to the os.Rename call below is functionally almost equivalent to
 	// renameio.WriteToFile, with one key difference: we want to validate the
 	// contents of the file (by hashing it) before we commit it. Because the file
@@ -474,6 +478,7 @@ func (f *Fetcher) downloadZip(ctx context.Context, mod module.Version, zipfile s
 	if err := os.Rename(file.Name(), zipfile); err != nil {
 		return "", err
 	}
+	zipToCache(cache.DefaultIfEnabled(), mod, zipfile, sum)
 
 	// TODO(bcmills): Should we make the .zip and .ziphash files read-only to discourage tampering?
 

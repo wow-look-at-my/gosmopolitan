@@ -1008,6 +1008,14 @@ func runInstall(pkg string, ch chan struct{}) {
 	if !ispkg {
 		pkgName = "main"
 	}
+	cacheKey := installKey(pkg, pkgName, ispackcmd, link[1:targ], files, sfiles, sortedImports, importMap)
+	outFlag := 0
+	if !ispackcmd {
+		outFlag = writeExec
+	}
+	if distCacheGet(cacheKey, link[targ], outFlag) {
+		return
+	}
 	b := pathf("%s/_go_.a", workdir)
 	clean = append(clean, b)
 	if !ispackcmd {
@@ -1062,6 +1070,7 @@ func runInstall(pkg string, ch chan struct{}) {
 	if ispackcmd {
 		xremove(link[targ])
 		dopack(link[targ], archive, link[targ+1:])
+		distCachePut(cacheKey, link[targ])
 		return
 	}
 
@@ -1069,6 +1078,7 @@ func runInstall(pkg string, ch chan struct{}) {
 	xremove(link[targ])
 	bgrun(&wg, "", link...)
 	bgwait(&wg)
+	distCachePut(cacheKey, link[targ])
 }
 
 // packagefile returns the path to a compiled .a file for the given package
@@ -1675,6 +1685,14 @@ func cmdbootstrap() {
 	//
 	//	toolchain3 = mk(new toolchain, toolchain2, go_bootstrap)
 	//
+	// The user's own GOCACHE is safe to return to, VERSION file or not. A key
+	// here names the tool's CONTENT, never the version string: parseToolID
+	// takes the content ID out of the buildID= field that every tool of this
+	// fork prints. A changed compiler therefore cannot hit an entry an older
+	// one wrote, so a repeat make.bash reuses std instead of recompiling it.
+	// GOROOT/pkg/obj/go-build then holds only what toolchain1 and toolchain2
+	// compile, which is the part CI keeps between runs.
+	os.Setenv("GOCACHE", oldgocache)
 	startPhase("toolchain3")
 	if vflag > 0 {
 		xprintf("\n")
@@ -1703,13 +1721,6 @@ func cmdbootstrap() {
 	// Now prime the build cache with the rest of the standard library for
 	// testing, and so that the user can run 'go install std cmd' to quickly
 	// iterate on local changes without waiting for a full rebuild.
-	//
-	// The user's own GOCACHE is safe to return to, VERSION file or not. A key
-	// here names the tool's CONTENT, never the version string: parseToolID
-	// takes the content ID out of the buildID= field that every tool of this
-	// fork prints. A changed compiler therefore cannot hit an entry an older
-	// one wrote, so a repeat make.bash reuses std instead of recompiling it.
-	os.Setenv("GOCACHE", oldgocache)
 
 	if goos == oldgoos && goarch == oldgoarch {
 		// Common case - not setting up for cross-compilation.
@@ -1753,10 +1764,17 @@ func cmdbootstrap() {
 	// The two drivers must agree on every action ID, or bin/go writes entries
 	// go_bootstrap cannot use. The checkNotStale calls below assert exactly
 	// that: go_bootstrap must find nothing stale in what bin/go just installed.
-	goInstall(toolenv(), goBootstrap, "cmd/go/main")
+	//
+	// go_bootstrap sees the local cache alone, which a fresh machine has empty.
+	// bin/go first brings every archive of cmd/go down from the shared cache.
+	// A build would not: its hits are lazy, and a cached link reads no archive.
+	// list -export takes no lazy hit. bin/go cannot install itself: NT refuses
+	// to replace a running executable.
+	goReported("warm-go", toolenv(), gorootBinGo, "list", "-export", "-deps", "-f={{if false}}{{end}}", "cmd/go/main")
+	goInstallReported("install-go", toolenv(), goBootstrap, "cmd/go/main")
 	linkTools()
-	goInstall(nil, gorootBinGo, "std")
-	goInstall(toolenv(), goInstaller(), toolsToInstall...)
+	goInstallReported("install-std", nil, gorootBinGo, "std")
+	goInstallReported("install-tools", toolenv(), goInstaller(), toolsToInstall...)
 	linkTools()
 	checkNotStale(toolenv(), goBootstrap, toolchain...)
 	checkNotStale(nil, goBootstrap, "std")
@@ -1838,6 +1856,20 @@ func wrapperPathFor(goos, goarch string) string {
 
 func goInstall(env []string, goBinary string, args ...string) {
 	goCmd(env, goBinary, "install", args...)
+}
+
+// goInstallReported is goInstall, followed by the actions of that install
+// that took the most wall time. A warm make.bash spends most of its last phase
+// here, and the step line alone does not say on what.
+func goInstallReported(step string, env []string, goBinary string, args ...string) {
+	goReported(step, env, goBinary, "install", args...)
+}
+
+// goReported is goCmd for the build verb cmd, reported as goInstallReported is.
+func goReported(step string, env []string, goBinary string, cmd string, args ...string) {
+	graph := pathf("%s/%s.actions.json", workdir, step)
+	goCmd(env, goBinary, cmd, append([]string{"-debug-actiongraph=" + graph}, args...)...)
+	reportSlowActions(os.Stdout, step, graph)
 }
 
 func appendCompilerFlags(args []string) []string {
