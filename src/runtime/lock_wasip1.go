@@ -63,11 +63,13 @@ func unlock2(l *mutex) {
 }
 
 // One-time notifications. Every goroutine runs on one thread, so a note
-// needs no atomics. Its key is note_cleared, note_woken, or the g parked
-// in notetsleepg until notewakeup readies it.
+// needs no atomics. Its key is note_cleared, note_woken, note_timeout, or
+// the g parked in notetsleepg until notewakeup readies it. note_timeout
+// marks a timer that fired before its waiter parked.
 const (
 	note_cleared = 0
 	note_woken   = 1
+	note_timeout = 2
 )
 
 func noteclear(n *note) {
@@ -81,9 +83,22 @@ func notewakeup(n *note) {
 		throw("notewakeup - double wakeup")
 	}
 	n.key = note_woken
-	if old != note_cleared {
+	if old != note_cleared && old != note_timeout {
 		goready((*g)(unsafe.Pointer(old)), 1)
 	}
+}
+
+// noteParkCommit names gp as the waiter on the note at nptr, unless the
+// note is no longer cleared. It runs on g0 after gp stops. A goroutine can
+// be preempted in gopark's prologue, so the waiter must not be published
+// before this point: a wakeup in that window would ready a runnable g.
+func noteParkCommit(gp *g, nptr unsafe.Pointer) bool {
+	n := (*note)(nptr)
+	if n.key != note_cleared {
+		return false
+	}
+	n.key = uintptr(unsafe.Pointer(gp))
+	return true
 }
 
 func notesleep(n *note) {
@@ -108,25 +123,34 @@ func notetsleepg(n *note, ns int64) bool {
 		throw("notetsleepg - note already has a waiting g")
 	}
 
-	n.key = uintptr(unsafe.Pointer(gp))
 	if ns < 0 {
-		gopark(nil, nil, waitReasonZero, traceBlockGeneric, 1)
+		for n.key != note_woken {
+			gopark(noteParkCommit, unsafe.Pointer(n), waitReasonZero, traceBlockGeneric, 1)
+		}
 		return true
 	}
 	timeout := new(timer)
 	timeout.init(noteTimedOut, unsafe.Pointer(n))
 	timeout.reset(nanotime()+ns, 0)
-	gopark(nil, nil, waitReasonSleep, traceBlockSleep, 1)
+	gopark(noteParkCommit, unsafe.Pointer(n), waitReasonSleep, traceBlockSleep, 1)
 	timeout.stop()
+	if n.key == note_timeout {
+		n.key = note_cleared
+	}
 	return n.key == note_woken
 }
 
 // noteTimedOut is the timer function of a timed notetsleepg. If the
-// waiting g is still parked on the note, it clears the note and readies
-// the g, which then reports the timeout.
+// waiting g is parked on the note, it clears the note and readies the g,
+// which then reports the timeout. If the g has not parked yet, it marks
+// the note so the g does not park.
 func noteTimedOut(arg any, _ uintptr, _ int64) {
 	n := (*note)(arg.(unsafe.Pointer))
-	if n.key == note_cleared || n.key == note_woken {
+	if n.key == note_cleared {
+		n.key = note_timeout
+		return
+	}
+	if n.key == note_woken || n.key == note_timeout {
 		return
 	}
 	waiter := (*g)(unsafe.Pointer(n.key))

@@ -205,6 +205,8 @@ go tool compile -bench=out.txt file.go
 - **The go command never contacts golang.org or a host under it.** No setting turns this off. A `golang.org/x` or `google.golang.org` path resolves to its GitHub repository from the static table in `cmd/go/internal/vcs`. Depth: docs/GITHUB-FETCH.md.
 - **A github.com module downloads an archive before it runs git.** The github.com tar.gz comes first. Then the same through proxy.pazer.ai, the zip, the zip through proxy.pazer.ai, and last a shallow git fetch. A gopkg.in module takes the same route, from the GitHub repository gopkg.in redirects to. Every other module goes direct to its origin. Refs come over plain HTTP, not `ls-remote`, and no git runs until git is the last option left. A private repository resolves through github-state-mirror with a GitHub token from the environment. Depth: docs/GITHUB-FETCH.md.
 - **The go command reads no go.work file.** There is no `go work` command and no workspace mode. Nothing reads or sets GOWORK. A build has exactly one main module, the one whose go.mod encloses the working directory. `gowork_ignored.txt` pins it.
+- **A compile hit does not fetch its archive.** Each compile stores a lazy record (build ID, export ID, output ID) beside it. A hit reads the record when the cache can supply the archive later (`cache.Retrievable`). The archive comes down only for an action that reads it: a compile that runs, a link, vet, install. `go install` takes no lazy hits. Code in `cmd/go/internal/work/lazyhit.go`.
+- **make.bash keeps its bootstrap phases cached.** toolchain1 and toolchain2 use `GOROOT/pkg/obj/go-build`, and dist caches go_bootstrap's packages there too (`cmd/dist/distcache.go`). CI keeps that directory between runs. toolchain3 and later use the user GOCACHE.
 - **A cached test result is keyed on the content of the files the test read, not their mtime.** Upstream hashes size and mtime, so every fresh CI checkout missed every test that reads testdata. `hashOpen` in `cmd/go/internal/test` hashes size, mode and content. `test_cache_inputs` pins it.
 - **An unset GOMEMLIMIT takes the cgroup's memory limit.** `readGOMEMLIMIT` reads `memory.max` (cgroup v2) or `memory.limit_in_bytes` (v1) of the process's own cgroup at `gcinit` and uses. An explicit `GOMEMLIMIT`, `off` included, still wins, and a host with no cgroups is unaffected. This holds for cosmo too: the APE asks `__hostos` first and only reads `/proc` on a Linux host. `internal/runtime/cgroup` builds for cosmo now, over `sys_cosmo.go`'s syscall shims.
 - **An arm64 APE on macOS needs AT_HWCAP. It takes fixes.** A reader without one reads the `ID_AA64ISAR*` registers - an `MRS` macOS answers. The APE loader does pass a pair. However, it sets `hwcap_CPUID`, claiming the kernel emulates those registers.`fixAuxv` clears that bit in `osinit` (and. Never set `hwcap_CPUID`: it means "the kernel emulates those registers".
@@ -272,7 +274,9 @@ CI builds one fat APE per platform. No GOARCH pin. The output contains cosmo amd
 
 **Every build leg runs `src/run.bash`** (`run.bat` on windows), which execs `go tool dist test`. There is no `-rebuild` and no `-a`: both existed to force `go install -a` over the whole toolchain, which threw away a correct cache on every run. That is the distribution's own all-tests entry point and the only test gate here: the stdlib and `cmd` packages, the `test/` corpus through `cmd/internal/testdir`. A plain `go test` reaches none of the last two. It replaced a set of steps that each named the tests it wanted, which made green a statement about the name lists rather than. Never reintroduce a `-run` list here: a test nobody names never runs.
 
-**Every step dist runs names itself and what it cost.** `dist build <secs> <name>` and `dist test <secs> <name>`, one line each, on stdout. A suite's own `ok pkg 1.23s` times the RUN of a test binary, not the build of one. The binary every package's tests compile into runs no test at all. Without these lines the largest compile in a leg answers to nothing. `make.bash` gets the same line for each toolchain phase. The suite-leg summary totals them into the step summary, which is how a leg that overran its budget names what overran. `cmd/go` is its own `cmd-go.test` step, run after every other package. Its scripts each build with `-p` and fill the machine alone. Beside other packages' binaries its own deadline ran out.
+**Every step dist runs names itself and what it cost.** `dist build <secs> <name>` and `dist test <secs> <name>`, one line each, on stdout. A suite's own `ok pkg 1.23s` times the RUN of a test binary, not the build of one. The binary every package's tests compile into runs no test at all. Without these lines the largest compile in a leg answers to nothing. `make.bash` gets the same line for each toolchain phase.
+
+The suite-leg summary totals them into the step summary, which is how a leg that overran its budget names what overran. After `std.test` and `cmd-go.test`, `dist action <secs> wait <secs>` lines name the slowest actions of that step from go test's `-debug-actiongraph`. `cmd/go` is its own `cmd-go.test` step, because its scripts each build with `-p`. It runs beside `std.test`, and its output prints after `std.test`'s.
 
 The `cosmo-checks` job keeps `dats/checks/cosmo-tests.dats`, which runs the GOOS=cosmo package tests through the misc/cosmo wrappers. Internal/runtime/syscall/cosmo (darwin sendmsg/recvmsg cmsg repack, signal translation tables, epoll layout), the runtime's Apple itimerval ABI pins. Those name lists live in the suite, where an engineer can run them, rather than in a workflow step. Every build leg additionally asserts, right after make.bash, a content-derived `buildID=` in `compile -V=full`. That is the cross-build cache-poisoning guard — see the tool-build-ID bullet in Fork Gotchas.
 
@@ -304,7 +308,7 @@ One build has one owner. The first go command opens the directory and serves it 
 | `src/cmd/vendor/github.com/pierrec/lz4/v4` | the cache's wire framing |
 | `src/cmd/vendor/golang.org/x/tools` | gosmopolitan_tools, the org's x/tools |
 
-Consequences to know. **Clone with `--recurse-submodules`**, or `cmd/go` will not build. Every `actions/checkout` in `cosmo-ci.yml` passes `submodules: true` for the same reason. Nobody moves the client by hand. `src/submodulebranch.bash` puts each org submodule on its branch head through `git submodule update --init --remote`. No build stamps a version: the committed version is the placeholder `vN.0.0`, and `dats/checks/org-unpinned.sh` keeps it that way. **Never run `go mod vendor` here** —. Read `src/README.vendor` before adding any other `src/cmd` dependency: what looks like one import is a whole subtree of somebody else's repository.
+Consequences to know. **Clone with `--recurse-submodules`**, or `cmd/go` will not build. CI checks out without them and runs `src/submodulefetch.bash`, which fetches every gitlink commit at once. Nobody moves the client by hand. `src/submodulebranch.bash` puts each org submodule on its branch head through `git submodule update --init --remote`. No build stamps a version: the committed version is the placeholder `vN.0.0`, and `dats/checks/org-unpinned.sh` keeps it that way. **Never run `go mod vendor` here** —. Read `src/README.vendor` before adding any other `src/cmd` dependency: what looks like one import is a whole subtree of somebody else's repository.
 
 **A cmd/go change that needs a new client API rides the client's own branch.** Both repositories carry the branch name. That name is what the submodule follows. The merge on each side returns both to their default branches. The gitlink a checkout restores decides nothing. It is the fallback for a build that cannot reach the remote.
 
@@ -363,50 +367,7 @@ The exec wrappers live in `lib/wasm/` (not misc/wasm). Put it on PATH so `GOOS=j
 
 ## Adding Cosmo Support to Standard Library Packages
 
-When a stdlib package fails to build for `GOOS=cosmo`, follow these steps:
-
-### 1. Identify Build Constraint Types
-
-Go uses types of build constraints:
-- **`//go:build` directives** - Add `cosmo` to the constraint (e.g., `//go:build cosmo || linux || ...`)
-- **Filename suffixes** - Files like `foo_linux.go` only build for Linux. Create `foo_cosmo.go` with equivalent functionality.
-
-### 2. Check What Cosmo Already Has
-
-Before creating new files, check existing cosmo implementations:
-```bash
-ls src/**/\*cosmo\*.go
-grep -r "//go:build.*cosmo" src/
-```
-
-### 3. Runtime Platform Handling
-
-Cosmopolitan binaries run on Linux, macOS, AND Windows at runtime, so never bake in single-OS assumptions. When creating `_cosmo.go` files:
-- Do not assume Linux-only features like `/proc` are available
-- Cosmopolitan Libc translates Linux syscalls to native OS calls at runtime
-- Test assumptions about what works on each platform
-
-### 4. Syscall Wrappers
-
-The `syscall` package uses `//sys` comments to generate wrappers. Check:
-- `src/syscall/syscall_cosmo.go` - main syscall implementations
-- `src/syscall/zsyscall_cosmo_amd64.go` - generated syscall stubs
-
-If a function like `Listen` is defined as lowercase `listen` but callers expect uppercase `Listen`, add a wrapper:
-```go
-func Listen(s int, backlog int) (err error) {
-    return listen(s, backlog)
-}
-```
-
-### 5. Common Patterns
-
-When adding cosmo to an existing `//go:build` constraint, use alphabetical order:
-```go
-//go:build cosmo || dragonfly || freebsd || linux  // cosmo first alphabetically
-```
-
-For filename-based constraints, create new files rather than modifying the build system.
+docs/STDLIB-COSMO.md -- when a stdlib package fails to build for `GOOS=cosmo`: build constraints, `_cosmo.go` files, syscall wrappers. Cosmo binaries run on Linux, macOS and Windows, so a `_cosmo.go` file never assumes one OS.
 
 ## Debugging ARM64 Cosmo
 

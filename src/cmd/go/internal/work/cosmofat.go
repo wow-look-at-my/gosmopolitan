@@ -352,6 +352,11 @@ func cosmoSiblingCgoEnv(arch string) []string {
 	}
 }
 
+// cosmoHoldCache keeps the cache open past Do while a sibling or a merge still needs the store. The fatten call closes it.
+func cosmoHoldCache(b *Builder, s *cosmoSibling) {
+	b.HoldCache = s != nil || cosmoAssembleEnabled()
+}
+
 // cosmoFatten replaces each freshly built GOOS=cosmo executable (the Target
 // of each main package in mains) with the assembled APE, merging in the
 // sibling-architecture binary. That binary is produced by s (when there is
@@ -360,6 +365,9 @@ func cosmoSiblingCgoEnv(arch string) []string {
 // unstripped debug sidecar (<target>.dbg) next. To the output. See
 // cosmoMergeArgs.
 func cosmoFatten(ctx context.Context, b *Builder, s *cosmoSibling, mains []*load.Package) {
+	if b.HoldCache {
+		defer closeCache()
+	}
 	if s == nil && !cosmoAssembleEnabled() {
 		return
 	}
@@ -468,6 +476,9 @@ func cosmoFatStartInstall(ctx context.Context, hasMains bool) *cosmoSibling {
 // executable (the Target of each main package in mains) with the assembled
 // APE, the go-install counterpart of cosmoFatten.
 func cosmoFattenInstall(ctx context.Context, b *Builder, s *cosmoSibling, mains []*load.Package) {
+	if b.HoldCache {
+		defer closeCache()
+	}
 	if s == nil && !cosmoAssembleEnabled() {
 		return
 	}

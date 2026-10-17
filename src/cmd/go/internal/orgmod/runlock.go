@@ -279,7 +279,7 @@ func runFromEnv(getenv func(string) string) (Run, error) {
 func localStore(run Run) fileStore {
 	dir := filepath.Join(localRunLockRoot(), run.slug())
 	pruneLocalRunLocks()
-	return fileStore{raw: "file://" + filepath.ToSlash(dir), dir: dir}
+	return fileStore{raw: fileURL(dir), dir: dir}
 }
 
 // localRunLockRoot is the directory that holds every local run's locks.
@@ -322,6 +322,16 @@ func pruneLocalRunLocks() {
 func (r Run) slug() string {
 	sum := sha256.Sum256([]byte(strings.Join([]string{r.Repository, r.ID, r.Attempt}, "\x00")))
 	return hex.EncodeToString(sum[:16])
+}
+
+// fileURL returns the file URL of the absolute path dir. A Windows path
+// takes a leading slash, so its drive is not read as a host.
+func fileURL(dir string) string {
+	path := filepath.ToSlash(dir)
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	return (&url.URL{Scheme: "file", Path: path}).String()
 }
 
 // fileURLPath returns the local path a file URL names.
