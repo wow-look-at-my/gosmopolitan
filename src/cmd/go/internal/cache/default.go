@@ -22,6 +22,15 @@ func Default() Cache {
 
 var initDefaultCacheOnce = sync.OnceValue(initDefaultCache)
 
+// DefaultIfEnabled returns the default cache, or nil when GOCACHE is off or
+// names no usable directory. A caller that only speeds work up uses it.
+func DefaultIfEnabled() Cache {
+	if dir, _, err := DefaultDir(); err != nil || dir == "off" {
+		return nil
+	}
+	return Default()
+}
+
 // cacheREADME is a message stored in a README in the cache directory.
 // Because the cache lives outside the normal Go trees, we leave the
 // README as a courtesy to explain where it came from.

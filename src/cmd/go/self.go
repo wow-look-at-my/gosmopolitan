@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"cmd/go/internal/base"
+	"cmd/go/internal/cache"
 	"cmd/go/internal/cfg"
 	"cmd/go/internal/selftool"
 	"internal/cosmo/embedded"
@@ -24,6 +25,10 @@ func Run(argv []string) int {
 // by a command line of its own, goCommand, which the go command uses. To
 // start itself again. A nil goCommand is this executable.
 func RunAs(argv []string, goCommand []string) int {
+	// A detached cache uploader runs nothing else.
+	if code, ran := cache.RunUploadSpool(); ran {
+		return code
+	}
 	if code, ran := selftool.Dispatch(argv); ran {
 		return code
 	}
