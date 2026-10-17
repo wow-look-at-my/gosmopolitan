@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -163,6 +164,42 @@ func TestQueueAloneWaitsForEarlierWorks(t *testing.T) {
 	earlierEnd := earlier.began.Add(earlier.elapsed)
 	if alone.began.Before(earlierEnd) {
 		t.Errorf("the alone work began at %v, before the earlier work ended at %v", alone.began, earlierEnd)
+	}
+}
+
+// An early work runs from startEarly, and runPending waits for it without a
+// slot. With one slot, the work behind it must start while it waits for the
+// file that work writes. An early work that held a slot never lets it start.
+func TestStartEarlyHoldsNoSlot(t *testing.T) {
+	testenv.MustHaveExec(t)
+	t.Serial()
+	marker := filepath.Join(t.TempDir(), "marker")
+	saved := maxbg
+	maxbg = 1
+	defer func() { maxbg = saved }()
+
+	var tester tester
+	early := pendingWork("early", "wait", marker)
+	tester.tests = []distTest{{name: "early", heading: "runpending", early: true, fn: func(*distTest) error {
+		tester.worklist = append(tester.worklist, early)
+		return nil
+	}}}
+	tester.startEarly()
+	if len(tester.worklist) != 0 {
+		t.Fatalf("startEarly left %d works in the worklist, want 0", len(tester.worklist))
+	}
+	started := tester.started["early"]
+	if started == nil || len(started.works) != 1 || started.works[0] != early {
+		t.Fatalf("startEarly recorded %+v for the early test, want its one work", started)
+	}
+	writer := pendingWork("writer", "touch", marker)
+	tester.worklist = append(slices.Clone(started.works), writer)
+	tester.runPending(nil)
+	if tester.failed {
+		t.Fatal("a work failed")
+	}
+	if !early.began.Before(writer.began) {
+		t.Errorf("the early work began at %v, not before the work behind it at %v", early.began, writer.began)
 	}
 }
 

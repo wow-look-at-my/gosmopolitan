@@ -106,7 +106,11 @@ type tester struct {
 
 	worklist []*work
 
-	shardStr string          // the -shard flag, K/N
+	// started holds the works of each early dist test, which run from the
+	// start of the run and join the worklist at the test's own turn.
+	started map[string]*earlyTest
+
+	shardStr string         // the -shard flag, K/N
 	shardSet map[string]bool // the tests in part K; nil means every test
 
 	// oneBinaries holds the binary that every package's tests compile into,
@@ -137,6 +141,74 @@ type work struct {
 	// bounds a run that takes most of it, and beside the compiles that fill the
 	// machine later in the list, the run gets too little of the CPU to finish.
 	first bool
+
+	// early is set when the command started ahead of the run's loop. Such a
+	// work holds no slot, and runPending waits for its ended.
+	early bool
+}
+
+// earlyTest is what an early dist test queued when the run started it.
+type earlyTest struct {
+	works []*work
+	err   error
+}
+
+// execute runs w's command and records what it cost.
+func (w *work) execute(t *tester) {
+	timelog("start", w.dt.name)
+	w.began = time.Now()
+	w.err = w.cmd.Run()
+	w.elapsed = time.Since(w.began)
+	if w.flush != nil {
+		w.flush()
+	}
+	if w.err != nil && isUnsupportedVMASize(w) {
+		timelog("skip", w.dt.name)
+		w.out.Reset()
+		w.printSkip(t, "skipped due to unsupported VMA")
+		w.err = nil
+	}
+}
+
+// startEarly starts the command of each early dist test. A long run that
+// uses one CPU then overlaps the package tests in front of it, rather than
+// running at the end of the suite beside little else.
+func (t *tester) startEarly() {
+	var names []string
+	var marks []int
+	for idx := range t.tests {
+		dt := &t.tests[idx]
+		if !dt.early || !t.shouldRunTest(dt.name) {
+			continue
+		}
+		marks = append(marks, len(t.worklist))
+		names = append(names, dt.name)
+		err := dt.fn(dt)
+		if t.started == nil {
+			t.started = map[string]*earlyTest{}
+		}
+		t.started[dt.name] = &earlyTest{err: err}
+	}
+	// Every early test queues before any starts, so a test that waits on
+	// another one finds its work.
+	marks = append(marks, len(t.worklist))
+	queued := t.worklist[marks[0]:]
+	for idx, name := range names {
+		t.started[name].works = slices.Clone(t.worklist[marks[idx]:marks[idx+1]])
+	}
+	t.worklist = slices.Clip(t.worklist[:marks[0]])
+	for _, w := range queued {
+		w.early = true
+		w.ended = make(chan struct{})
+		go func(w *work) {
+			if w.after != nil {
+				<-w.after.ended
+			}
+			w.execute(t)
+			timelog("end", w.dt.name)
+			close(w.ended)
+		}(w)
+	}
 }
 
 // printSkip prints a skip message for all of work.
@@ -154,6 +226,7 @@ type distTest struct {
 	name    string // unique test name; may be filtered with -run flag
 	heading string // group section; this header is printed before the test is run.
 	fn      func(*distTest) error
+	early   bool // fn runs when the run starts (see tester.startEarly)
 }
 
 func (t *tester) run() {
@@ -296,6 +369,7 @@ func (t *tester) run() {
 		t.progress.start()
 	}
 
+	t.startEarly()
 	for _, dt := range t.tests {
 		if !t.shouldRunTest(dt.name) {
 			someExcluded = true
@@ -304,7 +378,13 @@ func (t *tester) run() {
 		anyIncluded = true
 		dt := dt // dt used in background after this iteration
 		queued := len(t.worklist)
-		err := dt.fn(&dt)
+		var err error
+		if early, ok := t.started[dt.name]; ok {
+			t.worklist = append(t.worklist, early.works...)
+			err = early.err
+		} else {
+			err = dt.fn(&dt)
+		}
 		if len(t.worklist) == queued {
 			// The test ran here and is finished. A queued one counts when its command ends.
 			t.markTestDone(dt.name)
@@ -544,6 +624,9 @@ type goTest struct {
 
 	// first starts this test ahead of the rest of its worklist (see work.first).
 	first bool
+
+	// early starts this test when the run starts (see tester.startEarly).
+	early bool
 
 	// alone starts this test once every test queued before it has ended. Its
 	// command fills the machine, so a test beside it gets too little of the
@@ -1346,6 +1429,8 @@ func (t *tester) registerTests() {
 					timeout: 600 * time.Second,
 					env:     []string{"GOFLAGS=" + goFlags},
 					pkgs:    []string{"runtime", "reflect", "sync"},
+					// The hook makes runtime's tests the longest run of the suite, on about one CPU.
+					early: true,
 				})
 		}
 	}
@@ -1526,8 +1611,8 @@ func (t *tester) registerTests() {
 					timeout: 30 * time.Minute,
 					// It runs through go test, not as a shared binary, so
 					// go test caches its result.
-					// The corpus fills every CPU, the way cmd/go does.
-					alone: true,
+					// The corpus waits on the cache and on single long programs, and the package tests fill those gaps.
+					early: true,
 				},
 			)
 		}
@@ -1624,6 +1709,7 @@ func (t *tester) registerTest(heading string, test *goTest, opts ...registerTest
 			t.queue(w, test.alone)
 			return nil
 		})
+		t.tests[len(t.tests)-1].early = test.early
 	}
 	if test.pkg != "" && len(test.pkgs) == 0 {
 		// Common case. Avoid copying.
@@ -2009,8 +2095,15 @@ func (t *tester) runPending(nextTest *distTest) {
 	})
 
 	for _, w := range worklist {
-		w.start = make(chan bool)
 		w.end = make(chan struct{})
+		if w.early {
+			go func(w *work) {
+				<-w.ended
+				w.end <- struct{}{}
+			}(w)
+			continue
+		}
+		w.start = make(chan bool)
 		w.ended = make(chan struct{})
 		// w.cmd must be set up to write to w.out. We can't check that, but we
 		// can check for easy mistakes.
@@ -2022,21 +2115,7 @@ func (t *tester) runPending(nextTest *distTest) {
 				timelog("skip", w.dt.name)
 				w.printSkip(t, "skipped due to earlier error")
 			} else {
-				timelog("start", w.dt.name)
-				w.began = time.Now()
-				w.err = w.cmd.Run()
-				w.elapsed = time.Since(w.began)
-				if w.flush != nil {
-					w.flush()
-				}
-				if w.err != nil {
-					if isUnsupportedVMASize(w) {
-						timelog("skip", w.dt.name)
-						w.out.Reset()
-						w.printSkip(t, "skipped due to unsupported VMA")
-						w.err = nil
-					}
-				}
+				w.execute(t)
 			}
 			timelog("end", w.dt.name)
 			close(w.ended)
@@ -2053,6 +2132,9 @@ func (t *tester) runPending(nextTest *distTest) {
 	keepGoing := t.keepGoing
 	go func() {
 		for _, w := range worklist {
+			if w.early {
+				continue
+			}
 			if w.after != nil && w.after.ended != nil {
 				// The works behind this one start while it waits.
 				go func(waiting *work) {
