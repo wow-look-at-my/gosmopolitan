@@ -80,8 +80,7 @@ func TestProcessLocal(t *testing.T) {
 // so a test that lists it never hit the cache.
 func TestProcessLocalIPCDir(t *testing.T) {
 	t.Serial() // it replaces ipcRuntimeDir
-	// A host with no HOME, such as wasip1, has no user cache directory, and
-	// then no directory is go-ipc's.
+	// A host with no HOME, such as wasip1, has no user cache directory, and then no directory is go-ipc's.
 	wantDir := ""
 	if userCache, err := os.UserCacheDir(); err == nil {
 		wantDir = filepath.Join(userCache, "gosmopolitan", "go-ipc")
