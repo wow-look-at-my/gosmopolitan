@@ -121,3 +121,23 @@ func TestIdentityWords(t *testing.T) {
 		}
 	}
 }
+
+// TestSetupLinesKey: runs that read the same variable values share the saved
+// lines of their setup, whatever file moved. A run whose variables read other
+// values, such as another job's GOCACHE, keeps its own.
+func TestSetupLinesKey(t *testing.T) {
+	var testID [32]byte
+	testlog := []byte("# test log\nopen /a\n")
+	here := []byte("env GOCACHE 01\nopen /a 0a\n")
+	fileMoved := []byte("env GOCACHE 01\nopen /a 0b\n")
+	otherJob := []byte("env GOCACHE 02\nopen /a 0a\n")
+	if setupLinesKey(testID, testlog, here) != setupLinesKey(testID, testlog, fileMoved) {
+		t.Error("a moved file changed the setup key")
+	}
+	if setupLinesKey(testID, testlog, here) == setupLinesKey(testID, testlog, otherJob) {
+		t.Error("another GOCACHE value kept the setup key")
+	}
+	if setupLinesKey(testID, testlog, here) == inputLinesKey(testID, testlog) {
+		t.Error("the setup key is the key every setup shares")
+	}
+}

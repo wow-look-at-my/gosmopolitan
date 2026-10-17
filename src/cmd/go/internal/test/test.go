@@ -2490,7 +2490,7 @@ func (c *runCache) tryCacheWithID(b *work.Builder, a *work.Action, id string) bo
 		}
 		if readErr == nil {
 			saveTestlog(cache.Default(), c.id1, inputList, testlogShape(inputLines), currentShape(a))
-			cache.PutNoVerify(cache.Default(), inputLinesKey(c.id1, inputList), bytes.NewReader(inputLines))
+			saveInputLines(c.id1, inputList, inputLines)
 			cache.PutNoVerify(cache.Default(), testAndInputKey(c.id1, testInputsID), bytes.NewReader(data))
 			if testCoverProfile != "" || c.covMeta != (cache.ActionID{}) {
 				cache.PutNoVerify(cache.Default(), coverProfileAndInputKey(c.id1, testInputsID, c.covMeta), bytes.NewReader(profile))
@@ -2955,6 +2955,37 @@ func inputLinesKey(testID cache.ActionID, testlog []byte) cache.ActionID {
 	return cache.Subkey(testID, fmt.Sprintf("inputlines:%x", sha256.Sum256(testlog)))
 }
 
+// setupLinesKey is where the lines are kept for the runs whose variables
+// read the same values. Another job or branch reads the same testlog with
+// other GOCACHE or GOTMPDIR values. Under inputLinesKey alone, its last run
+// replaces this setup's lines, and an explanation then names variables that
+// did not change here.
+func setupLinesKey(testID cache.ActionID, testlog, lines []byte) cache.ActionID {
+	h := sha256.New()
+	for line := range strings.Lines(string(lines)) {
+		if strings.HasPrefix(line, "env ") {
+			h.Write([]byte(line))
+		}
+	}
+	return cache.Subkey(inputLinesKey(testID, testlog), fmt.Sprintf("setup:%x", h.Sum(nil)))
+}
+
+// saveInputLines keeps lines under both keys that savedInputLines reads.
+func saveInputLines(testID cache.ActionID, testlog, lines []byte) {
+	cache.PutNoVerify(cache.Default(), inputLinesKey(testID, testlog), bytes.NewReader(lines))
+	cache.PutNoVerify(cache.Default(), setupLinesKey(testID, testlog, lines), bytes.NewReader(lines))
+}
+
+// savedInputLines answers the lines saved for testlog by the last run whose
+// variables match now's lines. With none, it answers the last run's of any setup.
+func savedInputLines(testID cache.ActionID, testlog, now []byte) ([]byte, error) {
+	if saved, _, err := cache.GetBytes(cache.Default(), setupLinesKey(testID, testlog, now)); err == nil {
+		return saved, nil
+	}
+	saved, _, err := cache.GetBytes(cache.Default(), inputLinesKey(testID, testlog))
+	return saved, err
+}
+
 // A triedTestlog is a testlog saved under a test ID, and the input lines this
 // run computed from it.
 type triedTestlog struct {
@@ -2973,7 +3004,7 @@ func explainInputsMiss(a *work.Action, testID cache.ActionID, tried []triedTestl
 	var nearest []string
 	var lastErr error
 	for _, candidate := range tried {
-		saved, _, err := cache.GetBytes(cache.Default(), inputLinesKey(testID, candidate.testlog))
+		saved, err := savedInputLines(testID, candidate.testlog, candidate.lines)
 		if err != nil {
 			lastErr = err
 			continue
@@ -3001,7 +3032,7 @@ func explainInputsMiss(a *work.Action, testID cache.ActionID, tried []triedTestl
 	if len(tried) < 2 {
 		return
 	}
-	saved, _, err := cache.GetBytes(cache.Default(), inputLinesKey(testID, tried[0].testlog))
+	saved, err := savedInputLines(testID, tried[0].testlog, tried[0].lines)
 	if err != nil {
 		cache.MissNotice("testcache: %s: newest of %d testlogs: no saved inputs: %v", a.Package.ImportPath, len(tried), err)
 		return
@@ -3483,7 +3514,7 @@ func (c *runCache) saveOutput(a *work.Action) {
 			fmt.Fprintf(os.Stderr, "testcache: %s: save test ID %x => input ID %x => %x\n", a.Package.ImportPath, c.id1, testInputsID, testAndInputKey(c.id1, testInputsID))
 		}
 		saveTestlog(cache.Default(), c.id1, testlog, testlogShape(inputLines), currentShape(a))
-		cache.PutNoVerify(cache.Default(), inputLinesKey(c.id1, testlog), bytes.NewReader(inputLines))
+		saveInputLines(c.id1, testlog, inputLines)
 		cache.PutNoVerify(cache.Default(), testAndInputKey(c.id1, testInputsID), bytes.NewReader(a.TestOutput.Bytes()))
 		if coverProfile != nil {
 			cache.PutNoVerify(cache.Default(), coverProfileAndInputKey(c.id1, testInputsID, c.covMeta), bytes.NewReader(coverProfile))
@@ -3498,7 +3529,7 @@ func (c *runCache) saveOutput(a *work.Action) {
 			fmt.Fprintf(os.Stderr, "testcache: %s: save test ID %x => input ID %x => %x\n", a.Package.ImportPath, c.id2, testInputsID, testAndInputKey(c.id2, testInputsID))
 		}
 		saveTestlog(cache.Default(), c.id2, testlog, testlogShape(inputLines), currentShape(a))
-		cache.PutNoVerify(cache.Default(), inputLinesKey(c.id2, testlog), bytes.NewReader(inputLines))
+		saveInputLines(c.id2, testlog, inputLines)
 		cache.PutNoVerify(cache.Default(), testAndInputKey(c.id2, testInputsID), bytes.NewReader(a.TestOutput.Bytes()))
 		if coverProfile != nil {
 			cache.PutNoVerify(cache.Default(), coverProfileAndInputKey(c.id2, testInputsID, c.covMeta), bytes.NewReader(coverProfile))
