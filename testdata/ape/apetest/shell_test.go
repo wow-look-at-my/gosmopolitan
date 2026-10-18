@@ -151,8 +151,12 @@ func TestShellLooksForNoSidecar(t *testing.T) {
 func TestShellUnpacksTheEmbeddedLoader(t *testing.T) {
 	header := string(first8K(t))
 
-	unpack := regexp.MustCompile(`dd if="\$o" bs=1 skip=(\d+) count=(\d+) 2>/dev/null`)
-	require.True(t, unpack.MatchString(header), "must read the embedded loader out of itself with dd")
+	regions := loaderRegions(t)
+	require.NotEmpty(t, regions, "must read the embedded loader out of itself with dd")
+	for _, region := range regions {
+		// dd counts in blocks, and bs=1 costs a read and a write per byte of the loader.
+		assert.GreaterOrEqual(t, region.block, 512, "must copy the loader at %#x in whole blocks", region.offset)
+	}
 	assert.Contains(t, header, `[ -s "$u" ]`, "an empty unpack must not be exec'd as a loader")
 
 	assert.Contains(t, header, `for d in ${APE_LOADERDIR:-/dev/shm /tmp "${o%/*}"}; do`,

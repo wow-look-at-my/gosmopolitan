@@ -5,8 +5,6 @@ import (
 	"compress/gzip"
 	"debug/elf"
 	"io"
-	"regexp"
-	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -244,21 +242,16 @@ func checkCompactAssimilatedView(t *testing.T, bin, boot []byte, machine elf.Mac
 // to anything else would leave a host with no way to start the program,
 // and the failure would land there rather than here.
 func TestFatApeLoaderEmbedded(t *testing.T) {
-	head := first8K(t)
-	re := regexp.MustCompile(`dd if="\$o" bs=1 skip=(\d+) count=(\d+) 2>/dev/null (\| gzip -dc )?>`)
-	ms := re.FindAllSubmatch(head, -1)
-	require.NotEmpty(t, ms, "the bootstrap script must read its loaders out with real offsets")
+	regions := loaderRegions(t)
+	require.NotEmpty(t, regions, "the bootstrap script must read its loaders out with real offsets")
 
 	bin := loadBinary(t)
-	for _, m := range ms {
-		skip, err := strconv.Atoi(string(m[1]))
-		require.NoError(t, err)
-		count, err := strconv.Atoi(string(m[2]))
-		require.NoError(t, err)
-		require.LessOrEqual(t, skip+count, len(bin), "the loader region must be inside the file")
+	for _, region := range regions {
+		skip := region.offset
+		require.LessOrEqual(t, skip+region.size, len(bin), "the loader region must be inside the file")
 
-		loader := bin[skip : skip+count]
-		if len(m[3]) == 0 {
+		loader := bin[skip : skip+region.size]
+		if !region.gzipped {
 			// Read straight out of the file: a static ELF, the Linux loader.
 			assert.Equal(t, []byte("\x7fELF"), loader[:4], "the loader at %#x must be an ELF", skip)
 			continue
