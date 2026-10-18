@@ -11,7 +11,6 @@ import (
 	"hash"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"sync"
 	"time"
@@ -23,7 +22,7 @@ import (
 // the directory CI keeps between runs.
 
 // distCacheVersion changes when the key loses an input it needs.
-const distCacheVersion = "dist-cache-2"
+const distCacheVersion = "dist-cache-1"
 
 // distCacheEnv lists the variables that change what the tools write.
 var distCacheEnv = []string{
@@ -132,14 +131,24 @@ type distKey struct{ h hash.Hash }
 func newDistKey() *distKey {
 	key := &distKey{h: sha256.New()}
 	key.add(distCacheVersion)
-	// dist is its own source built by the bootstrap toolchain. A cosmo dist
-	// on Linux cannot always name its own file, so the key holds both inputs.
-	key.add("dist", runtime.Version())
-	key.dir(pathf("%s/src/cmd/dist", goroot))
+	key.add("dist", distSelfDigest())
 	for _, name := range distCacheEnv {
 		key.add(name, os.Getenv(name))
 	}
 	return key
+}
+
+// distSelfDigest keys dist by its sources, not by its binary. Under the APE
+// loader os.Executable can find no path for dist, and the sources fix what dist does.
+var distSelfDigest = sync.OnceValue(func() string {
+	return dirDigest(pathf("%s/src/cmd/dist", goroot))
+})
+
+// dirDigest is the digest of every file of dir, by name and contents.
+func dirDigest(dir string) string {
+	key := &distKey{h: sha256.New()}
+	key.dir(dir)
+	return key.sum()
 }
 
 // add writes each part with its length, so no two lists of parts collide.

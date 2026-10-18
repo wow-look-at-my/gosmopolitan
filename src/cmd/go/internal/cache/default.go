@@ -25,31 +25,22 @@ var initDefaultCacheOnce = sync.OnceValue(initDefaultCache)
 // DefaultIfEnabled returns the default cache, or nil when GOCACHE is off or
 // names no usable directory. A caller that only speeds work up uses it.
 func DefaultIfEnabled() Cache {
-	if dir, _, err := DefaultDir(); err != nil || dir == "off" {
-		return nil
-	}
-	return Default()
-}
-
-// Prewarm opens the default cache early, so its index download overlaps the
-// loading of modules. It opens only a cache it can create and write. Any other
-// cache is left for the first caller that needs one, and that caller reports
-// the failure. A command that never reads the cache then still runs.
-func Prewarm() {
 	dir, _, err := DefaultDir()
 	if err != nil || dir == "off" {
-		return
+		return nil
 	}
+	// Default ends the process when it cannot make or write the directory, so
+	// a directory this caller cannot create or write means no cache.
 	if err := os.MkdirAll(dir, 0o777); err != nil {
-		return
+		return nil
 	}
-	probe, err := os.CreateTemp(dir, ".prewarm-*")
+	probe, err := os.CreateTemp(dir, ".probe-*")
 	if err != nil {
-		return
+		return nil
 	}
 	probe.Close()
 	os.Remove(probe.Name())
-	Default()
+	return Default()
 }
 
 // cacheREADME is a message stored in a README in the cache directory.
