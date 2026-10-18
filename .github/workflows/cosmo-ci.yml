@@ -1048,6 +1048,7 @@ jobs:
     permissions:
       contents: read
       actions: write
+      id-token: write
     steps:
       - uses: wow-look-at-my/actions@cache-cleanup#latest
         if: always()
