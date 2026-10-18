@@ -4,7 +4,9 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"regexp"
 	"runtime"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -47,6 +49,35 @@ func first8K(t *testing.T) []byte {
 		return bin
 	}
 	return bin[:8192]
+}
+
+// loaderRegion is one dd the bootstrap script runs to copy an embedded loader out.
+type loaderRegion struct {
+	block, offset, size int
+	gzipped             bool
+}
+
+var loaderDD = regexp.MustCompile(`dd if="\$o" bs=(\d+) skip=(\d+) count=(\d+) 2>/dev/null (\| gzip -dc )?>`)
+
+// loaderRegions reads every loader copy out of the script, with dd's block counts turned into bytes.
+func loaderRegions(t *testing.T) []loaderRegion {
+	t.Helper()
+	var out []loaderRegion
+	for _, match := range loaderDD.FindAllSubmatch(first8K(t), -1) {
+		var nums [3]int
+		for idx := range nums {
+			num, err := strconv.Atoi(string(match[idx+1]))
+			require.NoError(t, err)
+			nums[idx] = num
+		}
+		out = append(out, loaderRegion{
+			block:   nums[0],
+			offset:  nums[0] * nums[1],
+			size:    nums[0] * nums[2],
+			gzipped: len(match[4]) != 0,
+		})
+	}
+	return out
 }
 
 func le16(b []byte) uint16 { return uint16(b[0]) | uint16(b[1])<<8 }
