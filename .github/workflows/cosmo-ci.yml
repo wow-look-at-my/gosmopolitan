@@ -1046,6 +1046,7 @@ jobs:
     timeout-minutes: ${{ github.ref == 'refs/heads/master' && 20 || 10 }}
     runs-on: ${{ github.event.repository.visibility == 'public' && 'ubuntu-latest' || vars.CI_RUNNER || 'ubuntu-latest' }}
     permissions:
+      id-token: write
       contents: read
       actions: write
       id-token: write
