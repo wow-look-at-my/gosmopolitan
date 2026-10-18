@@ -6,13 +6,73 @@ package ld
 import (
 	"bytes"
 	"cmd/internal/cosmoape"
+	"compress/gzip"
 	"crypto/sha256"
 	"debug/elf"
 	"debug/macho"
 	"encoding/base64"
 	"encoding/hex"
+	"io"
+	"math/rand"
 	"testing"
 )
+
+// TestApeLoaderRegionsAreWholeBlocks holds what lets the script copy a loader
+// with a large dd block: the region starts on a block and fills whole blocks.
+// What dd copies must still be the loader. A gzip stream must end exactly at
+// the region's end, because gzip on macOS fails on bytes past it.
+func TestApeLoaderRegionsAreWholeBlocks(t *testing.T) {
+	for _, l := range apeLoadersFor(apeAllLoaderPlatforms()) {
+		if l.offset%apeLoaderBlock != 0 || len(l.blob)%apeLoaderBlock != 0 {
+			t.Errorf("%s spans %d bytes at %#x, not whole %d-byte blocks", l.name, len(l.blob), l.offset, apeLoaderBlock)
+			continue
+		}
+		bin := apeLoaderBins()[l.name]
+		got := l.blob
+		if l.gzip {
+			got = apeGunzip(t, l.name, l.blob)
+		} else if !bytes.Equal(got[len(bin):], make([]byte, len(got)-len(bin))) {
+			t.Errorf("%s is padded with bytes that are not zero", l.name)
+		} else {
+			got = got[:len(bin)]
+		}
+		if !bytes.Equal(got, bin) {
+			t.Errorf("the %s region does not hold the loader", l.name)
+		}
+	}
+}
+
+// TestApeGzipPadsEveryLength runs the padding over input sizes. Those
+// sizes cover every compressed length modulo a block, the edge where the
+// comment must fill a whole block included.
+func TestApeGzipPadsEveryLength(t *testing.T) {
+	rng := rand.New(rand.NewSource(1))
+	data := make([]byte, 3*apeLoaderBlock)
+	rng.Read(data)
+	for size := 0; size <= len(data); size++ {
+		stream := apeGzip(data[:size], "test")
+		if len(stream)%apeLoaderBlock != 0 {
+			t.Fatalf("a %d-byte input packs to %d bytes, not whole blocks", size, len(stream))
+		}
+		if got := apeGunzip(t, "test", stream); !bytes.Equal(got, data[:size]) {
+			t.Fatalf("a %d-byte input does not survive the round trip", size)
+		}
+	}
+}
+
+// apeGunzip decompresses blob and fails on any byte after the stream.
+func apeGunzip(t *testing.T, name string, blob []byte) []byte {
+	t.Helper()
+	zr, err := gzip.NewReader(bytes.NewReader(blob))
+	if err != nil {
+		t.Fatalf("%s: %v", name, err)
+	}
+	out, err := io.ReadAll(zr)
+	if err != nil {
+		t.Fatalf("%s does not decompress cleanly: %v", name, err)
+	}
+	return out
+}
 
 // Each loader's SHA-256. cmd/dist builds the loaders reproducibly, so a
 // change to a loader's source updates its pin in the same commit. A loader
