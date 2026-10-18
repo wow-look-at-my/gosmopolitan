@@ -230,19 +230,21 @@ const apeLoaderDirs = `${APE_LOADERDIR:-/dev/shm /tmp "${o%/*}"}`
 // stops being a reason the binary cannot start.
 func writeLoaderBoot(script *bytes.Buffer, l *apeLoader) {
 	data := struct {
-		Name   string
-		Dirs   string
-		Tag    string
-		Offset int
-		Length int
-		Gzip   bool
+		Name  string
+		Dirs  string
+		Tag   string
+		Block int
+		Skip  int
+		Count int
+		Gzip  bool
 	}{
-		Name:   l.name,
-		Dirs:   apeLoaderDirs,
-		Tag:    l.tag,
-		Offset: l.offset,
-		Length: len(l.blob),
-		Gzip:   l.gzip,
+		Name:  l.name,
+		Dirs:  apeLoaderDirs,
+		Tag:   l.tag,
+		Block: apeLoaderBlock,
+		Skip:  l.offset / apeLoaderBlock,
+		Count: len(l.blob) / apeLoaderBlock,
+		Gzip:  l.gzip,
 	}
 	writeLoaderSearch(script, l.name)
 	if err := apeLoaderTmpl.Execute(script, data); err != nil {
@@ -293,7 +295,7 @@ var apeLoaderTmpl = template.Must(template.New("apeloader").Parse(
 	`  for d in {{.Dirs}}; do
     [ -d "$d" ] && [ -w "$d" ] || continue
     u=$d/.ape-$l-{{.Tag}}.$$
-    dd if="$o" bs=1 skip={{.Offset}} count={{.Length}} 2>/dev/null {{if .Gzip}}| gzip -dc {{end}}>"$u" 2>/dev/null || { rm -f "$u"; continue; }
+    dd if="$o" bs={{.Block}} skip={{.Skip}} count={{.Count}} 2>/dev/null {{if .Gzip}}| gzip -dc {{end}}>"$u" 2>/dev/null || { rm -f "$u"; continue; }
     { [ -s "$u" ] && chmod 700 "$u" && [ -x "$u" ]; } || { rm -f "$u"; continue; }
     "$u" >/dev/null 2>&1; [ $? -eq 127 ] || { rm -f "$u"; continue; }
     if [ -z "${APE_NOBINFMT:-}" ] && apereg "$u"; then
