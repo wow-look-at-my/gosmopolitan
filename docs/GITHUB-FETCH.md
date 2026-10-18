@@ -71,9 +71,7 @@ The remote must be exactly `https://github.com/<owner>/<repo>` (with or without 
 
 An API request may only reach its own host: api.github.com, github-state-mirror.pazer.io or proxy.pazer.ai.
 
-A signed archive URL must be on codeload.github.com.
-
-A commit that no ref names, such as the commit of a pseudo-version, comes from the archive of that commit, `/archive/<commit>.tar.gz`. A hash prefix works: the archive names the full hash. Only a missing archive goes to git, which fetches every branch and tag.
+An archive serves only a commit that a branch or a tag contains. The git path has the same rule, so an unmerged pull request commit cannot pose as a pseudo-version. A commit that no ref names, such as the commit of a pseudo-version, is checked with the REST compare of that commit. This is HEAD (`/repos/<owner>/<repo>/compare/<commit>...<HEAD>`, from the same API sources as the ref list). Status `ahead` or `identical` means the default branch contains it, and its archive is fetched. Any other answer, or no answer, goes to git, which fetches every branch and tag.
 
 The archive is used as GitHub serves it. It omits the commit of each submodule and applies `export-ignore` and `export-subst`, so such a module hashes differently than over git.
 
