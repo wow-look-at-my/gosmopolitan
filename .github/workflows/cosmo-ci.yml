@@ -1047,6 +1047,8 @@ jobs:
     permissions:
       contents: read
       actions: write
+      # cache-cleanup reaches buildhost and secret-server through the run's OIDC token.
+      id-token: write
     steps:
       - uses: wow-look-at-my/actions@cache-cleanup#latest
         if: always()
