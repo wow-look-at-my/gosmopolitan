@@ -443,8 +443,8 @@ func Init() {
 		return
 	}
 	initRan = true
-	// Accepted so existing command lines parse. Short ignores it.
-	short = flag.Bool("test.short", false, "accepted and ignored: every test runs its short path")
+	short = flag.Bool("test.short", false, "run smaller test suite to save time")
+	mayMoreStackHook = strings.Contains(os.Getenv("GOFLAGS"), "-d=maymorestack=")
 
 	// The failfast flag requests that test execution stop after the first test failure.
 	failFast = flag.Bool("test.failfast", false, "do not start new tests after the first test failure")
@@ -749,11 +749,14 @@ type common struct {
 	cancelCtx context.CancelFunc
 }
 
-// Short reports true: every test runs its short path. The long variants
-// mostly repeat the short ones with a larger count, and this toolchain
-// keeps its suite within a runner's budget by not running them.
+// mayMoreStackHook reports whether GOFLAGS compiled a maymorestack hook into this binary.
+var mayMoreStackHook bool
+
+// Short reports whether the -test.short flag is set, or a maymorestack hook
+// runs. The hook yields or moves the stack at every call, so only the tests'
+// short paths fit that run even when -test.short is not set.
 func Short() bool {
-	return true
+	return *short || mayMoreStackHook
 }
 
 // testBinary is set by cmd/go to "1" if this is a binary built by "go test".
