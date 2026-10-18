@@ -805,7 +805,7 @@ jobs:
 
       - name: Download the log-streamer client
         id: lsclient
-        uses: wow-look-at-my/buildhost/.github/actions/buildhost-download@master
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-download@lkgb
         with:
           project: log-streamer/ls-client
           token: ${{ steps.lstoken.outputs.token }}
