@@ -35,6 +35,14 @@ env GOCACHE=$WORK/unwritable/home
 ! go build -o triv triv.go
 stderr 'failed to initialize build cache.* permission denied'
 
+# A command that never reads the cache runs without one, whether the cache
+# directory is unwritable or cannot be created at all.
+go list runtime
+stdout '^runtime$'
+env GOCACHE=$WORK/unwritable/home/go-build
+go list runtime
+stdout '^runtime$'
+
 -- triv.go --
 package main
 func main() {}

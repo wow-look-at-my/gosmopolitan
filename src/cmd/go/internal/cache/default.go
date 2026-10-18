@@ -31,6 +31,27 @@ func DefaultIfEnabled() Cache {
 	return Default()
 }
 
+// Prewarm opens the default cache early, so its index download overlaps the
+// loading of modules. It opens only a cache it can create and write. Any other
+// cache is left for the first caller that needs one, and that caller reports
+// the failure. A command that never reads the cache then still runs.
+func Prewarm() {
+	dir, _, err := DefaultDir()
+	if err != nil || dir == "off" {
+		return
+	}
+	if err := os.MkdirAll(dir, 0o777); err != nil {
+		return
+	}
+	probe, err := os.CreateTemp(dir, ".prewarm-*")
+	if err != nil {
+		return
+	}
+	probe.Close()
+	os.Remove(probe.Name())
+	Default()
+}
+
 // cacheREADME is a message stored in a README in the cache directory.
 // Because the cache lives outside the normal Go trees, we leave the
 // README as a courtesy to explain where it came from.

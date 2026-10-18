@@ -345,7 +345,7 @@ func invoke(cmd *base.Command, args []string) {
 	switch cfg.CmdName {
 	case "build", "install", "test", "run", "vet", "list":
 		if !cfg.BuildN && !(cmd.CustomFlags && printsOnly(args)) {
-			go cache.Default()
+			go cache.Prewarm()
 		}
 	}
 
