@@ -17,6 +17,7 @@ import (
 
 	"golang.org/x/mod/module"
 	"golang.org/x/mod/sumdb/dirhash"
+	modzip "golang.org/x/mod/zip"
 )
 
 // A module zip whose h1 sum is known comes from the build cache before any
@@ -92,6 +93,20 @@ func zipToCache(c cache.Cache, mod module.Version, zipfile, sum string) {
 		return
 	}
 	cache.PutBytes(c, zipCacheKey(mod, sum), data)
+}
+
+// filesToCache stores a zip of files, whose h1 sum is sum, for the next build.
+// A module from a GitHub archive has no zip of its own, so without this every
+// build downloads it again.
+func filesToCache(c cache.Cache, mod module.Version, files []modzip.File, sum string) {
+	if c == nil || !strings.HasPrefix(sum, "h1:") {
+		return
+	}
+	var buf bytes.Buffer
+	if err := modzip.Create(&buf, mod, files); err != nil {
+		return
+	}
+	cache.PutBytes(c, zipCacheKey(mod, sum), buf.Bytes())
 }
 
 // goModCacheKey is the cache key of the go.mod of path@version whose h1 sum is sum.

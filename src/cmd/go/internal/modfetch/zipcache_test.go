@@ -16,6 +16,7 @@ import (
 	"github.com/wow-look-at-my/go-s3-server/cacheclient"
 	"golang.org/x/mod/module"
 	"golang.org/x/mod/sumdb/dirhash"
+	modzip "golang.org/x/mod/zip"
 )
 
 // zipCacheFixture is a module zip, its go.mod, and a fetcher whose go.sum
@@ -98,6 +99,26 @@ func TestZipFromCache(t *testing.T) {
 	got, err := os.ReadFile(out)
 	if err != nil || !bytes.Equal(got, want) {
 		t.Fatalf("zipFromCache wrote %d bytes, want the %d bytes stored (%v)", len(got), len(want), err)
+	}
+	hash, err := os.ReadFile(out + "hash")
+	if err != nil || string(hash) != fx.zipSum {
+		t.Fatalf("ziphash = %q (%v), want %q", hash, err, fx.zipSum)
+	}
+}
+
+// TestFilesToCache: a module written from a GitHub archive has no zip, and
+// its files still come from the cache for the next build, as a zip that
+// hashes to the sum go.sum records.
+func TestFilesToCache(t *testing.T) {
+	fx := newZipCacheFixture(t)
+	files := []modzip.File{
+		dataFile{name: "go.mod", data: fx.goMod},
+		dataFile{name: "lib.go", data: []byte("package zipcache\n")},
+	}
+	filesToCache(fx.store, fx.mod, files, fx.zipSum)
+	out := filepath.Join(fx.dir, "v1.0.0.zip")
+	if !fx.fetcher.zipFromCache(context.Background(), fx.store, fx.mod, out, out+"hash") {
+		t.Fatal("zipFromCache missed the files an archive fetch stored")
 	}
 	hash, err := os.ReadFile(out + "hash")
 	if err != nil || string(hash) != fx.zipSum {

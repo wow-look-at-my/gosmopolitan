@@ -501,6 +501,7 @@ func (f *Fetcher) writeFiles(ctx context.Context, mod module.Version, files []mo
 	if err := checkModSum(f, mod, hash); err != nil {
 		return err
 	}
+	h1 := hash
 	if IsGitSum(hash) {
 		sum, err := moduleFilesSum(mod, valid)
 		if err != nil {
@@ -513,7 +514,9 @@ func (f *Fetcher) writeFiles(ctx context.Context, mod module.Version, files []mo
 		if err := writeZiphash(record, sum); err != nil {
 			return err
 		}
+		h1 = sum
 	}
+	filesToCache(cache.DefaultIfEnabled(), mod, valid, h1)
 
 	_, err = populateDir(ctx, mod, func(dir string) error {
 		return writeModuleFiles(dir, valid)
