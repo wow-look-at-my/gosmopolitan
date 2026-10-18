@@ -85,17 +85,13 @@ func (s *httpStore) Claim(ctx context.Context, key RunLockKey, version string) (
 	return answer.Value, nil
 }
 
-// httpStoreAttempts bounds the requests do sends for one call. Only a request
-// that got no answer is sent again: Lookup reads, and Claim returns the version
-// the store holds whether or not this claim set it, so a repeat changes nothing.
+// httpStoreAttempts bounds the requests do sends for one call.
 const httpStoreAttempts = 4
 
-// httpStoreRetryDelay is the wait before the given retry, counting from 1.
+// httpStoreRetryDelay is the wait before the given retry.
 func httpStoreRetryDelay(retry int) time.Duration { return time.Duration(retry) * 2 * time.Second }
 
-// A transportError is a request that got no answer: the connection, the TLS
-// handshake or the read failed. A transient status is one too: the store
-// answered that it cannot serve the request now.
+// A transportError is a request that got no answer, or a transient status.
 type transportError struct{ err error }
 
 func (e transportError) Error() string { return e.err.Error() }
