@@ -11,6 +11,7 @@ import (
 	"hash"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"sync"
 	"time"
@@ -22,7 +23,7 @@ import (
 // the directory CI keeps between runs.
 
 // distCacheVersion changes when the key loses an input it needs.
-const distCacheVersion = "dist-cache-1"
+const distCacheVersion = "dist-cache-2"
 
 // distCacheEnv lists the variables that change what the tools write.
 var distCacheEnv = []string{
@@ -131,11 +132,10 @@ type distKey struct{ h hash.Hash }
 func newDistKey() *distKey {
 	key := &distKey{h: sha256.New()}
 	key.add(distCacheVersion)
-	self, err := os.Executable()
-	if err != nil {
-		fatalf("dist cache: %v", err)
-	}
-	key.add("dist", toolDigest(self))
+	// dist is its own source built by the bootstrap toolchain. A cosmo dist
+	// on Linux cannot always name its own file, so the key holds both inputs.
+	key.add("dist", runtime.Version())
+	key.dir(pathf("%s/src/cmd/dist", goroot))
 	for _, name := range distCacheEnv {
 		key.add(name, os.Getenv(name))
 	}
