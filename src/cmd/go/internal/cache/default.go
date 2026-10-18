@@ -25,7 +25,12 @@ var initDefaultCacheOnce = sync.OnceValue(initDefaultCache)
 // DefaultIfEnabled returns the default cache, or nil when GOCACHE is off or
 // names no usable directory. A caller that only speeds work up uses it.
 func DefaultIfEnabled() Cache {
-	if dir, _, err := DefaultDir(); err != nil || dir == "off" {
+	dir, _, err := DefaultDir()
+	if err != nil || dir == "off" {
+		return nil
+	}
+	// Default ends the process when it cannot make the directory, so a directory this caller cannot create means no cache.
+	if err := os.MkdirAll(dir, 0o777); err != nil {
 		return nil
 	}
 	return Default()
