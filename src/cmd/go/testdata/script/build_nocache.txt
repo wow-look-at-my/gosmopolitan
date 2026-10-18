@@ -22,7 +22,8 @@ env GOCACHE=off
 ! go build -o triv triv.go
 stderr 'build cache is disabled by GOCACHE=off'
 
-# If GOCACHE is set to an unwritable directory, we should diagnose it as such.
+# If GOCACHE names a directory the user cannot write, the build uses a
+# writable one and says which.
 [GOOS:windows] stop # Does not support unwritable directories.
 [root] skip # Can write to unwritable directories.
 
@@ -30,18 +31,19 @@ mkdir $WORK/unwritable/home
 chmod 0555 $WORK/unwritable/home
 [!GOOS:plan9] env HOME=$WORK/unwritable/home
 [GOOS:plan9] env home=$WORK/unwritable/home
+env XDG_CACHE_HOME=
 
 env GOCACHE=$WORK/unwritable/home
-! go build -o triv triv.go
-stderr 'failed to initialize build cache.* permission denied'
+go build -o triv triv.go
+stderr 'GOCACHE .*unwritable/home is not writable .*; using '
+go env GOCACHE
+! stdout 'unwritable'
 
-# A command that never reads the cache runs without one, whether the cache
-# directory is unwritable or cannot be created at all.
-go list runtime
-stdout '^runtime$'
+# A cache directory that cannot be created takes the same fallback.
 env GOCACHE=$WORK/unwritable/home/go-build
 go list runtime
 stdout '^runtime$'
+stderr 'GOCACHE .*unwritable/home/go-build is not writable .*; using '
 
 -- triv.go --
 package main
