@@ -121,16 +121,51 @@ func (c *Command) Runnable() bool {
 	return c.Run != nil
 }
 
-var atExitFuncs []func()
+var (
+	atExitMu    sync.Mutex
+	atExitFuncs []func()
+	exiting     bool
+)
 
 func AtExit(f func()) {
+	OnExit(f)
+}
+
+// OnExit registers f like AtExit. It reports false, and registers nothing,
+// once the go command has started to exit: a caller about to create state that
+// only f removes must then not create it.
+func OnExit(f func()) bool {
+	atExitMu.Lock()
+	defer atExitMu.Unlock()
+	if exiting {
+		return false
+	}
 	atExitFuncs = append(atExitFuncs, f)
+	return true
+}
+
+// RunAtExit runs every AtExit function a single time. The go command calls it
+// as it exits, and before it replaces its own process image with another
+// toolchain. From then on OnExit refuses.
+func RunAtExit() {
+	atExitMu.Lock()
+	exiting = true
+	atExitMu.Unlock()
+	for idx := 0; ; idx++ {
+		atExitMu.Lock()
+		if idx >= len(atExitFuncs) {
+			atExitFuncs = nil
+			atExitMu.Unlock()
+			return
+		}
+		f := atExitFuncs[idx]
+		atExitMu.Unlock()
+		f()
+	}
 }
 
 func Exit() {
-	for _, f := range atExitFuncs {
-		f()
-	}
+	RunAtExit()
 	os.Exit(exitStatus)
 }
 

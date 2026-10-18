@@ -50,14 +50,17 @@ func execGoToolchain(gotoolchain, dir, exe string) {
 		if err != nil {
 			if e, ok := err.(*exec.ExitError); ok && e.ProcessState != nil {
 				if e.ProcessState.Exited() {
-					os.Exit(e.ProcessState.ExitCode())
+					base.SetExitStatus(e.ProcessState.ExitCode())
+					base.Exit()
 				}
 				base.Fatalf("exec %s: %s", gotoolchain, e.ProcessState)
 			}
 			base.Fatalf("exec %s: %s", exe, err)
 		}
-		os.Exit(0)
+		base.Exit()
 	}
+	// The new image runs no AtExit function of this one, so this one runs them now: the cache broker unlinks its names.
+	base.RunAtExit()
 	err := syscall.Exec(exe, os.Args, os.Environ())
 	base.Fatalf("exec %s: %v", gotoolchain, err)
 }
