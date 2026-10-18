@@ -27,17 +27,14 @@ import (
 // openCache opens the directory, puts the store under it when one is
 // configured, and serves the result to the go commands this starts.
 func openCache(dir string) (Cache, error) {
-	// The cleanup is registered before the broker exists, and an exit waits for the open, so no exit path leaves the broker's names behind.
-	opened := make(chan struct{})
+	// The cleanup is registered before the broker exists. An exit during the open does not wait for it: StopBroker makes the open serve no broker.
 	if !base.OnExit(func() {
-		<-opened
 		cacheclient.CloseStore()
 		cacheclient.Exit()
 	}) {
 		// The go command is exiting, and a broker created now would outlive it. os.Exit ends this goroutine.
 		select {}
 	}
-	defer close(opened)
 	store, err := openStore(dir)
 	if err != nil {
 		return nil, err
