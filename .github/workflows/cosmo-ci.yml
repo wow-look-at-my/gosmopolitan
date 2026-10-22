@@ -497,7 +497,7 @@ jobs:
         uses: wow-look-at-my/buildhost/.github/actions/buildhost-handoff@lkgb
         with:
           mode: receive
-          name:toolchain-Linux
+          name: toolchain-Linux
           path: .
 
       # The restore rewrites LFS files, and a sandboxed git cannot run the LFS clean filter on a read-only .git.
@@ -578,14 +578,14 @@ jobs:
         uses: wow-look-at-my/buildhost/.github/actions/buildhost-handoff@lkgb
         with:
           mode: receive
-          name:ape-binary-Linux
+          name: ape-binary-Linux
           path: binaries/ape-binary-Linux
 
       - name: Download the macOS-origin APE binaries
         uses: wow-look-at-my/buildhost/.github/actions/buildhost-handoff@lkgb
         with:
           mode: receive
-          name:ape-binary-macOS
+          name: ape-binary-macOS
           path: binaries/ape-binary-macOS
 
       # Only an NT leg produces this origin, and only NT's own apetest case reads it.
@@ -594,7 +594,7 @@ jobs:
         uses: wow-look-at-my/buildhost/.github/actions/buildhost-handoff@lkgb
         with:
           mode: receive
-          name:ape-binary-Windows
+          name: ape-binary-Windows
           path: binaries/ape-binary-Windows
 
       # Prefetched separately so a stalled module download can't masquerade as a hung test step.
@@ -710,7 +710,7 @@ jobs:
         uses: wow-look-at-my/buildhost/.github/actions/buildhost-handoff@lkgb
         with:
           mode: receive
-          name:toolchain-Linux
+          name: toolchain-Linux
           path: .
 
       - name: The restored go answers
@@ -789,7 +789,7 @@ jobs:
         uses: wow-look-at-my/buildhost/.github/actions/buildhost-handoff@lkgb
         with:
           mode: receive
-          name:toolchain-Linux
+          name: toolchain-Linux
           path: .
 
       - name: The restored go answers
@@ -975,7 +975,7 @@ jobs:
         uses: wow-look-at-my/buildhost/.github/actions/buildhost-handoff@lkgb
         with:
           mode: receive
-          name:distpack-${{ matrix.goos }}-${{ matrix.goarch }}
+          name: distpack-${{ matrix.goos }}-${{ matrix.goarch }}
           path: distpack
 
       # buildhost-upload-artifact takes an exact file path, and the name carries the version the build leg stamped.
