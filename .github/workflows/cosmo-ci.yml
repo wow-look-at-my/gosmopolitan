@@ -77,7 +77,7 @@ jobs:
 
       # toolchain1 and toolchain2 build with no shared cache. Kept, they take 2.4s instead of 88s.
       - name: Restore the bootstrap build cache
-        uses: actions/cache/restore@v4
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-cache-restore@lkgb
         with:
           path: pkg/obj/go-build
           key: dist-bootstrap-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
@@ -112,7 +112,7 @@ jobs:
       # The upload takes up to a minute. A build that added no entry and trimmed none has nothing new to keep.
       - name: Keep the bootstrap build cache between runs
         if: steps.bootstrap-before.outputs.files != steps.bootstrap-after.outputs.files
-        uses: actions/cache/save@v4
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-cache-save@lkgb
         with:
           path: pkg/obj/go-build
           key: dist-bootstrap-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
@@ -153,7 +153,7 @@ jobs:
 
       # toolchain1 and toolchain2 build with no shared cache. Kept, they take 2.4s instead of 88s.
       - name: Restore the bootstrap build cache
-        uses: actions/cache/restore@v4
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-cache-restore@lkgb
         with:
           path: pkg/obj/go-build
           key: dist-bootstrap-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
@@ -185,7 +185,7 @@ jobs:
       # The upload takes up to a minute. A build that added no entry and trimmed none has nothing new to keep.
       - name: Keep the bootstrap build cache between runs
         if: steps.bootstrap-before.outputs.files != steps.bootstrap-after.outputs.files
-        uses: actions/cache/save@v4
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-cache-save@lkgb
         with:
           path: pkg/obj/go-build
           key: dist-bootstrap-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
@@ -775,10 +775,10 @@ jobs:
         shell: bash
         run: curl -sSfL https://wasmtime.dev/install.sh | bash -s -- --version v14.0.4
 
-      # wasmtime compiles each test binary's module before running it. That compile is most of a cheap package: sort.test costs 2.53s cold against 1.05s warm. Every branch reads the cache. Only master writes it, and it keeps one copy: an entry is 4.6 GiB against the repository's 10 GiB.
+      # wasmtime compiles each test binary's module before running it. That compile is most of a cheap package: sort.test costs 2.53s cold against 1.05s warm. Every branch reads the cache. Only master writes it, because an entry is 4.6 GiB.
       - name: Keep the compiled wasm modules between runs
         if: matrix.port == 'wasip1'
-        uses: actions/cache/restore@v4
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-cache-restore@lkgb
         with:
           path: ~/.cache/wasmtime
           key: wasmtime-modules-${{ matrix.port }}-${{ github.sha }}
@@ -914,7 +914,7 @@ jobs:
 
       - name: Save the compiled wasm modules
         if: matrix.port == 'wasip1' && github.ref == 'refs/heads/master'
-        uses: actions/cache/save@v4
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-cache-save@lkgb
         with:
           path: ~/.cache/wasmtime
           key: wasmtime-modules-${{ matrix.port }}-${{ github.sha }}
