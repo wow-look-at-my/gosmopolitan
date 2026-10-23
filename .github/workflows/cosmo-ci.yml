@@ -34,9 +34,6 @@ jobs:
         with:
           tests: dats/source
 
-      - if: failure()
-        uses: wow-look-at-my/actions@fail-fast#latest
-
   # Build Go toolchain and APE test binary on each build platform -- see docs/CI.md "build job".
   build:
     # make.bash plus the APE builds; the suite is its own job.
@@ -77,7 +74,7 @@ jobs:
 
       # toolchain1 and toolchain2 build with no shared cache. Kept, they take 2.4s instead of 88s.
       - name: Restore the bootstrap build cache
-        uses: actions/cache/restore@v4
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-cache-restore@lkgb
         with:
           path: pkg/obj/go-build
           key: dist-bootstrap-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
@@ -112,15 +109,12 @@ jobs:
       # The upload takes up to a minute. A build that added no entry and trimmed none has nothing new to keep.
       - name: Keep the bootstrap build cache between runs
         if: steps.bootstrap-before.outputs.files != steps.bootstrap-after.outputs.files
-        uses: actions/cache/save@v4
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-cache-save@lkgb
         with:
           path: pkg/obj/go-build
           key: dist-bootstrap-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
 
       - uses: ./.github/actions/build-leg
-
-      - if: failure()
-        uses: wow-look-at-my/actions@fail-fast#latest
 
   # The ubuntu build leg, its own job so cosmo-checks, wasm and wasm-suite take its toolchain the moment it exists: needs waits. On a whole matrix.
   build-linux:
@@ -153,7 +147,7 @@ jobs:
 
       # toolchain1 and toolchain2 build with no shared cache. Kept, they take 2.4s instead of 88s.
       - name: Restore the bootstrap build cache
-        uses: actions/cache/restore@v4
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-cache-restore@lkgb
         with:
           path: pkg/obj/go-build
           key: dist-bootstrap-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
@@ -185,15 +179,12 @@ jobs:
       # The upload takes up to a minute. A build that added no entry and trimmed none has nothing new to keep.
       - name: Keep the bootstrap build cache between runs
         if: steps.bootstrap-before.outputs.files != steps.bootstrap-after.outputs.files
-        uses: actions/cache/save@v4
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-cache-save@lkgb
         with:
           path: pkg/obj/go-build
           key: dist-bootstrap-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
 
       - uses: ./.github/actions/build-leg
-
-      - if: failure()
-        uses: wow-look-at-my/actions@fail-fast#latest
 
   # The whole suite per host, one leg each; nothing downstream of a build waits on it.
   suite:
@@ -242,8 +233,9 @@ jobs:
       - uses: ./.github/actions/apeld-tools
 
       - name: Take the toolchain its build leg built
-        uses: wow-look-at-my/actions@cache-download#latest
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-handoff@lkgb
         with:
+          mode: receive
           name: toolchain-${{ runner.os }}
           path: .
 
@@ -470,9 +462,6 @@ jobs:
             fs.appendFileSync(summaryPath, lines.join('\n') + '\n');
             core.info(`recorded ${rows.length} package timings`);
 
-      - if: failure()
-        uses: wow-look-at-my/actions@fail-fast#latest
-
   # Checks whose answer does not depend on the host. Each runs once, here, on the linux toolchain.
   cosmo-checks:
     timeout-minutes: ${{ github.ref == 'refs/heads/master' && 120 || 60 }}
@@ -493,8 +482,9 @@ jobs:
       - uses: ./.github/actions/track-submodules
 
       - name: Take the toolchain build-linux built
-        uses: wow-look-at-my/actions@cache-download#latest
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-handoff@lkgb
         with:
+          mode: receive
           name: toolchain-Linux
           path: .
 
@@ -536,9 +526,6 @@ jobs:
         with:
           tests: dats/checks
 
-      - if: failure()
-        uses: wow-look-at-my/actions@fail-fast#latest
-
   # Test all APE binaries on each platform using Go tests -- see docs/CI.md "test job".
   test:
     # NT links more and links it slower, so it gets 40 minutes where the others get 25.
@@ -573,22 +560,25 @@ jobs:
           cache: false
 
       - name: Download the ubuntu-origin APE binaries
-        uses: wow-look-at-my/actions@cache-download#latest
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-handoff@lkgb
         with:
+          mode: receive
           name: ape-binary-Linux
           path: binaries/ape-binary-Linux
 
       - name: Download the macOS-origin APE binaries
-        uses: wow-look-at-my/actions@cache-download#latest
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-handoff@lkgb
         with:
+          mode: receive
           name: ape-binary-macOS
           path: binaries/ape-binary-macOS
 
       # Only an NT leg produces this origin, and only NT's own apetest case reads it.
       - name: Download the windows-origin APE binaries
         if: matrix.test-os == 'windows-latest'
-        uses: wow-look-at-my/actions@cache-download#latest
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-handoff@lkgb
         with:
+          mode: receive
           name: ape-binary-Windows
           path: binaries/ape-binary-Windows
 
@@ -660,9 +650,6 @@ jobs:
           & "$env:RUNNER_TEMP\dats.exe" -v --no-sandbox test dats/test/apetest.dats dats/test/nt.dats
           exit $LASTEXITCODE
 
-      - if: failure()
-        uses: wow-look-at-my/actions@fail-fast#latest
-
   # Regression-gate the WebAssembly ports (GOOS=js and GOOS=wasip1) -- see docs/WASM.md and docs/CI.md "wasm job".
   wasm:
     timeout-minutes: ${{ github.ref == 'refs/heads/master' && 90 || 45 }}
@@ -702,8 +689,9 @@ jobs:
         run: GOOS=linux GOARCH=amd64 GOBIN="${{ runner.temp }}/wasibin" go install github.com/tetratelabs/wazero/cmd/wazero@v1.12.0 && sudo install -m 0755 "${{ runner.temp }}/wasibin/wazero" /usr/local/bin/wazero
 
       - name: Take the toolchain build-linux built
-        uses: wow-look-at-my/actions@cache-download#latest
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-handoff@lkgb
         with:
+          mode: receive
           name: toolchain-Linux
           path: .
 
@@ -722,9 +710,6 @@ jobs:
         uses: wow-look-at-my/dats@lkgb
         with:
           tests: dats/wasm
-
-      - if: failure()
-        uses: wow-look-at-my/actions@fail-fast#latest
 
   # The whole test suite for each wasm port, the gate the other ports get -- see docs/CI.md "wasm-suite job".
   wasm-suite:
@@ -769,10 +754,10 @@ jobs:
         shell: bash
         run: curl -sSfL https://wasmtime.dev/install.sh | bash -s -- --version v14.0.4
 
-      # wasmtime compiles each test binary's module before running it. That compile is most of a cheap package: sort.test costs 2.53s cold against 1.05s warm. Every branch reads the cache. Only master writes it, and it keeps one copy: an entry is 4.6 GiB against the repository's 10 GiB.
+      # wasmtime compiles each test binary's module before running it. That compile is most of a cheap package: sort.test costs 2.53s cold against 1.05s warm. Every branch reads the cache. Only master writes it, because an entry is 4.6 GiB.
       - name: Keep the compiled wasm modules between runs
         if: matrix.port == 'wasip1'
-        uses: actions/cache/restore@v4
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-cache-restore@lkgb
         with:
           path: ~/.cache/wasmtime
           key: wasmtime-modules-${{ matrix.port }}-${{ github.sha }}
@@ -780,8 +765,9 @@ jobs:
 
 
       - name: Take the toolchain build-linux built
-        uses: wow-look-at-my/actions@cache-download#latest
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-handoff@lkgb
         with:
+          mode: receive
           name: toolchain-Linux
           path: .
 
@@ -806,7 +792,7 @@ jobs:
 
       - name: Download the log-streamer client
         id: lsclient
-        uses: wow-look-at-my/buildhost/.github/actions/buildhost-download@master
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-download@lkgb
         with:
           project: log-streamer/ls-client
           token: ${{ steps.lstoken.outputs.token }}
@@ -907,13 +893,10 @@ jobs:
 
       - name: Save the compiled wasm modules
         if: matrix.port == 'wasip1' && github.ref == 'refs/heads/master'
-        uses: actions/cache/save@v4
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-cache-save@lkgb
         with:
           path: ~/.cache/wasmtime
           key: wasmtime-modules-${{ matrix.port }}-${{ github.sha }}
-
-      - if: failure()
-        uses: wow-look-at-my/actions@fail-fast#latest
 
 
   # Publishes an installable toolchain distribution to buildhost on every green push -- see docs/CI.md "publish jobs".
@@ -965,8 +948,9 @@ jobs:
 
     steps:
       - name: Take the archive its build leg packaged
-        uses: wow-look-at-my/actions@cache-download#latest
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-handoff@lkgb
         with:
+          mode: receive
           name: distpack-${{ matrix.goos }}-${{ matrix.goarch }}
           path: distpack
 
@@ -1037,19 +1021,3 @@ jobs:
           echo "::notice::published gosmopolitan v$v for linux/amd64 and darwin/arm64"
           echo "::notice::linux:  https://dl.pazer.build/gosmopolitan?branch=$b&os=linux&arch=amd64"
           echo "::notice::darwin: https://dl.pazer.build/gosmopolitan?branch=$b&os=darwin&arch=arm64"
-
-  # A run hands off about 1.5GB, and the repository's cache holds 10GB. Concurrent runs evict each other's hand-offs unless each run drops its own when its readers finish.
-  cleanup:
-    needs: [suite, cosmo-checks, test, wasm, wasm-suite, publish-upload, publish-finish]
-    # A cancelled or failed run still has hand-offs to drop; without this the job is skipped and they are orphaned.
-    if: always()
-    timeout-minutes: ${{ github.ref == 'refs/heads/master' && 20 || 10 }}
-    runs-on: ${{ github.event.repository.visibility == 'public' && 'ubuntu-latest' || vars.CI_RUNNER || 'ubuntu-latest' }}
-    permissions:
-      id-token: write
-      contents: read
-      actions: write
-      id-token: write # cache-cleanup reaches buildhost and secret-server through OIDC
-    steps:
-      - uses: wow-look-at-my/actions@cache-cleanup#latest
-        if: always()
