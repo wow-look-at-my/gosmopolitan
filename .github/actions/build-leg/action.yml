@@ -119,8 +119,9 @@ runs:
         cd testdata/cgoprobe && GOOS=cosmo go build -buildvcs=false -trimpath -o "${{ runner.temp }}/handoff/cgoprobe.com" .
 
     - name: Hand the APE binaries to the test job
-      uses: wow-look-at-my/actions@cache-upload#latest
+      uses: wow-look-at-my/buildhost/.github/actions/buildhost-handoff@lkgb
       with:
+        mode: send
         name: ape-binary-${{ runner.os }}
         path: ${{ runner.temp }}/handoff
 
@@ -138,8 +139,9 @@ runs:
         done
 
     - name: Hand the toolchain over
-      uses: wow-look-at-my/actions@cache-upload#latest
+      uses: wow-look-at-my/buildhost/.github/actions/buildhost-handoff@lkgb
       with:
+        mode: send
         name: toolchain-${{ runner.os }}
         path: ${{ runner.temp }}/toolchain
 
@@ -192,7 +194,8 @@ runs:
         ls -l "$RUNNER_TEMP/distpack"
 
     - name: Hand the distribution archive over
-      uses: wow-look-at-my/actions@cache-upload#latest
+      uses: wow-look-at-my/buildhost/.github/actions/buildhost-handoff@lkgb
       with:
+        mode: send
         name: distpack-${{ steps.distpack.outputs.target }}
         path: ${{ runner.temp }}/distpack
