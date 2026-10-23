@@ -10,7 +10,8 @@ runs:
         COSMOCC_SHA256: 85b8c37a406d862e656ad4ec14be9f6ce474c1b436b9615e91a55208aced3f44
       run: |
         set -euo pipefail
-        curl -fsSL "https://cosmo.zip/pub/cosmocc/cosmocc-${COSMOCC_VERSION}.zip" -o "${{ runner.temp }}/cosmocc.zip"
+        # cosmo.zip refuses connections from GitHub-hosted runners. The project's GitHub release carries the same zip.
+        curl -fsSL "https://github.com/jart/cosmopolitan/releases/download/${COSMOCC_VERSION}/cosmocc-${COSMOCC_VERSION}.zip" -o "${{ runner.temp }}/cosmocc.zip"
         echo "${COSMOCC_SHA256}  ${{ runner.temp }}/cosmocc.zip" | sha256sum -c -
         sudo mkdir -p /opt/cosmocc
         sudo unzip -q "${{ runner.temp }}/cosmocc.zip" -d /opt/cosmocc

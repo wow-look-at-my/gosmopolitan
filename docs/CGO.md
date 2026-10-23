@@ -70,6 +70,6 @@ libcosmo owns the C thread pointer. Go keeps `g` apart from it (`runtime/cgo/gcc
 The NT and macOS rows are also in `docs/STUBS-INVENTORY.md`.
 
 - Wine cannot run any cosmocc program, cgo or not: libcosmo's startup retries one fixed `MapViewOfFileEx` forever there. The windows test leg is the NT proof.
-- macOS Intel: nothing has run there. The amd64 path writes the GS base with `thread_fast_set_cthread_self`.
+- macOS Intel: nothing ran there. The amd64 path writes the GS base with `thread_fast_set_cthread_self`.
 - C's buffered stdio is not flushed when Go exits. That matches upstream cgo: C code calls `fflush`.
 - Only `-buildmode=exe`. No internal link, c-archive, c-shared or plugin.

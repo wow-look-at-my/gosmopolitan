@@ -22,11 +22,13 @@ A package variable, a field, a parameter of a function that is not inlined, and 
 
 ## Every valid pattern precompiles
 
-The pass has no list of supported constructs. It runs the `regexp` package that is linked into the compiler on the pattern and gets the same `*regexp.Regexp` that the program will get. Then it writes that object graph out as read-only data with a generic walk over the target's struct types. The `syntax.Prog`, the one-pass program, the prefix, the capture names, the start condition, the machine pool index and every other field. One-pass and backtrack programs, `\b`, `(?i)`, Unicode classes, named groups and POSIX leftmost-longest all reach the same code path. A pattern that `regexp.Compile` accepts precompiles. One that it rejects does not.
+The pass has no list of supported constructs. It runs the `regexp` package that is linked into the compiler on the pattern and gets the same `*regexp.Regexp` that the program will get. Then it writes that object graph out as read-only data with a generic walk over the target's struct types. The `syntax.Prog`, the one-pass program, the prefix, the capture names, the start condition, the machine pool index and every other field. One-pass and backtrack programs, `\b`, `(?i)`, Unicode classes, named groups and POSIX leftmost-longest all reach the same code path. A pattern that `regexp.Compile` accepts precompiles.
+
+One that it rejects does not.
 
 The call becomes a call to `regexp.precompiled`, which copies the template. Each call returns its own `*Regexp`, so `Longest` on one result changes no other. `SubexpNames` returns a slice that is copied for each call too, because the template is read-only. The original argument stays in the call, so its evaluation and its side effects stay where the source put them.
 
-Equal patterns share their data. The symbols are named by a hash of the syntax and the pattern. They are `DUPOK`. As a result, the linker keeps one copy for the whole program.
+Equal patterns share their data. A hash of the syntax and the pattern names the symbols. They are `DUPOK`. As a result, the linker keeps one copy for the whole program.
 
 ## Errors and warnings
 

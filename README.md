@@ -31,7 +31,7 @@ Starting the file writes nothing. Linux and macOS hand it to a small native load
 
 Debug with the sidecars: `gdb program.com.dbg`, or `symbol-file` against the running APE. Runtime tracebacks and pprof need no sidecar.
 
-Ship release APEs zstd-compressed. The architecture payloads are highly redundant, so a stdlib-heavy 12.3 MB webserver APE goes over the wire at 3.6 MB.
+Ship release APEs zstd-compressed. The architecture payloads are redundant, so a stdlib-heavy 12.3 MB webserver APE goes over the wire at 3.6 MB.
 
 ## Installing a Prebuilt Toolchain
 
@@ -83,7 +83,7 @@ Execution is exercised in CI on x86-64 Linux, ARM64 macOS, and x86-64 Windows (p
 
 ## Related Projects
 
-- [Go](https://github.com/golang/go) - The official Go programming language repository
+- [Go](https://github.com/golang/go) - The official repository of the Go programming language
 - [Cosmopolitan Libc](https://github.com/jart/cosmopolitan) - Build-once run-anywhere C library
 
 ## License
