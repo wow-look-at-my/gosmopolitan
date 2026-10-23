@@ -3,6 +3,8 @@
 
 package embedstd
 
+import _ "embed"
+
 import (
 	"strings"
 	"testing"
@@ -28,9 +30,7 @@ func TestFileLinesNamesEachSourceFile(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	want := "embedstd: cosmo/amd64 fmt/doc.go\n" +
-		"embedstd: cosmo/amd64 fmt/print.go\n" +
-		"embedstd: cosmo/amd64 internal/bytealg/compare_amd64.s\n"
+	want := testFileLinesNamesEachSourceFileYml
 	if got := out.String(); got != want {
 		t.Errorf("progress lines:\n%s\nwant:\n%s", got, want)
 	}
@@ -38,3 +38,6 @@ func TestFileLinesNamesEachSourceFile(t *testing.T) {
 		t.Errorf("the kept echo differs from what the go command wrote:\n%s", got)
 	}
 }
+
+//go:embed testdata/test-file-lines-names-each-source-file.yml
+var testFileLinesNamesEachSourceFileYml string

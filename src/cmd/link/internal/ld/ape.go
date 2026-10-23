@@ -3,6 +3,8 @@
 
 package ld
 
+import _ "embed"
+
 import (
 	"bytes"
 	"cmd/internal/cosmoape"
@@ -262,51 +264,15 @@ func writeLoaderSearch(script *bytes.Buffer, name string) {
 }
 
 var apeSearchTmpl = template.Must(template.New("apesearch").Parse(
-	`  l={{.Name}}
-  for c in "${APE_LOADER:-}" /usr/local/lib/ape/$l /usr/lib/ape/$l; do
-    [ -x "$c" ] && { apereg "$c"; apepath; exec "$c" "$o" "$@"; }
-  done
-  for n in $l apeld ape; do
-    c=$(command -v "$n" 2>/dev/null) || continue
-    [ -n "$c" ] && { apereg "$c"; apepath; exec "$c" "$o" "$@"; }
-  done
-`))
+	apeSearchTmplSh))
 
-// apeRegisterFn hands the loader to the kernel, so execve starts an APE
-// directly. F opens the interpreter AT REGISTRATION and keeps the descriptor,
-// so a read-only image with no loader file on it still starts one.
-const apeRegisterFn = `apereg() { [ -e /proc/sys/fs/binfmt_misc/APE ] && return 1
-  [ -w /proc/sys/fs/binfmt_misc/register ] || return 1
-  { printf ":APE:M::MZqFpD=\047::$1:F" > /proc/sys/fs/binfmt_misc/register; } 2>/dev/null
-  [ -e /proc/sys/fs/binfmt_misc/APE ]; }
-`
+//go:embed ape-register-fn.sh
+var apeRegisterFn string
 
 // apeLoaderTmpl puts the loader the APE embeds somewhere the kernel can exec
-// it, for a host the search found nothing on. It leaves nothing behind.
-//
-// -u has the loader unlink its own file first, because a script cannot delete
-// anything after it execs. Unlinking first and exec'ing through /dev/fd would
-// be shorter, and XNU answers that with EACCES. A tmpfs directory also keeps
-// the bytes in RAM, so on linux no disk is touched.
-//
-// Root hands the loader to binfmt_misc on the way past, so every later run on
-// that machine skips this path. APE_NOBINFMT stops another pass retrying.
+// it, for a host the search found nothing on.
 var apeLoaderTmpl = template.Must(template.New("apeloader").Parse(
-	`  for d in {{.Dirs}}; do
-    [ -d "$d" ] && [ -w "$d" ] || continue
-    u=$d/.ape-$l-{{.Tag}}.$$
-    dd if="$o" bs={{.Block}} skip={{.Skip}} count={{.Count}} 2>/dev/null {{if .Gzip}}| gzip -dc {{end}}>"$u" 2>/dev/null || { rm -f "$u"; continue; }
-    { [ -s "$u" ] && chmod 700 "$u" && [ -x "$u" ]; } || { rm -f "$u"; continue; }
-    "$u" >/dev/null 2>&1; [ $? -eq 127 ] || { rm -f "$u"; continue; }
-    if [ -z "${APE_NOBINFMT:-}" ] && apereg "$u"; then
-      rm -f "$u"; APE_NOBINFMT=1; export APE_NOBINFMT
-      apepath; exec "$o" "$@"
-    fi
-    apepath; exec "$u" -u "$o" "$@"
-  done
-  echo "APE: no $l on this host, and nowhere to put the embedded one: install it on PATH, or point APE_LOADER at it" >&2
-  exit 121
-`))
+	apeLoaderTmplSh))
 
 // makeAPEHeaderForPayloads creates the 64K APE polyglot header that boots
 // the given payloads (at most one per architecture family). With both an
@@ -455,29 +421,15 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 		}
 		script.WriteString("  fi\n")
 	case arm == nil:
-		// An amd64 payload cannot run natively here, and Rosetta does not
-		// close the gap. The assimilated Mach-O fails codesign's strict
-		// validation, and Apple Silicon SIGKILLs an unsigned executable.
-		// An arm64 payload is the only answer.
-		script.WriteString(`  if [ -d /Applications ]; then
-    echo 'APE: this amd64-only binary cannot run natively on ARM64 macOS.' >&2
-    echo 'APE: rebuild with ARM64 (fat APE) support to run on Apple Silicon.' >&2
-    exit 1
-  fi
-  echo 'APE: ARM64 Linux cannot run x86_64 binary' >&2
-  exit 1
-`)
+		// An amd64 payload cannot run natively here, and Rosetta does not close the gap.
+		script.WriteString(makeAPEHeaderForPayloadsSh)
 	default:
 		unsupported("  ")
 	}
 	script.WriteString("fi\n")
 
 	if windowsAMD {
-		script.WriteString(`# Windows shells (MSYS/Cygwin): delegate to cmd.exe for PE execution
-case "$(uname -s 2>/dev/null)" in
-CYGWIN*|MINGW*|MSYS*) exec cmd //c "$0" "$@" ;;
-esac
-`)
+		script.WriteString(makeAPEHeaderForPayloadsSh2)
 	}
 	script.WriteString(`echo 'APE: unsupported platform' >&2
 exit 1
@@ -1041,3 +993,15 @@ func writePEHeader(header []byte, arch sys.ArchFamily) {
 		header[0x202] = 0xC3 // ret
 	}
 }
+
+//go:embed ape-search-tmpl.sh
+var apeSearchTmplSh string
+
+//go:embed ape-loader-tmpl.sh
+var apeLoaderTmplSh string
+
+//go:embed make-ape-header-for-payloads.sh
+var makeAPEHeaderForPayloadsSh string
+
+//go:embed make-ape-header-for-payloads-2.sh
+var makeAPEHeaderForPayloadsSh2 string
