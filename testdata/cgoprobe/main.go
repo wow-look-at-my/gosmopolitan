@@ -93,7 +93,6 @@ func main() {
 		<-done
 		check("dlcall", called == 0 && result == 1, fmt.Sprint(called, " ", float64(result), " ", C.GoString(&callMsg[0])))
 
-
 		got := C.probe_dlopen(lib, sym, &msg[0], C.int(len(msg)))
 		check("dlopen", got == 0, fmt.Sprint(got, " ", C.GoString(&msg[0])))
 	}
