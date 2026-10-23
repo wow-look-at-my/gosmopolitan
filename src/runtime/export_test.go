@@ -133,7 +133,7 @@ func RunSchedLocalQueueStealTest() {
 			gs[j].sig = 0
 			runqput(p1, &gs[j], false)
 		}
-		gp := runqsteal(p2, p1, true)
+		gp, _ := runqsteal(p2, p1, true)
 		s := 0
 		if gp != nil {
 			s++

@@ -3608,6 +3608,47 @@ func stopm() {
 	gp.m.nextp = 0
 }
 
+// stopmUntil is stopm that also wakes at the nanotime deadline. It reports
+// whether startm handed the M a P, which it returns holding; at the
+// deadline it returns false with no P.
+func stopmUntil(deadline int64) bool {
+	gp := getg()
+
+	if gp.m.locks != 0 {
+		throw("stopm holding locks")
+	}
+	if gp.m.p != 0 {
+		throw("stopm holding p")
+	}
+	if gp.m.spinning {
+		throw("stopm spinning")
+	}
+
+	lock(&sched.lock)
+	mput(gp.m)
+	unlock(&sched.lock)
+	if ns := deadline - nanotime(); ns > 0 && notetsleep(&gp.m.park, ns) {
+		noteclear(&gp.m.park)
+		acquirep(gp.m.nextp.ptr())
+		gp.m.nextp = 0
+		return true
+	}
+
+	// Leave the idle list, unless startm has already taken this M off it
+	// and is about to wake it with a P.
+	lock(&sched.lock)
+	idle := mgetSpecific(gp.m) != nil
+	unlock(&sched.lock)
+	if idle {
+		noteclear(&gp.m.park)
+		return false
+	}
+	mPark()
+	acquirep(gp.m.nextp.ptr())
+	gp.m.nextp = 0
+	return true
+}
+
 func mspinning() {
 	// startm's caller incremented nmspinning. Set the new M's spinning.
 	getg().m.spinning = true
@@ -4235,6 +4276,10 @@ top:
 	now, pollUntil, ranTimers := pp.timers.check(0, nil)
 	wasmTimersChecked(&pp.timers, timersBefore, ranTimers)
 
+	// stealAt, if not 0, is when a runnext G that was left to its own P
+	// may be stolen.
+	var stealAt int64
+
 	// On wasm there is no sysmon to test the time-based GC trigger and
 	// resume the forcegc helper, so the scheduler does it instead. If the
 	// check fires, it injects forcegc.g, which the run queue checks below
@@ -4368,7 +4413,7 @@ top:
 			mp.becomeSpinning()
 		}
 
-		gp, inheritTime, tnow, w, newWork := stealWork(now)
+		gp, inheritTime, tnow, w, at, newWork := stealWork(now)
 		if gp != nil {
 			// Successfully stole.
 			return gp, inheritTime, false
@@ -4384,6 +4429,7 @@ top:
 			// Earlier timer to wait for.
 			pollUntil = w
 		}
+		stealAt = at
 	}
 
 	// We have nothing to do.
@@ -4560,11 +4606,14 @@ top:
 		}
 		unlock(&sched.lock)
 
-		pp := checkRunqsNoP(allpSnapshot, idlepMaskSnapshot)
+		pp, at := checkRunqsNoP(allpSnapshot, idlepMaskSnapshot)
 		if pp != nil {
 			acquirep(pp)
 			mp.becomeSpinning()
 			goto top
+		}
+		if at != 0 && (stealAt == 0 || at < stealAt) {
+			stealAt = at
 		}
 
 		// Check for idle-priority GC work again.
@@ -4595,6 +4644,26 @@ top:
 
 	// We don't need allp anymore at this pointer, but can't clear the
 	// snapshot without a P for the write barrier..
+
+	if stealAt != 0 {
+		// A runnext G was left to its own P until stealAt. Sleep until
+		// then, unless startm hands this M a P first, and look again.
+		if !stopmUntil(stealAt) {
+			lock(&sched.lock)
+			pp, _ := pidleget(0)
+			unlock(&sched.lock)
+			if pp == nil {
+				// Every P is busy; whichever finishes first runs it.
+				stopm()
+			} else {
+				acquirep(pp)
+				if wasSpinning {
+					mp.becomeSpinning()
+				}
+			}
+		}
+		goto top
+	}
 
 	// Poll network until next timer.
 	if netpollinited() && (netpollAnyWaiters() || pollUntil != 0) && sched.lastpoll.Swap(0) != 0 {
@@ -4693,7 +4762,10 @@ func pollWork() bool {
 //
 // If now is not 0 it is the current time. stealWork returns the passed time or
 // the current time if now was passed as 0.
-func stealWork(now int64) (gp *g, inheritTime bool, rnow, pollUntil int64, newWork bool) {
+//
+// If stealAt is not 0, a runnext G was left to its own P, and it may be
+// stolen from the nanotime stealAt.
+func stealWork(now int64) (gp *g, inheritTime bool, rnow, pollUntil, stealAt int64, newWork bool) {
 	pp := getg().m.p.ptr()
 
 	ranTimer := false
@@ -4705,7 +4777,7 @@ func stealWork(now int64) (gp *g, inheritTime bool, rnow, pollUntil int64, newWo
 		for enum := stealOrder.start(cheaprand()); !enum.done(); enum.next() {
 			if sched.gcwaiting.Load() {
 				// GC work may be available.
-				return nil, false, now, pollUntil, true
+				return nil, false, now, pollUntil, 0, true
 			}
 			p2 := allp[enum.position()]
 			if pp == p2 {
@@ -4743,7 +4815,7 @@ func stealWork(now int64) (gp *g, inheritTime bool, rnow, pollUntil int64, newWo
 					// stolen G's. So check now if there
 					// is a local G to run.
 					if gp, inheritTime := runqget(pp); gp != nil {
-						return gp, inheritTime, now, pollUntil, ranTimer
+						return gp, inheritTime, now, pollUntil, 0, ranTimer
 					}
 					ranTimer = true
 				}
@@ -4751,8 +4823,12 @@ func stealWork(now int64) (gp *g, inheritTime bool, rnow, pollUntil int64, newWo
 
 			// Don't bother to attempt to steal if p2 is idle.
 			if !idlepMask.read(enum.position()) {
-				if gp := runqsteal(pp, p2, stealTimersOrRunNextG); gp != nil {
-					return gp, false, now, pollUntil, ranTimer
+				gp, at := runqsteal(pp, p2, stealTimersOrRunNextG)
+				if gp != nil {
+					return gp, false, now, pollUntil, 0, ranTimer
+				}
+				if at != 0 && (stealAt == 0 || at < stealAt) {
+					stealAt = at
 				}
 			}
 		}
@@ -4761,31 +4837,48 @@ func stealWork(now int64) (gp *g, inheritTime bool, rnow, pollUntil int64, newWo
 	// No goroutines found to steal. Regardless, running a timer may have
 	// made some goroutine ready that we missed. Indicate the next timer to
 	// wait for.
-	return nil, false, now, pollUntil, ranTimer
+	return nil, false, now, pollUntil, stealAt, ranTimer
 }
 
 // Check all Ps for a runnable G to steal.
 //
 // On entry we have no P. If a G is available to steal and a P is available,
 // the P is returned which the caller should acquire and attempt to steal the
-// work to.
-func checkRunqsNoP(allpSnapshot []*p, idlepMaskSnapshot pMask) *p {
+// work to. A runnext G that its P should get the chance to run first is not
+// available yet; the earliest nanotime at which one becomes available is
+// returned instead, 0 if there is none.
+func checkRunqsNoP(allpSnapshot []*p, idlepMaskSnapshot pMask) (*p, int64) {
+	var now, earliest int64
 	for id, p2 := range allpSnapshot {
-		if !idlepMaskSnapshot.read(uint32(id)) && !runqempty(p2) {
-			lock(&sched.lock)
-			pp, _ := pidlegetSpinning(0)
-			if pp == nil {
-				// Can't get a P, don't bother checking remaining Ps.
-				unlock(&sched.lock)
-				return nil
-			}
-			unlock(&sched.lock)
-			return pp
+		if idlepMaskSnapshot.read(uint32(id)) || runqempty(p2) {
+			continue
 		}
+		if atomic.Load(&p2.runqhead) == atomic.Load(&p2.runqtail) {
+			if next := p2.runnext; next != 0 {
+				if now == 0 {
+					now = nanotime()
+				}
+				if stealAt := runnextStealAt(p2, next, now); stealAt != 0 {
+					if earliest == 0 || stealAt < earliest {
+						earliest = stealAt
+					}
+					continue
+				}
+			}
+		}
+		lock(&sched.lock)
+		pp, _ := pidlegetSpinning(0)
+		if pp == nil {
+			// Can't get a P, don't bother checking remaining Ps.
+			unlock(&sched.lock)
+			return nil, 0
+		}
+		unlock(&sched.lock)
+		return pp, 0
 	}
 
 	// No work available.
-	return nil
+	return nil, earliest
 }
 
 // Check all Ps for a timer expiring sooner than pollUntil.
@@ -8803,11 +8896,62 @@ retry:
 	return
 }
 
+// runnextStealDelay is how long a thief leaves a runnext G to the P that
+// holds it. The important use case is when the g running on that P
+// ready()s another g and then almost immediately blocks: the P then runs
+// runnext itself, and stealing it in that window would thrash Gs between
+// Ps. A sync chan send/recv takes ~50ns as of time of writing, so 3us
+// gives ~50x overshoot.
+const runnextStealDelay = 3 * 1000
+
+// runnextStealAt reports when a thief may take next from pp.runnext: 0 if
+// it may now, otherwise the nanotime at which it may. A thief that may
+// not take it yet does not wait for it. It moves on, and if it finds no
+// other work, findRunnable parks its M without a P until that time, in
+// stopmUntil, and steals on the next pass.
+//
+// If curg is nil, the P is likely to be in the scheduler. If curg isn't
+// nil and isn't in a syscall, then it's either running, waiting, or
+// runnable, and the P might either call into the scheduler soon
+// (running), or already is (since a waiting or runnable goroutine hanging
+// off of a running P suggests it either recently transitioned out of
+// running, or will transition to running shortly). In both cases the P
+// gets runnextStealDelay to run next first.
+func runnextStealAt(pp *p, next guintptr, now int64) int64 {
+	if osHasLowResTimer {
+		// On some platforms system timer granularity is 1-15ms,
+		// which is way too much for this optimization.
+		return 0
+	}
+	if pp.status != _Prunning {
+		return 0
+	}
+	mp := pp.m.ptr()
+	if mp == nil {
+		return 0
+	}
+	if gp := mp.curg; gp != nil && readgstatus(gp)&^_Gscan == _Gsyscall {
+		return 0
+	}
+	if pp.runnextSeen.Load() != uintptr(next) {
+		pp.runnextSeenAt.Store(now)
+		pp.runnextSeen.Store(uintptr(next))
+		return now + runnextStealDelay
+	}
+	stealAt := pp.runnextSeenAt.Load() + runnextStealDelay
+	if now >= stealAt {
+		return 0
+	}
+	return stealAt
+}
+
 // Grabs a batch of goroutines from pp's runnable queue into batch.
 // Batch is a ring buffer starting at batchHead.
-// Returns number of grabbed goroutines.
+// Returns number of grabbed goroutines, and, when the only G is a runnext
+// G that pp should get the chance to run first, the nanotime at which a
+// thief may take it.
 // Can be executed by any P.
-func runqgrab(pp *p, batch *[256]guintptr, batchHead uint32, stealRunNextG bool) uint32 {
+func runqgrab(pp *p, batch *[256]guintptr, batchHead uint32, stealRunNextG bool) (uint32, int64) {
 	for {
 		h := atomic.LoadAcq(&pp.runqhead) // load-acquire, synchronize with other consumers
 		t := atomic.LoadAcq(&pp.runqtail) // load-acquire, synchronize with the producer
@@ -8817,17 +8961,17 @@ func runqgrab(pp *p, batch *[256]guintptr, batchHead uint32, stealRunNextG bool)
 			if stealRunNextG {
 				// Try to steal from pp.runnext.
 				if next := pp.runnext; next != 0 {
-					// The thief takes runnext at once. Nothing tells a thief
-					// when pp is about to run next itself, so a delay here
-					// would be a guess, not a wait on pp.
+					if stealAt := runnextStealAt(pp, next, nanotime()); stealAt != 0 {
+						return 0, stealAt
+					}
 					if !pp.runnext.cas(next, 0) {
 						continue
 					}
 					batch[batchHead%uint32(len(batch))] = next
-					return 1
+					return 1, 0
 				}
 			}
-			return 0
+			return 0, 0
 		}
 		if n > uint32(len(pp.runq)/2) { // read inconsistent h and t
 			continue
@@ -8837,31 +8981,33 @@ func runqgrab(pp *p, batch *[256]guintptr, batchHead uint32, stealRunNextG bool)
 			batch[(batchHead+i)%uint32(len(batch))] = g
 		}
 		if atomic.CasRel(&pp.runqhead, h, h+n) { // cas-release, commits consume
-			return n
+			return n, 0
 		}
 	}
 }
 
 // Steal half of elements from local runnable queue of p2
 // and put onto local runnable queue of p.
-// Returns one of the stolen elements (or nil if failed).
-func runqsteal(pp, p2 *p, stealRunNextG bool) *g {
+// Returns one of the stolen elements (or nil if failed), and the nanotime
+// at which p2's runnext G may be stolen if that is what kept it from
+// stealing.
+func runqsteal(pp, p2 *p, stealRunNextG bool) (*g, int64) {
 	t := pp.runqtail
-	n := runqgrab(p2, &pp.runq, t, stealRunNextG)
+	n, stealAt := runqgrab(p2, &pp.runq, t, stealRunNextG)
 	if n == 0 {
-		return nil
+		return nil, stealAt
 	}
 	n--
 	gp := pp.runq[(t+n)%uint32(len(pp.runq))].ptr()
 	if n == 0 {
-		return gp
+		return gp, 0
 	}
 	h := atomic.LoadAcq(&pp.runqhead) // load-acquire, synchronize with consumers
 	if t-h+n >= uint32(len(pp.runq)) {
 		throw("runqsteal: runq overflow")
 	}
 	atomic.StoreRel(&pp.runqtail, t+n) // store-release, makes the item available for consumption
-	return gp
+	return gp, 0
 }
 
 // A gQueue is a dequeue of Gs linked through g.schedlink. A G can only
