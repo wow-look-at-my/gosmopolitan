@@ -18,7 +18,7 @@ This removes the pattern the feature exists for: an API whose every production c
 ## Rules
 
 - Only a **named ordinary parameter** takes a default. A type parameter list reads `=` as a type. An unnamed parameter gives the callee nothing to read. The parser rejects both.
-- Defaults must be **trailing**. A call omits a suffix of the parameter list, so a default before a required parameter can never be used.
+- Defaults must trail**. A call omits a suffix of the parameter list, so a default before a required parameter can never be used.
 - A default is a **constant**, and a boolean, string or integer one. The call site is given the value spelled back as source, and only those kinds have a spelling that reads back as the. A float can arrive as a rational.
 - The constant must be **assignable to the parameter type**, by the ordinary assignability rules. An untyped one converts exactly as an argument can.
 - A default may also be a **struct literal** of the parameter's type. Every element is keyed, and every value is itself a default: a boolean, string or integer constant, or a nested struct literal. `T{}` is the zero value. A pointer, a slice, a map or a positional literal is refused.
@@ -43,7 +43,9 @@ An `ast.Field` holds one default and however many names, so `go/parser` gives a 
 
 The arity check and the lowering land **together**, in one place: `arguments` appends a synthesized literal to the call for each omitted parameter, before. So `noder` needs no change at all — it reads a call that is already full. A relaxed check with no fill can type-check a call and then emit one with too few arguments, which is a miscompile rather than.
 
-`go/types` checks the same literals and throws the same errors. It does **not** append them to the call. It serves tools rather than a code generator. A tool prints the tree back. A fill written into `CallExpr.Args` made gofmt-on-save rewrite `Greet()` as `Greet("world", false)` in the user's own file. The values reach a client through `Info.ParamDefaults` instead, keyed by the call. Each one carries the call's position and has an entry in `Info.Types`. A client that wants the value rather than its syntax reads `Var.Default` off the signature. That is what `go/ssa` and the inliner in gosmopolitan_tools do. Depth: docs/GOPLS.md.
+`go/types` checks the same literals and throws the same errors. It does **not** append them to the call. It serves tools rather than a code generator. A tool prints the tree back. A fill written into `CallExpr.Args` made gofmt-on-save rewrite `Greet()` as `Greet("world", false)` in the user's own file. The values reach a client through `Info.ParamDefaults` instead, keyed by the call.
+
+Each one carries the call's position and has an entry in `Info.Types`. A client that wants the value rather than its syntax reads `Var.Default` off the signature. That is what `go/ssa` and the inliner in gosmopolitan_tools do. Depth: docs/GOPLS.md.
 
 ## Export data
 

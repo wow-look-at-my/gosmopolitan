@@ -4,7 +4,7 @@ This is the record of the go1.26.5 -> go1.27.0 merge. This file is the detail a 
 
 ## Why a minor bump conflicts and a patch bump does not
 
-The fork's history merges release TAGS. A patch tag (go1.26.4, go1.26.5) sits on `release-branch.go1.26`, so merging the next patch tag replays a handful of backports and conflicts on VERSION alone. A minor tag sits on a NEW release branch cut from master. As a result, the merge base moves back to the point where `release-branch.go1.26` left. Every backport the fork already carries then meets upstream's own version of the same change, and git reports it as a conflict even though.
+The fork's TAGS of the history merges release. A patch tag (go1.26.4, go1.26.5) sits on `release-branch.go1.26`, so merging the next patch tag replays a handful of backports and conflicts on VERSION alone. A small tag sits on a NEW release branch cut from master. As a result, the merge base moves back to the point where `release-branch.go1.26` left. Every backport the fork already carries then meets upstream's own version of the same change, and git reports it as a conflict even though.
 
 go1.26.5 -> go1.27.0: 1,748 upstream commits, conflicted files, of which 29 were pure release-branch-versus-master noise.
 
@@ -26,7 +26,7 @@ git show :3:<file> > <file>   # stage 3 is "theirs"
 
 - **`src/net/http/h2_bundle.go` is gone.** go1.27 deleted the generated bundle and moved HTTP/2 into `src/net/http/internal/http2/`, an ordinary in-tree package. `golang.org/x/net/http2` is no longer synchronized with std. The fork never edited the bundle. The deletion is accepted as-is.
 - **`runtime/os_linux32.go` was upstreamed.** The fork's kernel-version selection of the 64-bit time syscalls is now upstream's code, so upstream's file wins whole. It additionally replaces the `setNsec` downgrade with `mustDowncastToTimespec32`.
-- **The fork's vendored `x/tools` backports are superseded.** go1.27 vendors a newer x/tools that already contains them. After resolving, the vendored tree matches go1.27.0 byte for byte. Only `klauspost/compress` (the linker's zstd DWARF encoder) is re-added on top of upstream's module files.
+- **The fork's vendored `x/tools` backports are superseded.** go1.27 vendors a newer x/tools that already contains them. After resolving, the vendored byte of the tree matches go1.27.0 for byte. Only `klauspost/compress` (the linker's zstd DWARF encoder) is re-added on top of upstream's module files.
 - **`funcNamePiecesForPrint` returns pieces now**, not three. The fork's `printFuncName` keeps its table-aliasing prefix argument and passes all five.
 - **`adjustframe` moved its dead-frame check** below the frame-pointer adjustment. The fork's non-allocating `funcnamePieces` debug print moves with it: `funcname` allocates in this fork, and allocating during a stack copy is not an option.
 - **`mkinlcall` takes both `loopDepth` and `profile`.** The fork threads the first for loop-aware inlining. Go1.27 added the second.
@@ -39,7 +39,7 @@ These break the build rather than a build tag, so `go build std` for cosmo is no
 - `decoderune` takes and returns a `uint` index.
 - The ssa generator's `regMask` is a struct (`v1`, `v2`) with `union`/`addReg` methods, not a scalar. Do not hand-merge `opGen.go`. Run `go run -C=_gen .` in `cmd/compile/internal/ssa` and commit what it writes.
 - `internal/runtime/atomic` exports its linknames from `linkname.go` under `//go:linknamestd`, and a second `//go:linkname` for the same name is now a compile error.
-- `gp.m.locks` is scaled by `mutexMLocksDelta` for mutexes. An M can tell it is releasing its last mutex even with preemption disabled for other. Every lock implementation must use it.
+- `mutexMLocksDelta` for mutexes scale `gp.m.locks`. An M can tell it releases its last mutex even with preemption disabled for other. Every lock implementation must use it.
 
 ## The linker's cross-package reference check
 

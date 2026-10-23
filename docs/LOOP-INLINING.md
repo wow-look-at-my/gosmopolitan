@@ -3,7 +3,7 @@
 
 Upstream's inliner is frequency-blind without a profile: a call on a cold error path and a call in a hot inner loop are judged. Loop bodies are where the nodes are, so "Go will not inline a function containing a loop" stayed true in practice long after the. This fork adds the static frequency estimate every other production compiler has (GCC divides growth by a frequency-weighted benefit, LLVM raises the threshold for call sites its block-frequency estimate calls hot, HotSpot C2 scales limits by call-site frequency), in `src/cmd/compile/internal/inline/loop.go`, for every GOOS/GOARCH.
 
-**What ships on: loop nesting is acted on at the CALL SITE, not at the callee.** That split was decided by measurement, not taste.
+**What ships on: loop nesting is acted on at the CALL SITE, not at the callee.** Measurement decided that split, not taste.
 
 - **Budget, call-site side** (on) - a call nested in a loop doubles the max callee cost per level (`inlineLoopSiteFactor`) to depth `inlineLoopMaxDepth` (3), ceiling `inlineLoopHotBudget`. A "big" caller's reduced limit of multiple grows the same way but never past 80.
 - **Availability, callee side** (on) - the budget boost is useless if the callee never got an inline body, so a function this package calls from. This is the mechanism PGO uses for profile-hot functions, driven by static loop nesting instead, and like all inlinability it is decided when the.

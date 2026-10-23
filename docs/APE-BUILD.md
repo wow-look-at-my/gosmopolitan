@@ -4,11 +4,13 @@ How `GOOS=cosmo go build` turns per-architecture builds into one APE, what it st
 
 ## Parallel sibling build
 
-Parallel sibling build: the sibling-architecture build runs concurrently with the primary one. The two share no ordering constraint, so overlapping them reclaims each build's serial tail. A build whose package graph already saturates the CPU gains nothing. `GOCOSMOFATSEQ=1` forces the sequential build, which halves a fat build's peak memory because the two link phases no longer overlap. The sibling's output is buffered and replayed after the primary build's, so concurrent diagnostics never interleave. `base.AtExit` kills the child and removes its scratch directory, because the primary build can fail while the sibling still runs. Implementation: `cosmoSibling` in `src/cmd/go/internal/work/cosmofat.go`.
+Parallel sibling build: the sibling-architecture build runs concurrently with the primary one. The two share no ordering constraint, so overlapping them reclaims each build's serial tail. A build whose package graph already saturates the CPU gains nothing. `GOCOSMOFATSEQ=1` forces the sequential build, which halves a fat build's peak memory because the two link phases no longer overlap. The sibling's output is buffered and replayed after the primary build's, so concurrent diagnostics never interleave. `base.AtExit` kills the child and removes its scratch directory, because the primary build can fail while the sibling still runs.
+
+Implementation: `cosmoSibling` in `src/cmd/go/internal/work/cosmofat.go`.
 
 ## Strip-and-sidecar default
 
-Strip-and-sidecar default (2026-07-18): the fat merge embeds only each payload's loadable span. That span is the file range its program headers reference, exactly what cosmocc's apelink ships. Naming is exact output name plus suffix: bare `go build` of package `web` gives `web` and `web.dbg`, like cosmocc's `hello`/`hello.dbg`. Only the amd64 image gets a sidecar. An arm64 one is an ELF the build host usually cannot execute, and a file named `web.aarch64.elf` beside the APE invites the attempt.
+Strip-and-sidecar default (2026-07-18): the fat merge embeds only each payload's loadable span. That span is the file range its program headers reference, exactly what cosmocc's apelink ships. Naming is exact output name plus suffix: bare `go build` of package `web` gives `web` and `web.dbg`, like cosmocc's `hello`/`hello.dbg`. Only the amd64 image gets a sidecar. An arm64 one is an ELF the build host usually cannot execute, and a file named `web.aarch64.elf` beside the APE invites the try.
 
 `GOCOSMOSTRIP=0` (or `off`, parsed like GOCOSMOFAT) restores full embedded payloads with no sidecar. An explicit `-s` or `-w` in `-ldflags` suppresses the sidecar too, and embeds the user-stripped payloads as-is. Stripping does not affect runtime tracebacks or runtime/pprof (Go symbolizes via gopclntab, which lives in a loaded segment). The sidecar is for gdb/delve and offline tools. Debug the arm64 image under `GOCOSMOSTRIP=0`, which leaves its DWARF in the APE.
 
