@@ -1,6 +1,8 @@
 # Top-level tests are parallel by default
 
-`src/testing` in this fork can start every top-level test as if it had called `t.Parallel()`, which is a no-op there. The switch is the `parallelByDefault` constant in `src/testing/testing.go`. It is OFF until every CI leg is green with it on. With it off, a top-level test runs as upstream runs it. `t.Setenv` and `t.Chdir` then fork only under a parallel ancestor. Everything below describes the switch ON. Methods opt a test out of that, and they buy the same isolation at different prices: `t.Serial()` keeps the test in this process.
+`src/testing` in this fork can start every top-level test as if it called `t.Parallel()`, which is a no-op there. The switch is the `parallelByDefault` constant in `src/testing/testing.go`. It is OFF until every CI leg is green with it on. With it off, a top-level test runs as upstream runs it. `t.Setenv` and `t.Chdir` then fork only under a parallel ancestor. Everything below describes the switch ON.
+
+Methods opt a test out of that, and they buy the same isolation at different prices: `t.Serial()` keeps the test in this process.
 
 A SUBTEST is not parallel unless it asks. It runs inside the `t.Run` call that starts it, which is the order upstream promises and the order test code relies on. A parent closes the file its subtests read. A loop sets a package variable before each subtest. A parent asserts on what the subtest just did. A subtest that wants parallelism calls `t.Parallel()`, as it always can.
 
@@ -16,7 +18,9 @@ The hold never covers a wait. `t.Run` drops the caller's hold while it waits, th
 
 They fall back to the barrier on `js`, `wasip1` and `ios`, which cannot start a child process at all - wasm has no process creation. The isolation is the same either way. Only the price changes. An EXPLICIT `t.Fork()` on those platforms still fails, because the test asked for its own copy of the process state and cannot be given.
 
-A COVERED run takes the barrier for the same reason. The child inherits `-test.gocoverdir` and `-test.coverprofile`. It writes its own report into the parent's directory, and the two race. The parent's rename of the meta file then finds it gone. The package fails with `error generating coverage report`. The barrier keeps the counters in the run that reports them. That is also what makes the test's coverage count at all. The parent does not execute a forked test's body, so a child's discarded profile reads as dead code.
+A COVERED run takes the barrier for the same reason. The child inherits `-test.gocoverdir` and `-test.coverprofile`. It writes its own report into the parent's directory, and the two race. The parent's rename of the meta file then finds it gone. The package fails with `error generating coverage report`. The barrier keeps the counters in the run that reports them.
+
+That is also what makes the test's coverage count at all. The parent does not execute a forked test's body, so a child's discarded profile reads as dead code.
 
 Depth: DEBUGGING.md "tests parallel by default".
 
@@ -40,7 +44,7 @@ Mechanics:
 - The child's `-test.run` anchors the forked test and then carries the rest of the run's own pattern, so the tests BELOW it stay filtered. Anchoring the name alone can select every subtest under it, which is how one forked top-level test turns `-run Test/wasmexport` into a full compile of.
 - The child's output becomes the test's output. A child that cannot be started, or that dies on a signal, is reported against the.
 
-`testing.AllocsPerRun` forks itself over this machinery. Its count and its `GOMAXPROCS(1)` are process-wide, so a caller that shares the process with other tests measures nothing meaningful. It takes no `*T` and cannot call `Fork`, so it panics with the internal `allocsFork` value.`tRunner` already recovers, and it forks there instead. The child re-runs that one test alone and measures. A caller that already has the process - a serial test, or a run with no parallel test in flight - measures in place. Where the panic reaches any other recover, or a goroutine that is no test, its message names `t.Fork` and `t.Serial`.
+`testing.AllocsPerRun` forks itself over this machinery. Its count and its `GOMAXPROCS(1)` are process-wide, so a caller that shares the process with other meaningful of the tests measures nothing. It takes no `*T` and cannot call `Fork`, so it panics with the internal `allocsFork` value.`tRunner` already recovers, and it forks there instead. The child re-runs that one test alone and measures. A caller that already has the process - a serial test, or a run with no parallel test in flight - measures in place. Where the panic reaches any other recover, or a goroutine that is no test, its message names `t.Fork` and `t.Serial`.
 
 A forked child measures in place only when the tests in flight are the target's own ancestors. A parent stays counted while it waits for the subtest it started. The bound is the number of elements in the target's name. Anything above that is a sibling, whose allocations can land in the count, and the subtest forks a child of its own instead. A test that IS the target and still shares the process fails, because a second child reaches the same place.
 

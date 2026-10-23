@@ -93,7 +93,9 @@ A contribution can execute as a real append, or the compiler can lift it into da
 
 **Real append.** The statement executes in `init`, as written. The init-only rule already fixes the list once `init` ends. The order is the same package-path order. The cost is problem 5: code that reads the list in another package's `init` can see part of it.
 
-**Lift.** The compiler turns the statement into data in a link-time section. It does not execute when `init` runs. So `image.Loaders` is complete when any `init` reads it, the declaring package's own `init` included. Go already does this for `var x = T{...}`: the spec says package initialization sets it. The compiler emits data. An `init` that holds only contributions becomes empty, and the compiler already removes an empty `init`.
+**Lift.** The compiler turns the statement into data in a link-time section. It does not execute when `init` runs. So `image.Loaders` is complete when any `init` reads it, the declaring package's own `init` included. Go already does this for `var x = T{...}`: the spec says package initialization sets it. The compiler emits data.
+
+An `init` that holds only contributions becomes empty, and the compiler already removes an empty `init`.
 
 Both ways, the compiler sees every contribution, so the build-time checks under "What go-toolchain does" work either way.
 
@@ -115,7 +117,7 @@ Both ways, the compiler sees every contribution, so the build-time checks under 
 - Each contribution becomes a symbol `go:collect.<pkgpath>.<name>.<n>`. The compiler records it in the object file and in export data (a `pkgbits` bump, as `readonly` needed).
 - The linker sorts the contributions for each collection and concatenates them into one read-only array. This is the same pattern as itablinks.
 - Plugin and shared build modes: each module carries its own section. The runtime merges them across `moduledata`, as it does for typelinks. Cosmo has no plugin mode. As a result, this is only for upstream parity.
-- Fat APE: each payload links separately. Both payloads get identical collections.
+- Fat APE: each payload links separately. Both payloads get same collections.
 
 ## What go-toolchain does
 

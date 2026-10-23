@@ -25,10 +25,43 @@ var initDefaultCacheOnce = sync.OnceValue(initDefaultCache)
 // DefaultIfEnabled returns the default cache, or nil when GOCACHE is off or
 // names no usable directory. A caller that only speeds work up uses it.
 func DefaultIfEnabled() Cache {
-	if dir, _, err := DefaultDir(); err != nil || dir == "off" {
+	dir, _, err := DefaultDir()
+	// Default ends the process when it cannot write the directory.
+	if err != nil || dir == "off" || writable(dir) != nil {
 		return nil
 	}
 	return Default()
+}
+
+// writable makes dir and writes a file in it.
+func writable(dir string) error {
+	if err := os.MkdirAll(dir, 0o777); err != nil {
+		return err
+	}
+	probe, err := os.CreateTemp(dir, ".probe-*")
+	if err != nil {
+		return err
+	}
+	probe.Close()
+	return os.Remove(probe.Name())
+}
+
+// writableFallback answers a directory to use in place of dir, which the user
+// cannot write: the user cache directory, else one in the temporary directory.
+// It answers dir when neither is writable.
+func writableFallback(dir string, cause error) string {
+	var candidates []string
+	if user, err := os.UserCacheDir(); err == nil {
+		candidates = append(candidates, filepath.Join(user, "go-build"))
+	}
+	candidates = append(candidates, filepath.Join(os.TempDir(), fmt.Sprintf("go-build-%d", os.Getuid())))
+	for _, candidate := range candidates {
+		if candidate != dir && writable(candidate) == nil {
+			fmt.Fprintf(os.Stderr, "go: GOCACHE %s is not writable (%v); using %s\n", dir, cause, candidate)
+			return candidate
+		}
+	}
+	return dir
 }
 
 // cacheREADME is a message stored in a README in the cache directory.
@@ -100,12 +133,22 @@ func DefaultDir() (string, bool, error) {
 			defaultDirErr = nil
 			defaultDirChanged = newDir != defaultDir
 			defaultDir = newDir
-			if filepath.IsAbs(defaultDir) || defaultDir == "off" {
+			if defaultDir == "off" {
 				return
 			}
-			defaultDir = "off"
-			defaultDirErr = fmt.Errorf("GOCACHE is not an absolute path")
+			if !filepath.IsAbs(defaultDir) {
+				defaultDir = "off"
+				defaultDirErr = fmt.Errorf("GOCACHE is not an absolute path")
+				return
+			}
+		}
+		if defaultDir == "off" {
 			return
+		}
+		if err := writable(defaultDir); err != nil {
+			if dir := writableFallback(defaultDir, err); dir != defaultDir {
+				defaultDir, defaultDirChanged = dir, true
+			}
 		}
 	})
 
