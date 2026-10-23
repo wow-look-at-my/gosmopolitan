@@ -251,10 +251,6 @@ func (goLogger) Infof(format string, args ...any) {
 	cacheNotice(format, args...)
 }
 
-func (goLogger) Infof(format string, args ...any) {
-	cacheNotice(format, args...)
-}
-
 func (goLogger) Warnf(format string, args ...any) {
 	cacheNotice(format, args...)
 }
