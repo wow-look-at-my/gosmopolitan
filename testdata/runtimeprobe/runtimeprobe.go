@@ -153,6 +153,7 @@ func main() {
 	timed("fsmeta", checkFsMeta)
 	timed("fslinks", checkFsLinks)
 	timed("fsmetaunix", checkFsMetaUnix)
+	timed("xattr", checkXattr)
 	timed("volume", checkVolume)
 	timed("sysinfo", checkSysInfo)
 	timed("flock", checkFlock)
