@@ -3,6 +3,8 @@
 
 package testdir_test
 
+import _ "embed"
+
 import (
 	"bytes"
 	"crypto/rand"
@@ -321,7 +323,7 @@ func eligible(src string) (string, bool) {
 func rewrite(src, pkgname string) string {
 	src = strings.Replace(src, "\npackage main\n", "\npackage "+pkgname+"\n", 1)
 	// The dispatcher does not inline Main, as no caller inlines a main.
-	return strings.Replace(src, "\nfunc main() {", "\n// Main is this test program's own main.\n//\n//go:noinline\nfunc Main() {", 1)
+	return strings.Replace(src, "\nfunc main() {", rewriteCpp, 1)
 }
 
 func (bat *batch) build(corpus string) {
@@ -550,3 +552,6 @@ func splitInits(out []byte, nonce string) (inits map[string][]byte, last string,
 		}
 	}
 }
+
+//go:embed testdata/rewrite.cpp
+var rewriteCpp string

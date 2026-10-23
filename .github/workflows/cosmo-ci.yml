@@ -242,8 +242,9 @@ jobs:
       - uses: ./.github/actions/apeld-tools
 
       - name: Take the toolchain its build leg built
-        uses: wow-look-at-my/actions@cache-download#latest
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-handoff@lkgb
         with:
+          mode: receive
           name: toolchain-${{ runner.os }}
           path: .
 
@@ -493,8 +494,9 @@ jobs:
       - uses: ./.github/actions/track-submodules
 
       - name: Take the toolchain build-linux built
-        uses: wow-look-at-my/actions@cache-download#latest
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-handoff@lkgb
         with:
+          mode: receive
           name: toolchain-Linux
           path: .
 
@@ -573,22 +575,25 @@ jobs:
           cache: false
 
       - name: Download the ubuntu-origin APE binaries
-        uses: wow-look-at-my/actions@cache-download#latest
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-handoff@lkgb
         with:
+          mode: receive
           name: ape-binary-Linux
           path: binaries/ape-binary-Linux
 
       - name: Download the macOS-origin APE binaries
-        uses: wow-look-at-my/actions@cache-download#latest
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-handoff@lkgb
         with:
+          mode: receive
           name: ape-binary-macOS
           path: binaries/ape-binary-macOS
 
       # Only an NT leg produces this origin, and only NT's own apetest case reads it.
       - name: Download the windows-origin APE binaries
         if: matrix.test-os == 'windows-latest'
-        uses: wow-look-at-my/actions@cache-download#latest
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-handoff@lkgb
         with:
+          mode: receive
           name: ape-binary-Windows
           path: binaries/ape-binary-Windows
 
@@ -702,8 +707,9 @@ jobs:
         run: GOOS=linux GOARCH=amd64 GOBIN="${{ runner.temp }}/wasibin" go install github.com/tetratelabs/wazero/cmd/wazero@v1.12.0 && sudo install -m 0755 "${{ runner.temp }}/wasibin/wazero" /usr/local/bin/wazero
 
       - name: Take the toolchain build-linux built
-        uses: wow-look-at-my/actions@cache-download#latest
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-handoff@lkgb
         with:
+          mode: receive
           name: toolchain-Linux
           path: .
 
@@ -780,8 +786,9 @@ jobs:
 
 
       - name: Take the toolchain build-linux built
-        uses: wow-look-at-my/actions@cache-download#latest
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-handoff@lkgb
         with:
+          mode: receive
           name: toolchain-Linux
           path: .
 
@@ -806,7 +813,7 @@ jobs:
 
       - name: Download the log-streamer client
         id: lsclient
-        uses: wow-look-at-my/buildhost/.github/actions/buildhost-download@master
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-download@lkgb
         with:
           project: log-streamer/ls-client
           token: ${{ steps.lstoken.outputs.token }}
@@ -965,8 +972,9 @@ jobs:
 
     steps:
       - name: Take the archive its build leg packaged
-        uses: wow-look-at-my/actions@cache-download#latest
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-handoff@lkgb
         with:
+          mode: receive
           name: distpack-${{ matrix.goos }}-${{ matrix.goarch }}
           path: distpack
 
@@ -1037,18 +1045,3 @@ jobs:
           echo "::notice::published gosmopolitan v$v for linux/amd64 and darwin/arm64"
           echo "::notice::linux:  https://dl.pazer.build/gosmopolitan?branch=$b&os=linux&arch=amd64"
           echo "::notice::darwin: https://dl.pazer.build/gosmopolitan?branch=$b&os=darwin&arch=arm64"
-
-  # A run hands off about 1.5GB, and the repository's cache holds 10GB. Concurrent runs evict each other's hand-offs unless each run drops its own when its readers finish.
-  cleanup:
-    needs: [suite, cosmo-checks, test, wasm, wasm-suite, publish-upload, publish-finish]
-    # A cancelled or failed run still has hand-offs to drop; without this the job is skipped and they are orphaned.
-    if: always()
-    timeout-minutes: ${{ github.ref == 'refs/heads/master' && 20 || 10 }}
-    runs-on: ${{ github.event.repository.visibility == 'public' && 'ubuntu-latest' || vars.CI_RUNNER || 'ubuntu-latest' }}
-    permissions:
-      id-token: write
-      contents: read
-      actions: write
-    steps:
-      - uses: wow-look-at-my/actions@cache-cleanup#latest
-        if: always()
