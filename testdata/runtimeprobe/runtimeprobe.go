@@ -1,35 +1,5 @@
-// Runtimeprobe exercises the runtime and os-package surface that must
-// work on every APE host today: file I/O, directory listing
-// (os.ReadDir/filepath.WalkDir, i.e. getdents64), process identity,
-// the boot auxv every host has to publish, CPU count, the monotonic
-// clock, timers (time.Sleep/Ticker/After and
-// context timeouts, which need a working netpoller), TCP/UDP loopback
-// sockets with deadlines, socketpair (raw fds and net.FileConn),
-// sendmsg/recvmsg and SCM_RIGHTS fd passing to a child process,
-// readv/writev + net.Buffers, EOF on a dead child's stdout pipe,
-// os.Executable, argv/env, working-directory
-// syscalls, exec.LookPath/exec.Command name resolution over the
-// host-format PATH (';'-separated drive-letter entries with PATHEXT
-// suffix probing on NT hosts), and - since the wave-8 signal work -
-// SIGSEGV recovery
-// (sigpanic), os/signal delivery, async preemption, wait-status
-// signal decoding, CPU profiling (real samples required on all
-// hosts), and process-group signaling (Setpgid
-// spawn + kill(-pgid), the console-ctrl chain on Windows hosts).
-//
-// Output contract (consumed by testdata/ape/apetest/runtimeprobe_test.go):
-// every check prints exactly one line starting with "ok <name>" or
-// "FAIL <name>: <detail>", and the process exits 0 iff no check failed.
-//
-// Usage: RUNTIMEPROBE_MARK=<value> runtimeprobe <value> --help -x --key=value trailing-arg
-//
-// The fixed flag-shaped tail after <value> is part of the argv
-// contract: probeWantArgs asserts that "--"/"-"-prefixed tokens and a
-// mixed positional+flag vector reach os.Args byte-intact on every
-// host. On NT that pins the GetCommandLineW -> ntCommandLineToArgv
-// path for flag-shaped tokens specifically (a go-toolchain windows
-// smoke failure was initially misdiagnosed as flags being dropped
-// there; the parse was in fact intact - keep it provably so).
+// Runtimeprobe exercises the runtime and os-package surface that must work on
+// every APE host today.
 package main
 
 import (
@@ -70,8 +40,7 @@ var sink uint64
 
 //go:noinline
 func spin(x uint64) uint64 {
-	// A real (non-inlined) call so the busy loop always contains
-	// preemption points even without async preemption.
+	// A real (non-inlined) call so the busy loop always contains preemption points even without async preemption.
 	return x*2862933555777941757 + 3037000493
 }
 
@@ -90,13 +59,11 @@ func main() {
 		fdpassChild()
 		return
 	case "execstress":
-		// Child mode for checkExecStress: stamp the marker proving the
-		// exec completed, then exit.
+		// Child mode for checkExecStress: stamp the marker proving the exec completed, then exit.
 		execStressChild()
 		return
 	case "pipeecho":
-		// Child mode for checkPipeEOF: write one marker line and exit,
-		// so the exit is what closes the stdout pipe.
+		// Child mode for checkPipeEOF: write one marker line and exit, so the exit is what closes the stdout pipe.
 		pipeEOFChild()
 		return
 	case "ctrlwait":
@@ -104,19 +71,14 @@ func main() {
 		ctrlwaitChild()
 		return
 	case "proccontrol":
-		// Child mode for checkProcControl: tick forever, so a stop is visible
-		// as silence and a resume as more ticks.
+		// Child mode for checkProcControl: tick forever, so a stop is visible as silence and a resume as more ticks.
 		procControlChild()
 		return
 	}
 	startWatchdog()
-	// timed localizes latency stalls without weakening any verdict:
-	// every healthy check block completes well under a second on every
-	// host, so a block that takes 2s+ prints a slow: line plus one
-	// poller-counter sample (the wave-9 forensic counters) naming
-	// where the time went. CI logs then show WHICH block stalled and
-	// whether the poller was wedged inside one long WSAPoll/kevent
-	// (sinceenter large) or cycling while work starved.
+	// timed localizes latency stalls without weakening any verdict. Every
+	// healthy check block completes well under a second on every host, so a
+	// block that takes 2s+ prints a slow.
 	timed := func(label string, fn func()) {
 		t0 := time.Now()
 		fn()
@@ -153,6 +115,7 @@ func main() {
 	timed("fsmeta", checkFsMeta)
 	timed("fslinks", checkFsLinks)
 	timed("fsmetaunix", checkFsMetaUnix)
+	timed("xattr", checkXattr)
 	timed("volume", checkVolume)
 	timed("sysinfo", checkSysInfo)
 	timed("flock", checkFlock)
@@ -166,24 +129,14 @@ func main() {
 	timed("sendfile", checkSendfile)
 	timed("nanosleep", checkNanosleep)
 	// Exec and signal checks run at the END on purpose, in that order.
-	// Exec: if a forked child ever wedges (a nondeterministic macOS CI
-	// incident produced kernel-stuck processes), every other check has
-	// already printed its verdict, so the partial output localizes the
-	// failure precisely. The signal-dependent block (segvrecover,
-	// notify, preempt, waitsig) comes dead last: pre-VEH Windows hosts
-	// crash at the segv check, and this order maximizes the coverage
-	// that still prints before that crash.
 	timed("exec", checkExec)
 	timed("minimalenv", checkMinimalEnv)
 	timed("spawnchdir", checkSpawnAfterChdir)
 	timed("lookpath", checkLookPath)
 	timed("fdpass", checkFdpass)
-	// Deliberately adjacent to the other exec checks: this one is the
-	// deterministic version of the wedge they hit by chance.
+	// Deliberately adjacent to the other exec checks: this is the deterministic version of the wedge they hit by chance.
 	timed("execstress", checkExecStress)
-	// Same family, other end of the exec: execstress watches the status
-	// pipe the parent reads before Start returns, this one watches the
-	// stdout pipe the parent reads inside Wait.
+	// Same family, other end of the exec.
 	timed("pipeeof", checkPipeEOF)
 	timed("segvrecover", checkSegvRecover)
 	timed("signalnotify", checkSignalNotify)
@@ -199,22 +152,10 @@ func main() {
 	fmt.Println("ok all")
 }
 
-// startWatchdog aborts the probe if it wedges, so a hang fails CI in
-// seconds instead of eating the job timeout. It must not depend on
-// anything under test - in particular not on timers - so it burns a spin
-// loop against the wall clock instead of sleeping.
-//
-// On firing it panics with traceback "all" instead of calling os.Exit:
-// the wedge this exists to diagnose leaves an M stuck inside a runtime
-// mutex, which blocks any stop-the-world forever - so runtime.Stack
-// (STW) would hang, and once async preemption works, NO user code can
-// keep running under a pending STW to time it out (a CI run proved
-// both: the dump hung for the step's remaining budget). The panic path
-// uses freezetheworld, which is best-effort and dumps every goroutine
-// - including ones wedged in locks - without their cooperation. The
-// FAIL verdict prints to stdout first; the traceback goes to stderr,
-// which the apetest harness logs. A panic exits with status 2, same as
-// the old os.Exit.
+// startWatchdog aborts the probe if it wedges, so a hang fails CI in seconds
+// instead of eating the job timeout. It must not depend on anything under
+// test, in particular not on timers. It burns a spin loop against the wall
+// clock instead of sleeping.
 func startWatchdog() {
 	debug.SetTraceback("all")
 	go func() {
@@ -227,9 +168,6 @@ func startWatchdog() {
 		}
 		sink = x
 		fmt.Println("FAIL watchdog: probe did not finish within 90s")
-		// Two poller-counter samples a spin apart (no timers - they may
-		// be wedged) tell the wedge forensics WHERE the loss is; see
-		// printNetpollDiag.
 		printNetpollDiag("t0")
 		spinUntil := time.Now().Add(300 * time.Millisecond)
 		for time.Now().Before(spinUntil) {
@@ -286,14 +224,11 @@ func checkTimers() {
 	cancel()
 }
 
-// probeWantArgs is the fixed argv tail the harness passes after the
-// mark (see the usage comment): flag-shaped tokens must survive the
-// host's argv materialization byte-intact, exactly like positionals.
+// probeWantArgs is the fixed argv tail the harness passes after the mark (see the usage comment): flag-shaped tokens must survive the host's argv materialization byte-intact.
 var probeWantArgs = []string{"--help", "-x", "--key=value", "trailing-arg"}
 
 func checkArgsEnv() {
-	// argv[1] is the mark (its VALUE is the "mark" check's contract);
-	// argv[2:] must be probeWantArgs byte-for-byte.
+	// argv[1] is the mark (its VALUE is the "mark" check's contract); argv[2:] must be probeWantArgs byte-for-byte.
 	got := os.Args[1:]
 	switch {
 	case len(got) != 1+len(probeWantArgs):
@@ -349,9 +284,7 @@ func checkIdentity() {
 }
 
 func checkNumCPU() {
-	// Assert only >= 1 so single-core hosts stay green, but print the
-	// value: on the macOS CI runners it should exceed 1 now that
-	// GOMAXPROCS comes from sysctl hw.ncpu.
+	// Assert only >= 1 so single-core hosts stay green, but print the value.
 	if n := runtime.NumCPU(); n < 1 {
 		fail("numcpu", "runtime.NumCPU() = %d, want >= 1", n)
 	} else {
@@ -361,9 +294,7 @@ func checkNumCPU() {
 
 func checkMonotonic() {
 	t0 := time.Now()
-	// A fixed amount of real work (no clock-based loop bound, so a
-	// broken clock cannot hang the probe). Roughly tens of
-	// milliseconds on current hardware.
+	// A fixed amount of real work (no clock-based loop bound, so a broken clock cannot hang the probe).
 	x := uint64(1)
 	for i := 0; i < 20_000_000; i++ {
 		x = spin(x)
@@ -384,11 +315,7 @@ func checkMonotonic() {
 }
 
 func checkSockets() {
-	// TCP loopback: listen, dial, one echo round trip, then a read
-	// deadline already in the past on a second connection. The server
-	// goroutine holds the second connection open until the deadline
-	// check finished, so the expected failure is unambiguously the
-	// deadline (not EOF from a closing peer).
+	// TCP loopback: listen, dial, one echo round trip, then a read deadline already in the past on a second connection.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		fail("tcplisten", "%v", err)
@@ -400,7 +327,6 @@ func checkSockets() {
 	holdOpen := make(chan struct{})
 	go func() {
 		defer close(srvDone)
-		// Connection 1: echo one message back.
 		c, err := ln.Accept()
 		if err != nil {
 			srvDone <- fmt.Sprintf("accept 1: %v", err)
@@ -419,8 +345,6 @@ func checkSockets() {
 			return
 		}
 		c.Close()
-		// Connection 2: accept, send nothing, hold open until the
-		// client's deadline check is done.
 		c2, err := ln.Accept()
 		if err != nil {
 			srvDone <- fmt.Sprintf("accept 2: %v", err)
@@ -511,12 +435,7 @@ func checkSockets() {
 	uc.Close()
 	pc.Close()
 
-	// Unix-domain stream socket bound to a filesystem path: sockaddr
-	// round trip in both directions plus one echo. The dialed end stays
-	// unbound on purpose - an unnamed unix socket must surface an EMPTY
-	// local name; this is the regression canary for unnamed-vs-abstract
-	// confusion in the sockaddr parse. (Windows's stack reports unnamed
-	// as "@"; net's own unixsock tests encode that.)
+	// Unix-domain stream socket bound to a filesystem path: sockaddr round trip in both directions plus one echo.
 	udir, err := shortSockDir("rp-unix")
 	if err != nil {
 		fail("unixsock", "MkdirTemp: %v", err)
@@ -598,12 +517,8 @@ func checkSockets() {
 	}
 }
 
-// selfCommand builds an exec.Cmd that re-executes this binary in the
-// given RUNTIMEPROBE_CHILD mode. How the child must be launched
-// depends on what is on disk at os.Executable(): an assimilated ELF
-// (Linux after first run) or Mach-O executes directly, while a
-// pristine APE (still starting with "MZ...") needs the shell
-// bootstrap.
+// selfCommand builds an exec.Cmd that re-executes this binary in the given
+// RUNTIMEPROBE_CHILD mode.
 func selfCommand(name, childMode string) (cmd *exec.Cmd, direct bool, bad bool) {
 	exe, err := os.Executable()
 	if err != nil {
@@ -631,33 +546,26 @@ func commandForExe(name, exe, childMode string) (cmd *exec.Cmd, direct bool, bad
 	}
 
 	direct = (magic == [4]byte{0x7f, 'E', 'L', 'F'}) || // assimilated ELF
-		(magic == [4]byte{0xcf, 0xfa, 0xed, 0xfe}) || // assimilated Mach-O 64
+		(magic == [4]byte{0xcf, 0xfa, 0xed, 0xfe}) || // assimilated a later mach-o
 		(magic == [4]byte{0xca, 0xfe, 0xba, 0xbe}) // fat Mach-O
 	if !direct && os.Getenv("OS") == "Windows_NT" {
-		// On an NT host the binary stays a pristine APE (no
-		// self-assimilation there) whose MZ header IS a valid PE, and
-		// there is no /bin/sh: exec it directly. The OS env var is
-		// set by every Windows since NT (and by wine); on unix hosts
-		// it is absent, keeping their behavior untouched.
+		// On an NT host the binary stays a pristine APE (no self-assimilation there) whose MZ header IS a valid PE, and there is no /bin/sh.
 		direct = true
 	}
 	if direct {
 		cmd = exec.Command(exe)
 	} else {
-		// Pristine APE: bootstrap through the shell, exactly how the
-		// probe itself was started.
+		// Pristine APE: bootstrap through the shell, exactly how the probe itself was started.
 		cmd = exec.Command("/bin/sh", exe)
 	}
 	cmd.Env = append(os.Environ(), "RUNTIMEPROBE_CHILD="+childMode)
 	return cmd, direct, false
 }
 
-// waitBounded waits for a started child with a 30s bound. Bounding
-// ourselves instead of using cmd.Output() alone matters: if the child
-// ever wedges, an unbounded wait would leave an orphan holding this
-// process's pipes after the watchdog fires, which can wedge the
-// CALLING test harness in turn. Process.Kill works on macOS hosts
-// (kill(2) is emulated; SIGKILL delivery is entirely kernel-side).
+// waitBounded waits for a started child with a 30s bound. Bounding ourselves
+// instead of using cmd.Output() alone matters. If the child ever wedges, an
+// unbounded wait would leave an orphan holding this process's pipes after the
+// watchdog fires. This can wedge the CALLING test harness in turn.
 func waitBounded(name string, cmd *exec.Cmd) (error, bool) {
 	waitErr := make(chan error, 1)
 	go func() { waitErr <- cmd.Wait() }()
@@ -704,10 +612,7 @@ func checkExec() {
 	}
 }
 
-// loaderEnvKeys names the variables a Windows image loader reads to start
-// a process. Upstream go.dev/issue/25210 is the record of what their
-// absence does: the child dies at load time with STATUS_DLL_NOT_FOUND,
-// which is exit status 0xc0000135, and it prints nothing.
+// loaderEnvKeys names the variables a Windows image loader reads to start a process.
 var loaderEnvKeys = []string{"SystemRoot", "windir", "ComSpec", "PATHEXT"}
 
 // envKeyIs reports whether entry is a binding of key. An NT host folds
@@ -755,19 +660,16 @@ func envOnly(keys ...string) []string {
 //
 // A suite strips the environment often. cmd/go's script tests replace PATH
 // outright, and net/http/cgi hands its child the loader keys plus a PATH of
-// its own. A binary that needs any other variable to START fails every one
-// of those tests, several packages deep, and the failure names no variable.
+// its own. A binary that needs any other variable to START fails every one of
+// those tests, several packages deep, and the failure names no variable.
 //
-// The cases separate the two readings of such a failure. `nopath` keeps the
+// The cases separate both readings of such a failure. `nopath` keeps the
 // loader keys and drops PATH. `loader` keeps the loader keys alone. A child
-// that runs under `nopath` and dies under `loader` needs something the
-// second case dropped. A child that dies under both needs PATH itself,
-// which an APE must not: what it imports comes from the system directory on
-// every host.
+// that runs under `nopath` and dies under `loader` needs something the second
+// case dropped. A child that dies under both needs PATH itself, which an APE
+// must not: what it imports comes from the system directory on every host.
 func checkMinimalEnv() {
-	// A copy in another directory, started with a relative PATH, is what
-	// os/exec's own TestCommand does, and what fails there. The cases below
-	// separate the copy from the directory and from the PATH.
+	// A copy in another directory, started with a relative PATH, is what os/exec's own TestCommand does.
 	dir, err := os.MkdirTemp("", "rp-minimalenv")
 	if err != nil {
 		fail("minimalenv", "MkdirTemp: %v", err)
@@ -838,15 +740,14 @@ func checkMinimalEnv() {
 	}
 }
 
-// checkSpawnAfterChdir starts a copy of this binary from a process that
-// has changed ITS OWN working directory and ITS OWN PATH first.
+// checkSpawnAfterChdir starts a copy of this binary from a process that has
+// changed ITS OWN working directory and ITS OWN PATH first.
 //
-// That is the one thing os/exec's TestCommand does that checkMinimalEnv
-// does not. The cases there pass on an NT runner, copy and dot PATH
-// included, while every TestCommand case that starts a program exits
-// 0xc0000135. What is left between them is the state of the parent: the
-// test calls t.Chdir and t.Setenv, and both reach this process rather
-// than the child's ProcAttr.
+// That is the thing os/exec's TestCommand does that checkMinimalEnv does not.
+// The cases there pass on an NT runner, copy and dot PATH included, while
+// every TestCommand case that starts a program exits 0xc0000135. What is left
+// between them is the state of the parent. The test calls t.Chdir and
+// t.Setenv, and both reach this process rather than the child's ProcAttr.
 func checkSpawnAfterChdir() {
 	root, err := os.MkdirTemp("", "rp-chdir")
 	if err != nil {
@@ -923,12 +824,6 @@ func checkSpawnAfterChdir() {
 	}
 }
 
-// checkWaitSig spawns a child that kills itself with SIGUSR1 and
-// asserts the parent-visible wait status: Signaled(), and Signal() ==
-// syscall.SIGUSR1 with LINUX numbering (10; Apple's kernel reports 30,
-// so this proves the wait4 boundary translates). On the child side it
-// exercises delivery of a fatal un-notified signal: runtime handler ->
-// dieFromSignal -> SIG_DFL reinstall -> re-raise.
 func checkWaitSig() {
 	cmd, direct, bad := selfCommand("waitsig", "raise")
 	if bad {
@@ -949,16 +844,14 @@ func checkWaitSig() {
 	checkWaitSigStatus(err)
 }
 
-// nilp is read through a global so the compiler cannot prove the
-// dereference in checkSegvRecover faults and rewrite it statically:
-// the point is a REAL hardware fault -> SIGSEGV -> sigpanic.
+// nilp is read through a global so the compiler cannot prove the dereference in checkSegvRecover faults and rewrite it statically.
 var nilp *int
 
 //go:noinline
 func derefNil() int { return *nilp }
 
 // checkSegvRecover asserts that a hardware nil-pointer dereference
-// becomes a recoverable runtime error: SIGSEGV -> sigtramp -> sigpanic
+// becomes a recoverable runtime error. SIGSEGV -> sigtramp -> sigpanic
 // injection via set_pc/set_sp in the signal context. On macOS this is
 // the canary for the host-aware sigctxt writing Apple's mcontext.
 func checkSegvRecover() {
@@ -979,17 +872,16 @@ func checkSegvRecover() {
 }
 
 // checkPreempt proves asynchronous preemption: saturate every P with
-// call-free spin loops (their only loop-body operation is an inlined
-// atomic load, which is not a preemption point), then run a full GC
-// cycle - stop-the-world included - and require the loops to still be
-// running when it returns. Without preemption the GC cannot stop a
-// spinning P at all. The loops then drain their iteration bound first,
-// either because the GC waits for them, or because main never gets a P
-// to request the GC on.
+// call-free spin loops (their only loop-body operation is an inlined atomic
+// load, which is not a preemption point), then run a full GC cycle -
+// stop-the-world included. Require the loops to still be running when it
+// returns. Without preemption the GC cannot stop a spinning P at all. The
+// loops then drain their iteration bound first, either because the GC waits
+// for them, or. This is because main never gets a P to request the GC on.
 //
 // The verdict is that survivor count, never the GC's wall time: an
-// oversubscribed host stretches both the GC and the drain, so a
-// duration threshold reports load rather than preemption.
+// oversubscribed host stretches both the GC and the drain. A duration
+// threshold reports load rather than preemption.
 func checkPreempt() {
 	var stop atomic.Uint32
 	var spun atomic.Uint64
@@ -1010,8 +902,7 @@ func checkPreempt() {
 		}(uint64(i + 1))
 	}
 	launched := time.Now()
-	// Let the spinners occupy every P; the sleep also forces main off
-	// its P so wake-up itself needs a preemption.
+	// Let the spinners occupy every P; the sleep also forces main off its P so wake-up itself needs a preemption.
 	time.Sleep(100 * time.Millisecond)
 	t0 := time.Now()
 	runtime.GC()
@@ -1021,8 +912,7 @@ func checkPreempt() {
 	wg.Wait()
 	sink = spun.Load()
 	if live == 0 {
-		// Two shapes reach here, and both are the same defect: the GC
-		// waited out the drain, or main never got a P to ask for one.
+		// Shapes reach here, and both are the same defect.
 		fail("preempt", "all %d spin loops drained before the GC returned (%v after launch)", n, time.Since(launched))
 		return
 	}
@@ -1052,11 +942,7 @@ func checkFiles() {
 	}
 	ok("mkdirtemp")
 
-	// A directory must stat as a directory. This is the regression
-	// canary for the per-arch Stat_t layout: with the wrong layout the
-	// kernel's mode bits land in other fields and IsDir turns false
-	// (it cannot be caught with a regular file, whose S_IFREG type can
-	// disappear into a zero Mode unnoticed).
+	// A directory must stat as a directory.
 	if fi, err := os.Stat(dir); err != nil {
 		fail("statdir", "%v", err)
 	} else if !fi.IsDir() {
@@ -1122,10 +1008,10 @@ func checkFiles() {
 	}
 }
 
-// checkSeekReadAt exercises os.File.Seek (all three whence values) and
-// os.File.ReadAt (mid-file offsets, and past-EOF returning io.EOF) on
-// the shipped os.File API. This is the regression canary for the darwin
-// pread/pwrite/lseek emulation: before it, macOS returned ENOSYS
+// checkSeekReadAt exercises os.File.Seek (all of them whence values) and
+// os.File.ReadAt (mid-file offsets, and past-EOF returning io.EOF) on the
+// shipped os.File API. This is the regression canary. This holds for the
+// darwin pread/pwrite/lseek emulation. Before it, macOS returned ENOSYS
 // ("function not implemented") for both Seek and ReadAt while Linux and
 // Windows dispatched them natively. It runs on every APE host via the
 // apetest suite.
@@ -1137,7 +1023,6 @@ func checkSeekReadAt() {
 	}
 	defer os.RemoveAll(dir)
 	name := filepath.Join(dir, "seek.bin")
-	// 36 bytes, indices 0..35.
 	data := []byte("0123456789abcdefghijklmnopqrstuvwxyz")
 	if err := os.WriteFile(name, data, 0o644); err != nil {
 		fail("seekreadat", "WriteFile: %v", err)
@@ -1155,19 +1040,16 @@ func checkSeekReadAt() {
 		fail("seekreadat", "Seek(10, Start) = %d, %v; want 10, nil", off, err)
 		return
 	}
-	// Seek relative to current (10 + 5 = 15).
 	if off, err := f.Seek(5, io.SeekCurrent); err != nil || off != 15 {
 		fail("seekreadat", "Seek(5, Current) = %d, %v; want 15, nil", off, err)
 		return
 	}
-	// Seek relative to end (36 - 3 = 33).
 	if off, err := f.Seek(-3, io.SeekEnd); err != nil || off != 33 {
 		fail("seekreadat", "Seek(-3, End) = %d, %v; want 33, nil", off, err)
 		return
 	}
 	ok("seekreadat", "seek")
 
-	// ReadAt mid-file: indices 2..6 are "23456".
 	buf := make([]byte, 5)
 	if n, err := f.ReadAt(buf, 2); err != nil || n != 5 || string(buf) != "23456" {
 		fail("seekreadat", "ReadAt(2) = %d, %v, %q; want 5, nil, \"23456\"", n, err, buf)
@@ -1186,9 +1068,9 @@ func checkSeekReadAt() {
 	ok("seekreadat", "readat")
 }
 
-// checkReadDir exercises directory listing - the getdents64 syscall on
-// Linux hosts, emulated via __getdirentries64 on macOS: os.ReadDir
-// names, order and IsDir bits, a filepath.WalkDir traversal, and
+// checkReadDir exercises directory listing - the getdents64 syscall on Linux
+// hosts, emulated via __getdirentries64 on macOS: os.ReadDir names and order
+// and IsDir bits. This also covers a filepath.WalkDir traversal, and
 // os.RemoveAll (which itself lists directories to find what to delete).
 func checkReadDir() {
 	dir, err := os.MkdirTemp("", "runtimeprobe-readdir")
@@ -1281,9 +1163,7 @@ func checkWd(dir string) {
 		os.Chdir(wd0)
 		return
 	}
-	// Compare via SameFile: on macOS the temp dir is reached through
-	// the /var -> /private/var symlink, so the strings may differ
-	// while naming the same directory.
+	// Compare via SameFile: on macOS the temp dir is reached through the /var -> /private/var symlink.
 	fi1, err1 := os.Stat(wd)
 	fi2, err2 := os.Stat(dir)
 	if err1 != nil || err2 != nil {
