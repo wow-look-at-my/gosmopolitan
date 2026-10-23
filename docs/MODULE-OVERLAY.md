@@ -26,7 +26,7 @@ The body is a header line `<overlayVersion> <sum>` followed by a zip of the adde
 
 Without the bump one key holds answers that disagree. A machine holding the older entry applies it and runs no generator. A machine that misses generates the other body. It then dies on the store guard below, which names a file and blames the generator.
 
-An empty overlay is stored too. It is what says the module needs nothing. It is also what lets the next build skip generation entirely.
+An empty overlay is stored too. It is what says the module needs nothing. It is also what lets the next build skip generation fully.
 
 ## Where it happens
 
@@ -38,7 +38,7 @@ An empty overlay is stored too. It is what says the module needs nothing. It is 
 
 Everything above rests on one property. A module version means the same bytes on every machine. These rules keep that true.
 
-**The module's own bytes decide which directives exist.** Nothing asks what this machine has installed. A scan that asked will make one module version mean different things on different machines. Both answers then land under the key the whole fleet reads.
+**The module's own bytes decide which directives exist.** Nothing asks what this machine installed. A scan that asked will make one module version mean different things on different machines. Both answers then land under the key the whole fleet reads.
 
 **A program a directive names and this machine lacks is a loud failure.** The failure names what to install. Skipping the directive hands this build a module that the same version elsewhere does not match.
 
