@@ -34,9 +34,6 @@ jobs:
         with:
           tests: dats/source
 
-      - if: failure()
-        uses: wow-look-at-my/actions@fail-fast#latest
-
   # Build Go toolchain and APE test binary on each build platform -- see docs/CI.md "build job".
   build:
     # make.bash plus the APE builds; the suite is its own job.
@@ -119,9 +116,6 @@ jobs:
 
       - uses: ./.github/actions/build-leg
 
-      - if: failure()
-        uses: wow-look-at-my/actions@fail-fast#latest
-
   # The ubuntu build leg, its own job so cosmo-checks, wasm and wasm-suite take its toolchain the moment it exists: needs waits. On a whole matrix.
   build-linux:
     timeout-minutes: ${{ github.ref == 'refs/heads/master' && 90 || 45 }}
@@ -191,9 +185,6 @@ jobs:
           key: dist-bootstrap-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
 
       - uses: ./.github/actions/build-leg
-
-      - if: failure()
-        uses: wow-look-at-my/actions@fail-fast#latest
 
   # The whole suite per host, one leg each; nothing downstream of a build waits on it.
   suite:
@@ -507,9 +498,6 @@ jobs:
             fs.appendFileSync(summaryPath, lines.join('\n') + '\n');
             core.info(`recorded ${rows.length} package timings`);
 
-      - if: failure()
-        uses: wow-look-at-my/actions@fail-fast#latest
-
   # Checks whose answer does not depend on the host. Each runs once, here, on the linux toolchain.
   cosmo-checks:
     timeout-minutes: ${{ github.ref == 'refs/heads/master' && 120 || 60 }}
@@ -573,9 +561,6 @@ jobs:
         uses: wow-look-at-my/dats@lkgb
         with:
           tests: dats/checks
-
-      - if: failure()
-        uses: wow-look-at-my/actions@fail-fast#latest
 
   # Test all APE binaries on each platform using Go tests -- see docs/CI.md "test job".
   test:
@@ -701,9 +686,6 @@ jobs:
           & "$env:RUNNER_TEMP\dats.exe" -v --no-sandbox test dats/test/apetest.dats dats/test/nt.dats
           exit $LASTEXITCODE
 
-      - if: failure()
-        uses: wow-look-at-my/actions@fail-fast#latest
-
   # Regression-gate the WebAssembly ports (GOOS=js and GOOS=wasip1) -- see docs/WASM.md and docs/CI.md "wasm job".
   wasm:
     timeout-minutes: ${{ github.ref == 'refs/heads/master' && 90 || 45 }}
@@ -764,9 +746,6 @@ jobs:
         uses: wow-look-at-my/dats@lkgb
         with:
           tests: dats/wasm
-
-      - if: failure()
-        uses: wow-look-at-my/actions@fail-fast#latest
 
   # The whole test suite for each wasm port, the gate the other ports get -- see docs/CI.md "wasm-suite job".
   wasm-suite:
@@ -954,9 +933,6 @@ jobs:
         with:
           path: ~/.cache/wasmtime
           key: wasmtime-modules-${{ matrix.port }}-${{ github.sha }}
-
-      - if: failure()
-        uses: wow-look-at-my/actions@fail-fast#latest
 
 
   # Publishes an installable toolchain distribution to buildhost on every green push -- see docs/CI.md "publish jobs".
