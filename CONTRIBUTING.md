@@ -6,7 +6,7 @@ It is the work of hundreds of contributors. We appreciate your help!
 
 ## Before filing an issue
 
-If you are unsure whether you have found a bug, please consider asking in the [golang-nuts mailing list](https://groups.google.com/forum/#!forum/golang-nuts) or [other forums](https://golang.org/help/) first. If the behavior you are seeing is confirmed as a bug or issue. It can easily be re-raised in the issue tracker.
+If you are unsure whether you found a bug, please consider asking in the [golang-nuts mailing list](https://groups.google.com/forum/#!forum/golang-nuts) or [other forums](https://golang.org/help/) first. If the behavior you sees is confirmed as a bug or issue. It can easily be re-raised in the issue tracker.
 
 ## Filing issues
 

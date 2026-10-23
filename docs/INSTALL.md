@@ -33,7 +33,7 @@ Uploading is generic work, so every publish job runs on ubuntu-latest:
 - `publish-upload` is a matrix over linux/amd64 and darwin/arm64. Each leg takes its `distpack-<goos>-<goarch>` archive and uploads it to buildhost. No mac or windows runner is acquired here.
 - `publish-finish` publishes the release once every leg is in.
 
-The archives travel through the org cache, so no GitHub Actions artifact storage is involved. A failed leg means `publish-finish` never runs and the release stays a DRAFT, which buildhost records as intent and never serves as latest -- a. Every step authenticates with a GitHub Actions OIDC token (audience `https://pazer.build`) through buildhost's own composite actions (`buildhost-create-release` / `buildhost-upload-artifact` / `buildhost-publish-release`, referenced as `wow-look-at-my/buildhost/.github/actions/<name>@master`).
+The archives travel through the org cache, so no GitHub Actions artifact storage is involved. A failed leg means `publish-finish` never runs and the release stays a DRAFT, which buildhost records as intent and never serves as latest -- a. Every step authenticates with a Actions OIDC token (GitHub) (audience `https://pazer.build`) through buildhost's own composite actions (`buildhost-create-release` / `buildhost-upload-artifact` / `buildhost-publish-release`, referenced as `wow-look-at-my/buildhost/.github/actions/<name>@master`).
 
 One release holds many artifacts, keyed `{os}/{arch}`, so `os=`/`arch=` select between them and neither platform can be served the other's bytes.
 
@@ -41,7 +41,7 @@ One release holds many artifacts, keyed `{os}/{arch}`, so `os=`/`arch=` select b
 
 Every release reports the committed VERSION, `go1.27.0-cosmo`. The tarball is named for it. The buildhost version is what tells releases apart. `?v=N` selects it, and the publish jobs never write it into the tree.
 
-Nothing needs a per-release Go version string. A fork tool prints its own `buildID=` under `-V=full`. So cmd/go keys the build cache on the tool's content, not on the version it claims. A toolchain built from another source gets another tool ID, whatever its VERSION says. One built from the same source is the same toolchain.
+Nothing needs a string of the per-release Go version. A fork tool prints its own `buildID=` under `-V=full`. So cmd/go keys the build cache on the tool's content, not on the version it claims. A toolchain built from another source gets another tool ID, whatever its VERSION says. One built from the same source is the same toolchain.
 
 Local source builds keep the static version and need no stamp: tool IDs are content-derived (see CLAUDE.md's Fork Gotchas). A hand-rebuilt toolchain self-invalidates stale.
 
