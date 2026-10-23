@@ -224,7 +224,7 @@ func TestLargeStringConcat(t *testing.T) {
 }
 
 func TestConcatTempString(t *testing.T) {
-	t.Serial() // AllocsPerRun measures the whole process.
+	t.Serial("a temporary string built for one comparison must not reach the heap, and the count spans the process")
 	s := "bytes"
 	b := []byte(s)
 	n := testing.AllocsPerRun(1000, func() {
@@ -238,7 +238,7 @@ func TestConcatTempString(t *testing.T) {
 }
 
 func TestCompareTempString(t *testing.T) {
-	t.Serial() // AllocsPerRun measures the whole process.
+	t.Serial("the byte slice converted for this comparison should stay off the heap, which a concurrent allocation disturbs")
 	s := strings.Repeat("x", sizeNoStack)
 	b := []byte(s)
 	n := testing.AllocsPerRun(1000, func() {
@@ -270,7 +270,7 @@ func TestCompareTempString(t *testing.T) {
 }
 
 func TestStringIndexHaystack(t *testing.T) {
-	t.Serial() // AllocsPerRun measures the whole process.
+	t.Serial("the haystack conversion must be optimized away, and an allocation elsewhere would be charged to it")
 	// See issue 25864.
 	haystack := []byte("hello")
 	needle := "ll"
@@ -285,7 +285,7 @@ func TestStringIndexHaystack(t *testing.T) {
 }
 
 func TestStringIndexNeedle(t *testing.T) {
-	t.Serial() // AllocsPerRun measures the whole process.
+	t.Serial("the needle conversion must be optimized away, so nothing else may allocate while the count is taken")
 	// See issue 25864.
 	haystack := "hello"
 	needle := []byte("ll")
@@ -332,7 +332,7 @@ func TestIntString(t *testing.T) {
 }
 
 func TestIntStringAllocs(t *testing.T) {
-	t.Serial() // AllocsPerRun measures the whole process.
+	t.Serial("converting a rune must stay off the heap, and the allocation counter has no per-goroutine view")
 	unknown := '0'
 	n := testing.AllocsPerRun(1000, func() {
 		s1 := string(unknown)
@@ -347,7 +347,7 @@ func TestIntStringAllocs(t *testing.T) {
 }
 
 func TestRangeStringCast(t *testing.T) {
-	t.Serial() // AllocsPerRun measures the whole process.
+	t.Serial("ranging over a converted byte slice must copy nothing, and a parallel allocation lands in the same total")
 	s := strings.Repeat("x", sizeNoStack)
 	n := testing.AllocsPerRun(1000, func() {
 		for i, c := range []byte(s) {

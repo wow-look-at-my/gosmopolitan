@@ -246,7 +246,7 @@ func TestSyscallAllocations(t *testing.T) {
 
 	testAllocs := func(t *testing.T, name string, fn func() error) {
 		t.Run(name, func(t *testing.T) {
-			t.Serial() // AllocsPerRun measures the whole process.
+			t.Serial("a raw system call must not allocate, and the counter cannot tell this goroutine from any other")
 			n := int(testing.AllocsPerRun(10, func() {
 				if err := fn(); err != nil {
 					t.Fatalf("%s: %v", name, err)
