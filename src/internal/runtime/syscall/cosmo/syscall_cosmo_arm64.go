@@ -307,6 +307,15 @@ func darwinErrno() uintptr
 // Other descriptors pass through unchanged.
 //
 //go:nosplit
+func darwinXlatDirfd(fd uintptr) uintptr {
+	if int32(fd) == linuxAT_FDCWD {
+		return ^uintptr(1)
+	}
+	return fd
+}
+
+// darwinXattrNofollow is Apple's XATTR_NOFOLLOW for an l-prefixed Linux call.
+//
 //go:nosplit
 func darwinXattrNofollow(nofollow bool) uintptr {
 	if nofollow {
@@ -315,6 +324,8 @@ func darwinXattrNofollow(nofollow bool) uintptr {
 	return 0
 }
 
+// darwinXattrFlags maps Linux XATTR_CREATE and XATTR_REPLACE to Apple's values.
+//
 //go:nosplit
 func darwinXattrFlags(flags uintptr) uintptr {
 	var opts uintptr
@@ -325,13 +336,6 @@ func darwinXattrFlags(flags uintptr) uintptr {
 		opts |= 0x4
 	}
 	return opts
-}
-
-func darwinXlatDirfd(fd uintptr) uintptr {
-	if int32(fd) == linuxAT_FDCWD {
-		return ^uintptr(1)
-	}
-	return fd
 }
 
 //
