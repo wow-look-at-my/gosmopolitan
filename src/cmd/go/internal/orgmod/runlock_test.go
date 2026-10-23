@@ -538,6 +538,86 @@ func TestHTTPStore(t *testing.T) {
 	}
 }
 
+// A request that gets no answer is sent again, and one that gets an answer,
+// even a refusal, is not.
+func TestHTTPStoreRetriesOnlyUnansweredRequests(t *testing.T) {
+	var mu sync.Mutex
+	var drops, hits int
+	var status int
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/token" {
+			json.NewEncoder(w).Encode(map[string]string{"value": "oidc-jwt"})
+			return
+		}
+		mu.Lock()
+		hits++
+		drop := drops > 0
+		if drop {
+			drops--
+		}
+		status := status
+		mu.Unlock()
+		if drop {
+			conn, _, err := w.(http.Hijacker).Hijack()
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			conn.Close()
+			return
+		}
+		if status != 0 {
+			http.Error(w, `{"error":"refused"}`, status)
+			return
+		}
+		json.NewEncoder(w).Encode(runLockBody{Value: headA, Found: true})
+	}))
+	defer srv.Close()
+
+	lock, err := openRunLock(true, envOf(map[string]string{
+		"GITHUB_REPOSITORY":              testRun.Repository,
+		"GITHUB_RUN_ID":                  testRun.ID,
+		"GITHUB_RUN_ATTEMPT":             testRun.Attempt,
+		RunLockEnv:                       srv.URL,
+		"ACTIONS_ID_TOKEN_REQUEST_URL":   srv.URL + "/token",
+		"ACTIONS_ID_TOKEN_REQUEST_TOKEN": "request-token",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock.store.(*httpStore).retryDelay = func(int) time.Duration { return 0 }
+	key := RunLockKey{lock.run, alphaPath, "main"}
+	var calls int
+
+	set := func(d, h, s int) {
+		mu.Lock()
+		drops, hits, status = d, h, s
+		mu.Unlock()
+	}
+
+	set(2, 0, 0)
+	got, err := LockedVersion(context.Background(), lock.store, key, resolveTo(headB, &calls))
+	if err != nil || got != headA {
+		t.Errorf("LockedVersion after two dropped connections = %q, %v; want %q", got, err, headA)
+	}
+
+	set(1<<30, 0, 0)
+	_, err = LockedVersion(context.Background(), lock.store, key, resolveTo(headB, &calls))
+	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("no answer in %d attempts", httpStoreAttempts)) || !strings.Contains(err.Error(), srv.URL) {
+		t.Errorf("LockedVersion against a store that never answers = %v; want an error that names the store and the attempts", err)
+	}
+
+	set(0, 0, http.StatusForbidden)
+	_, err = LockedVersion(context.Background(), lock.store, key, resolveTo(headB, &calls))
+	mu.Lock()
+	sent := hits
+	mu.Unlock()
+	if err == nil || !strings.Contains(err.Error(), "403") || sent != 1 {
+		t.Errorf("LockedVersion refused by the store = %v after %d requests; want the refusal after one", err, sent)
+	}
+}
+
 func TestHTTPStoreRetriesTransportFailures(t *testing.T) {
 	var mu sync.Mutex
 	var tokenHits, getHits, postHits int
@@ -602,7 +682,7 @@ func TestHTTPStoreRetriesTransportFailures(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	lock.store.(*httpStore).retryEvery = time.Millisecond
+	lock.store.(*httpStore).retryDelay = func(int) time.Duration { return time.Millisecond }
 
 	var calls int
 	got, err := LockedVersion(context.Background(), lock.store, RunLockKey{lock.run, alphaPath, "main"}, resolveTo(headA, &calls))

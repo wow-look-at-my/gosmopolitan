@@ -25,7 +25,7 @@ type httpStore struct {
 	base       string
 	getenv     func(string) string
 	client     *http.Client
-	retryEvery time.Duration
+	retryDelay func(retry int) time.Duration
 }
 
 func newHTTPStore(u *url.URL, getenv func(string) string) (RunLockStore, error) {
@@ -36,7 +36,7 @@ func newHTTPStore(u *url.URL, getenv func(string) string) (RunLockStore, error) 
 		base:       strings.TrimSuffix(u.String(), "/"),
 		getenv:     getenv,
 		client:     &http.Client{Timeout: time.Minute},
-		retryEvery: 2 * time.Second,
+		retryDelay: httpStoreRetryDelay,
 	}, nil
 }
 
@@ -85,31 +85,42 @@ func (s *httpStore) Claim(ctx context.Context, key RunLockKey, version string) (
 	return answer.Value, nil
 }
 
-// transportError is a failure of the path to a server, not an answer from it.
+// httpStoreAttempts bounds the requests do sends for one call.
+const httpStoreAttempts = 4
+
+// httpStoreRetryDelay is the wait before the given retry.
+func httpStoreRetryDelay(retry int) time.Duration { return time.Duration(retry) * 2 * time.Second }
+
+// A transportError is a request that got no answer, or a transient status.
 type transportError struct{ err error }
 
 func (e transportError) Error() string { return e.err.Error() }
 func (e transportError) Unwrap() error { return e.err }
 
+// transient reports whether a status is one the store may answer differently
+// on a later request.
 func transient(status int) bool {
 	return status >= 500 || status == http.StatusTooManyRequests
 }
 
-// do sends the request until the store answers, and decodes the answer. Both
-// requests are safe to repeat, so a transport failure is tried again on a fixed
-// cadence and named on stderr each time. Any other failure is final.
+// do sends the request until it gets an answer or has sent it
+// httpStoreAttempts times, and decodes the answer. Both requests are safe to
+// repeat, so a transport failure is tried again and named on stderr each time.
+// Any other failure is final.
 func (s *httpStore) do(ctx context.Context, method, path string, body []byte, answer any) error {
-	for {
+	for attempt := 1; ; attempt++ {
 		err := s.once(ctx, method, path, body, answer)
-		var te transportError
-		if !errors.As(err, &te) || ctx.Err() != nil {
+		if _, ok := errors.AsType[transportError](err); !ok {
 			return err
 		}
-		fmt.Fprintf(os.Stderr, "go: run lock store %s: %v; trying again in %v\n", s.base, err, s.retryEvery)
+		if attempt == httpStoreAttempts {
+			return fmt.Errorf("no answer in %d attempts: %w", attempt, err)
+		}
+		fmt.Fprintf(os.Stderr, "go: run lock store %s: %v; trying again in %v\n", s.base, err, s.retryDelay(attempt))
 		select {
 		case <-ctx.Done():
-			return err
-		case <-time.After(s.retryEvery):
+			return fmt.Errorf("no answer in %d attempts: %w", attempt, err)
+		case <-time.After(s.retryDelay(attempt)):
 		}
 	}
 }
@@ -164,7 +175,7 @@ func (s *httpStore) oidcToken(ctx context.Context) (string, error) {
 	req.Header.Set("Authorization", "Bearer "+s.getenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN"))
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return "", transportError{fmt.Errorf("requesting an OIDC token: %v", err)}
+		return "", transportError{fmt.Errorf("requesting an OIDC token: %w", err)}
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
