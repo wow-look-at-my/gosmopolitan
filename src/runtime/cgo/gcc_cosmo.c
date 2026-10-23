@@ -395,6 +395,7 @@ char *GetProgramExecutableName(void);
 char *realpath(const char *, char *);
 char *getenv(const char *);
 int access(const char *, int);
+unsigned long getauxval(unsigned long);
 
 static pthread_once_t cosmo_progname_once = PTHREAD_ONCE_INIT;
 static char cosmo_progname[4096];
@@ -421,13 +422,22 @@ cosmo_path_lookup(const char *cmd, char *out, size_t size)
 	return 0;
 }
 
-// cosmo_find_progname gives libcosmo the program's real path. An APE loader
-// execs a memfd, so /proc/self/exe names "/memfd:<name>". cosmo_dlopen stats
-// the program path, and a path that opens nothing stops it.
+// cosmo_find_progname gives libcosmo the program's real path. On Linux the
+// APE loader maps the program itself, so /proc/self/exe names the loader,
+// and AT_EXECFN names the program. An older loader exec'd a memfd, which
+// /proc/self/exe names "/memfd:<name>". cosmo_dlopen stats the program
+// path, and a path that opens nothing stops it.
 static void
 cosmo_find_progname(void)
 {
 	const char *name = GetProgramExecutableName();
+	const char *fn = (const char *)getauxval(31 /* AT_EXECFN */);
+	char real[4096];
+	if (fn != NULL && realpath(fn, cosmo_progname) != NULL) {
+		if (name == NULL || realpath(name, real) == NULL || strcmp(real, cosmo_progname) != 0)
+			__program_executable_name = cosmo_progname;
+		return;
+	}
 	if (name != NULL && strncmp(name, "/memfd:", 7) != 0)
 		return;
 	if (__argv == NULL || __argv[0] == NULL)
