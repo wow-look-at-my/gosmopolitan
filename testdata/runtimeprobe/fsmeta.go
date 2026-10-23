@@ -275,7 +275,20 @@ func checkFsLinks() {
 	}
 	s.do("Remove read-only", os.Remove(path))
 
-	s.finish("symlink/readlink/lstat/readdir/chmod/remove")
+	// File.Chmod finds the path from the handle. Past MAX_PATH on NT, that path names the file only with the \\?\ prefix.
+	long := filepath.Join(dir, strings.Repeat("l", 150), strings.Repeat("m", 150)+".txt")
+	if s.do("MkdirAll long", os.MkdirAll(filepath.Dir(long), 0o755)) {
+		if lf, err := os.Create(long); s.do("Create long", err) {
+			s.do("File.Chmod long", lf.Chmod(0o444))
+			s.do("Close long", lf.Close())
+			if fi, err := os.Stat(long); s.do("Stat long", err) && fi.Mode().Perm()&0o200 != 0 {
+				s.do("File.Chmod long mode", fmt.Errorf("mode %v still has the owner's write bit", fi.Mode().Perm()))
+			}
+			s.do("Remove long", os.Remove(long))
+		}
+	}
+
+	s.finish("symlink/readlink/lstat/readdir/chmod/remove/long-path chmod")
 }
 
 // checkFsMetaUnix covers the metadata syscalls NT has no counterpart
