@@ -307,8 +307,6 @@ func darwinErrno() uintptr
 // Other descriptors pass through unchanged.
 //
 //go:nosplit
-// darwinXattrNofollow is Apple's XATTR_NOFOLLOW when the Linux call was the l-prefixed one.
-//
 //go:nosplit
 func darwinXattrNofollow(nofollow bool) uintptr {
 	if nofollow {
