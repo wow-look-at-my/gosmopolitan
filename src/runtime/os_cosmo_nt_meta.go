@@ -164,11 +164,10 @@ func ntEmuTruncate(cpath *byte, length int64) (r1, r2, errno uintptr) {
 	return 0, 0, 0
 }
 
-// ntHandlePathW recovers a handle's path as a wide string.
-// GetFinalPathNameByHandleW answers in \\?\ form. SetCurrentDirectoryW
-// accepts that form, but it stores the string as given. The prefix is
-// rewritten away to keep the current directory in the ordinary
-// spelling GetCurrentDirectoryW reports: \\?\C:\dir becomes C:\dir and
+// ntHandlePathW recovers a handle's path as a wide string. GetFinalPathNameByHandleW answers
+// in \\?\ form. SetCurrentDirectoryW accepts that form, but it stores the string as given.
+// The prefix of a path shorter than MAX_PATH is rewritten away to keep the current directory
+// in the ordinary spelling GetCurrentDirectoryW reports. \\?\C:\dir becomes C:\dir and
 // \\?\UNC\server\share. Becomes \\server\share.
 func ntHandlePathW(h uintptr) ([]uint16, uintptr) {
 	if ntGetFinalPathNameByHandleWFn == 0 {
@@ -185,7 +184,8 @@ func ntHandlePathW(h uintptr) ([]uint16, uintptr) {
 		return nil, ntENAMETOOLONG
 	}
 	p := buf[:n]
-	if len(p) > 6 && p[0] == '\\' && p[1] == '\\' && p[2] == '?' && p[3] == '\\' {
+	// A path at the length ntPathW prefixes keeps its prefix: without it the path names nothing past MAX_PATH.
+	if len(p) > 6 && len(p)-4 < _NT_MAX_PATH-1 && p[0] == '\\' && p[1] == '\\' && p[2] == '?' && p[3] == '\\' {
 		if p[5] == ':' {
 			p = p[4:]
 		} else if len(p) > 8 && p[4] == 'U' && p[5] == 'N' && p[6] == 'C' && p[7] == '\\' {
