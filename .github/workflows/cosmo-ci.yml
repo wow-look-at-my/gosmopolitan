@@ -623,20 +623,22 @@ jobs:
       # The container suite runs the boot script under busybox as well as dash.
       - if: runner.os == 'Linux'
         run: sudo apt-get install -y busybox-static
-      # Ubuntu 26.04 confines unshare with an AppArmor profile that refuses the user namespace the container shape needs.
-      - name: Let unshare make a user namespace (Linux)
+      # The container shape makes a user namespace inside the dats bwrap sandbox. Ubuntu 26.04 enforces AppArmor profiles that refuse it.
+      - name: Let unshare make a user namespace inside bwrap (Linux)
         if: runner.os == 'Linux'
         shell: bash
         run: |
           set -euo pipefail
-          if [ -e /sys/kernel/security/apparmor/profiles ] && sudo grep -q '^unshare-userns-restrict ' /sys/kernel/security/apparmor/profiles; then
-            sudo apparmor_parser -R /etc/apparmor.d/unshare-userns-restrict
-            echo "unloaded the unshare-userns-restrict AppArmor profile"
-          fi
+          for profile in bwrap-userns-restrict unshare-userns-restrict; do
+            if [ -e /sys/kernel/security/apparmor/profiles ] && sudo grep -q "^${profile} " /sys/kernel/security/apparmor/profiles; then
+              sudo apparmor_parser -R "/etc/apparmor.d/${profile}"
+              echo "unloaded the ${profile} AppArmor profile"
+            fi
+          done
           if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_unconfined ]; then
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_unconfined=0
           fi
-          unshare -rm true
+          bwrap --ro-bind / / --dev /dev --proc /proc --unshare-user unshare -rm true
 
       # The container shape is built from mount namespaces, so it is linux only.
       - name: An APE runs in a read-only container (dats)
