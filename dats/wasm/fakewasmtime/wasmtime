@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# A stand-in for wasmtime that compiles for the host FAKE_WASMTIME_HOST names. A run prints what the module was compiled for.
+set -euo pipefail
+case "$1" in
+	--version)
+		echo "wasmtime-cli 0.0.0-fake"
+		;;
+	settings)
+		echo "Settings inferred for the current host:"
+		echo "  ${FAKE_WASMTIME_HOST}"
+		;;
+	compile)
+		shift
+		out=""
+		while [ "$#" -gt 1 ]; do
+			if [ "$1" = "-o" ]; then
+				out=$2
+				shift
+			fi
+			shift
+		done
+		echo "compiled for ${FAKE_WASMTIME_HOST}" >"$out"
+		;;
+	run)
+		shift
+		while [ "$#" -gt 0 ]; do
+			case "$1" in
+				--allow-precompiled | --dir=*) shift ;;
+				--env | -W) shift 2 ;;
+				*) break ;;
+			esac
+		done
+		cat "$1"
+		;;
+	*)
+		echo "fake wasmtime: unexpected $1" >&2
+		exit 2
+		;;
+esac
