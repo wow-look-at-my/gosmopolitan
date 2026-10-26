@@ -15,16 +15,19 @@ go_wasip1_precompile() {
 	mkdir -p "$cache/stat" || return
 	local version
 	version=$(wasmtime --version) || return
+	# wasmtime compiles for the CPU features of this host, and refuses a module compiled for features it lacks.
+	local host
+	host=$(wasmtime settings | sha256sum | cut -c1-16) || return
 	# The content hash of a file is read one time per change of the file.
 	local identity
 	identity=$(stat -c '%s %y %i' "$src" 2>/dev/null || stat -f '%z %Fm %i' "$src") || return
 	local stamp
-	stamp="$cache/stat/$(printf '%s\n%s\n' "$src" "$identity" | sha256sum | cut -c1-32)"
+	stamp="$cache/stat/$(printf '%s\n%s\n%s\n' "$host" "$src" "$identity" | sha256sum | cut -c1-32)"
 	local digest
 	if [ -f "$stamp" ]; then
 		digest=$(<"$stamp")
 	else
-		digest=$({ printf '%s\n' "$version"; cat "$src"; } | sha256sum | cut -c1-40) || return
+		digest=$({ printf '%s\n%s\n' "$version" "$host"; cat "$src"; } | sha256sum | cut -c1-40) || return
 		printf '%s\n' "$digest" >"$stamp.$$" && mv "$stamp.$$" "$stamp"
 	fi
 	local dir="$cache/$digest"
