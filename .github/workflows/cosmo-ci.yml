@@ -629,15 +629,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for profile in bwrap-userns-restrict unshare-userns-restrict; do
-            if [ -e /sys/kernel/security/apparmor/profiles ] && sudo grep -q "^${profile} " /sys/kernel/security/apparmor/profiles; then
-              sudo apparmor_parser -R "/etc/apparmor.d/${profile}"
-              echo "unloaded the ${profile} AppArmor profile"
+          # The unpriv_bwrap profile strips every capability from what bwrap starts, so a nested unshare -m fails.
+          for file in /etc/apparmor.d/bwrap-userns-restrict /etc/apparmor.d/unshare-userns-restrict; do
+            [ -e "$file" ] || continue
+            for profile in $(sudo apparmor_parser -N "$file"); do
+              if sudo grep -q "^${profile} " /sys/kernel/security/apparmor/profiles; then
+                sudo apparmor_parser -R "$file"
+                echo "unloaded the AppArmor profiles of ${file}"
+                break
+              fi
+            done
+          done
+          for knob in apparmor_restrict_unprivileged_userns apparmor_restrict_unprivileged_unconfined; do
+            if [ -e "/proc/sys/kernel/${knob}" ]; then
+              sudo sysctl -w "kernel.${knob}=0"
             fi
           done
-          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_unconfined ]; then
-            sudo sysctl -w kernel.apparmor_restrict_unprivileged_unconfined=0
-          fi
           bwrap --ro-bind / / --dev /dev --proc /proc --unshare-user unshare -rm true
 
       # The container shape is built from mount namespaces, so it is linux only.

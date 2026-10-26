@@ -3,7 +3,6 @@ tests:
 	- desc: a module compiled for one host is not served to another
 	  cmd: |
 		set -e
-		chmod +x dats/wasm/fakewasmtime/wasmtime
 		export PATH="$PWD/dats/wasm/fakewasmtime:$PATH" GOWASIP1_PRECOMPILED={outputs.cache}
 		mkdir -p {outputs.src}
 		printf 'module bytes' >{outputs.src}/prog.wasm
