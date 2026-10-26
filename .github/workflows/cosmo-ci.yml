@@ -23,6 +23,17 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+      - name: Print the concurrency group
+        shell: bash
+        run: |
+          echo "repo: ${{ github.repository }}"
+          echo "workflow: ${{ github.workflow }}"
+          echo "ref: ${{ github.ref }}"
+          echo "run_id: ${{ github.run_id }}"
+          echo "group: gha_${{ github.repository }}_${{ github.workflow }}_${{ github.ref != 'refs/heads/master' && github.ref || github.run_id }}"
+          echo "cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}"
+          echo "::notice::concurrency group=gha_${{ github.repository }}_${{ github.workflow }}_${{ github.ref != 'refs/heads/master' && github.ref || github.run_id }}"
+          echo "::notice::cancel-in-progress=${{ github.ref != 'refs/heads/master' }}"
       - uses: wow-look-at-my/actions@no-all-builds-job#latest
       - uses: wow-look-at-my/slopfix@lkgb
       - uses: wow-look-at-my/actions@no-tests-in-yaml#latest
@@ -558,6 +569,11 @@ jobs:
         with:
           go-version: '1.24'
           cache: false
+
+      # The hand-off unpacks an archive into the target directory and expects it to exist, so the test job makes the directories here instead of relying on the unpack to make them.
+      - name: Make the directories the APE binaries land in
+        shell: bash
+        run: mkdir -p binaries/ape-binary-Linux binaries/ape-binary-macOS binaries/ape-binary-Windows
 
       - name: Download the ubuntu-origin APE binaries
         uses: wow-look-at-my/buildhost/.github/actions/buildhost-handoff@lkgb
