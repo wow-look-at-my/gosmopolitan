@@ -177,6 +177,9 @@ var (
 	dlsymNameChdir      = []byte("chdir\x00")
 	dlsymNameFaccessat  = []byte("faccessat\x00")
 	dlsymNameReadlinkat = []byte("readlinkat\x00")
+	dlsymNameListxattr  = []byte("listxattr\x00")
+	dlsymNameGetxattr   = []byte("getxattr\x00")
+	dlsymNameSetxattr   = []byte("setxattr\x00")
 	dlsymNameReadv      = []byte("readv\x00")
 	dlsymNameWritev     = []byte("writev\x00")
 	dlsymNamePread      = []byte("pread\x00")
@@ -340,6 +343,9 @@ func osArchInit() {
 		Chdir:         cosmoDlsym(&dlsymNameChdir[0]),
 		Faccessat:     cosmoDlsym(&dlsymNameFaccessat[0]),
 		Readlinkat:    cosmoDlsym(&dlsymNameReadlinkat[0]),
+		Listxattr:     cosmoDlsym(&dlsymNameListxattr[0]),
+		Getxattr:      cosmoDlsym(&dlsymNameGetxattr[0]),
+		Setxattr:      cosmoDlsym(&dlsymNameSetxattr[0]),
 		Readv:         cosmoDlsym(&dlsymNameReadv[0]),
 		Writev:        cosmoDlsym(&dlsymNameWritev[0]),
 		Pread:         cosmoDlsym(&dlsymNamePread[0]),
