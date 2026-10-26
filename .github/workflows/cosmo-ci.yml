@@ -554,8 +554,9 @@ jobs:
       # cosmo-cgo.dats compiles C for both cosmo architectures and runs the arm64 payload under qemu.
       - uses: ./.github/actions/cosmocc
       - name: Install qemu-user
-        shell: bash
-        run: sudo apt-get install -y -qq qemu-user
+        uses: wow-look-at-my/actions@cached-apt#latest
+        with:
+          packages: qemu-user
 
       # Every host-independent suite. Which tests each covers is the suite's decision, not this file's.
       - name: The dats suites
@@ -658,6 +659,30 @@ jobs:
       # The container suite runs the boot script under busybox as well as dash.
       - if: runner.os == 'Linux'
         run: sudo apt-get install -y busybox-static
+      # The container shape makes a user namespace inside the dats bwrap sandbox. Ubuntu 26.04 enforces AppArmor profiles that refuse it.
+      - name: Let unshare make a user namespace inside bwrap (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The unpriv_bwrap profile strips every capability from what bwrap starts, so a nested unshare -m fails.
+          for file in /etc/apparmor.d/bwrap-userns-restrict /etc/apparmor.d/unshare-userns-restrict; do
+            [ -e "$file" ] || continue
+            for profile in $(sudo apparmor_parser -N "$file"); do
+              if sudo grep -q "^${profile} " /sys/kernel/security/apparmor/profiles; then
+                sudo apparmor_parser -R "$file"
+                echo "unloaded the AppArmor profiles of ${file}"
+                break
+              fi
+            done
+          done
+          for knob in apparmor_restrict_unprivileged_userns apparmor_restrict_unprivileged_unconfined; do
+            if [ -e "/proc/sys/kernel/${knob}" ]; then
+              sudo sysctl -w "kernel.${knob}=0"
+            fi
+          done
+          bwrap --ro-bind / / --dev /dev --proc /proc --unshare-user unshare -rm true
+
       # The container shape is built from mount namespaces, so it is linux only.
       - name: An APE runs in a read-only container (dats)
         if: runner.os == 'Linux'
