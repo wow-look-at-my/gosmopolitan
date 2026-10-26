@@ -40,7 +40,8 @@ perfpid=$!
 # programs prints the CPU each program used so far, from process accounting.
 programs() {
 	echo '```'
-	"${asroot[@]}" sa -a "$out/pacct" | head -"$1"
+	"${asroot[@]}" sa -a "$out/pacct" >"$out/sa.txt"
+	head -"$1" "$out/sa.txt"
 	echo '```'
 }
 
@@ -51,7 +52,9 @@ hottest() {
 	echo '```'
 	for data in "$@"; do
 		"${asroot[@]}" perf report -i "$data" --stdio --no-children -g none \
-			--sort comm,sym --percent-limit 0.5 2>/dev/null | grep -v -e '^#' -e '^$' | head -"$limit"
+			--sort comm,sym --percent-limit 0.5 2>/dev/null >"$out/perf-report.txt"
+		grep -v -e '^#' -e '^$' "$out/perf-report.txt" >"$out/perf-hot.txt" || [ "$?" -eq 1 ]
+		head -"$limit" "$out/perf-hot.txt"
 	done
 	echo '```'
 }
