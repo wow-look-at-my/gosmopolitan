@@ -114,4 +114,14 @@ func TestIsBannedHost(t *testing.T) {
 	if err := RefuseBannedRemote("::not a url"); err == nil {
 		t.Error("RefuseBannedRemote of an unreadable URL succeeded, want a refusal")
 	}
+	for _, remote := range []string{"git@github.com:wow-look-at-my/go-containers", "github.com:owner/repo", "git@github.com:owner/repo.git"} {
+		if err := RefuseBannedRemote(remote); err != nil {
+			t.Errorf("RefuseBannedRemote(%q) = %v, want nil", remote, err)
+		}
+	}
+	for _, remote := range []string{"git@golang.org:x/net", "git@go.golang.org:x/net"} {
+		if err := RefuseBannedRemote(remote); err == nil {
+			t.Errorf("RefuseBannedRemote(%q) succeeded, want a refusal", remote)
+		}
+	}
 }
