@@ -22,7 +22,9 @@ jobs:
       id-token: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: wow-look-at-my/actions@parallel-checkout#latest
+        with:
+          submodules: false
       - uses: wow-look-at-my/actions@no-all-builds-job#latest
       - uses: wow-look-at-my/slopfix@lkgb
       - uses: wow-look-at-my/actions@no-tests-in-yaml#latest
@@ -51,14 +53,14 @@ jobs:
     runs-on: ${{ matrix.build-os }}
 
     steps:
-      # The track-submodules step checks out the submodules. Without the ones under src/cmd/vendor, cmd/go cannot build.
-      - uses: actions/checkout@v4
+      # Every org submodule lands on its branch head at the commit this run locked. Without the ones under src/cmd/vendor, cmd/go cannot build.
+      - uses: wow-look-at-my/actions@parallel-checkout#latest
         with:
-          submodules: false
           lfs: true
+          submodule-branch: ${{ github.ref_name }}
+          submodule-branch-lock: https://pazer.build
       - uses: wow-look-at-my/actions@disable-windows-defender#latest
       - uses: wow-look-at-my/actions@secret-server#latest
-      - uses: ./.github/actions/track-submodules
 
       # Linux confines a dependency's generate directive with it; macOS uses seatbelt and needs nothing.
       - uses: wow-look-at-my/actions@bubblewrap#latest
@@ -93,7 +95,7 @@ jobs:
           windows: cd src && .\make.bat -v
         env:
           GOROOT_BOOTSTRAP: ${{ env.GOROOT }}
-          # The track-submodules step put every org submodule on its branch head. dist runs the same script again otherwise, 35s on NT.
+          # The checkout put every org submodule on its branch head. dist runs submodulebranch.bash again otherwise, 35s on NT.
           GOSUBMODULEBRANCH: 'off'
 
       # A read refreshes an entry's mtime once it is an hour old, so an entry older than 90 minutes is one this build never read.
@@ -125,13 +127,13 @@ jobs:
       actions: write
     runs-on: ${{ github.event.repository.visibility == 'public' && 'ubuntu-latest' || vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: wow-look-at-my/actions@parallel-checkout#latest
         with:
-          submodules: false
           lfs: true
+          submodule-branch: ${{ github.ref_name }}
+          submodule-branch-lock: https://pazer.build
       - uses: wow-look-at-my/actions@disable-windows-defender#latest
       - uses: wow-look-at-my/actions@secret-server#latest
-      - uses: ./.github/actions/track-submodules
 
       # cmd/go confines a dependency's generate directive with it, and fails the build when it is absent.
       - uses: wow-look-at-my/actions@bubblewrap#latest
@@ -163,7 +165,7 @@ jobs:
         run: cd src && ./make.bash -v
         env:
           GOROOT_BOOTSTRAP: ${{ env.GOROOT }}
-          # The track-submodules step put every org submodule on its branch head. dist runs the same script again otherwise, 35s on NT.
+          # The checkout put every org submodule on its branch head. dist runs submodulebranch.bash again otherwise, 35s on NT.
           GOSUBMODULEBRANCH: 'off'
 
       # A read refreshes an entry's mtime once it is an hour old, so an entry older than 90 minutes is one this build never read.
@@ -219,14 +221,14 @@ jobs:
           }
           Get-PSDrive C, D | ForEach-Object { Write-Host ("{0}: {1:N1} GB free" -f $_.Name, ($_.Free/1GB)) }
 
-      - uses: actions/checkout@v4
+      # run.bash rebuilds the cmd packages from this tree, so the suite tests the client source the build leg linked in.
+      - uses: wow-look-at-my/actions@parallel-checkout#latest
         with:
-          submodules: false
           lfs: true
+          submodule-branch: ${{ github.ref_name }}
+          submodule-branch-lock: https://pazer.build
       - uses: wow-look-at-my/actions@disable-windows-defender#latest
       - uses: wow-look-at-my/actions@secret-server#latest
-      # run.bash rebuilds the cmd packages from this tree, so the suite tests the client source the build leg linked in.
-      - uses: ./.github/actions/track-submodules
       # run.bash reaches the same sandboxed generate directives the build leg does.
       - uses: wow-look-at-my/actions@bubblewrap#latest
       # TestRepeatBootstrap runs make.bash again, which compiles the APE loaders with these.
@@ -473,13 +475,13 @@ jobs:
     runs-on: ${{ github.event.repository.visibility == 'public' && 'ubuntu-latest' || vars.CI_RUNNER || 'ubuntu-latest' }}
 
     steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: false
-          lfs: true
-      - uses: wow-look-at-my/actions@secret-server#latest
       # embedded-std.dats rebuilds the go command from this tree, so the submodules carry their branch heads here too.
-      - uses: ./.github/actions/track-submodules
+      - uses: wow-look-at-my/actions@parallel-checkout#latest
+        with:
+          lfs: true
+          submodule-branch: ${{ github.ref_name }}
+          submodule-branch-lock: https://pazer.build
+      - uses: wow-look-at-my/actions@secret-server#latest
 
       - name: Take the toolchain build-linux built
         uses: wow-look-at-my/buildhost/.github/actions/buildhost-handoff@lkgb
@@ -544,12 +546,9 @@ jobs:
 
     steps:
       - name: Checkout code (for Go tests)
-        uses: actions/checkout@v4
+        uses: wow-look-at-my/actions@parallel-checkout#latest
         with:
-          submodules: false
           lfs: true
-      - run: bash ./src/submodulefetch.bash
-        shell: bash
 
       - uses: wow-look-at-my/actions@disable-windows-defender#latest
 
@@ -662,13 +661,13 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: wow-look-at-my/actions@parallel-checkout#latest
         with:
-          submodules: false
           lfs: true
+          submodule-branch: ${{ github.ref_name }}
+          submodule-branch-lock: https://pazer.build
 
       - uses: wow-look-at-my/actions@secret-server#latest
-      - uses: ./.github/actions/track-submodules
 
       - name: Setup Go bootstrap toolchain
         uses: actions/setup-go@v5
@@ -727,13 +726,13 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: wow-look-at-my/actions@parallel-checkout#latest
         with:
-          submodules: false
           lfs: true
+          submodule-branch: ${{ github.ref_name }}
+          submodule-branch-lock: https://pazer.build
 
       - uses: wow-look-at-my/actions@secret-server#latest
-      - uses: ./.github/actions/track-submodules
 
       - name: Setup Go bootstrap toolchain
         uses: actions/setup-go@v5
@@ -914,7 +913,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: wow-look-at-my/actions@parallel-checkout#latest
         with:
           submodules: false
           lfs: true
@@ -1002,7 +1001,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: wow-look-at-my/actions@parallel-checkout#latest
         with:
           submodules: false
           lfs: true
