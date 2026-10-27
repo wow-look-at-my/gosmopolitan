@@ -935,7 +935,7 @@ jobs:
         run: |
           size=$(du -sm ~/.cache/wasmtime 2>/dev/null | cut -f1)
           echo "wasm module cache: ${size:-0} MiB"
-          if [ "${size:-0}" -gt 2048 ]; then rm -rf ~/.cache/wasmtime; fi
+          if [ "${size:-0}" -gt 2048 ]; then rm -rf ~/.cache/wasmtime && mkdir -p ~/.cache/wasmtime; fi
 
       - name: Delete the older wasm module caches
         if: matrix.port == 'wasip1' && github.ref == 'refs/heads/master'
