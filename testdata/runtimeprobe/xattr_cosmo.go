@@ -52,6 +52,13 @@ func checkXattr() {
 	if size, err := llistxattr(link, buf); step.do("Llistxattr", err) && bytes.Contains(buf[:size], []byte(name)) {
 		step.do("Llistxattr follows the link", os.ErrInvalid)
 	}
+	// On a regular file the l-prefixed calls answer as the plain ones do. A copier that does not follow links uses them.
+	if size, err := llistxattr(path, buf); step.do("Llistxattr on a file", err) && !bytes.Contains(buf[:size], []byte(name+"\x00")) {
+		step.do("Llistxattr on a file names", os.ErrNotExist)
+	}
+	if size, err := lgetxattr(path, name, buf); step.do("Lgetxattr on a file", err) && string(buf[:size]) != value {
+		step.do("Lgetxattr on a file value", os.ErrInvalid)
+	}
 	step.finish("")
 }
 
@@ -62,6 +69,23 @@ func llistxattr(path string, dest []byte) (int, error) {
 		return 0, err
 	}
 	ret, _, errno := syscall.Syscall(syscall.SYS_LLISTXATTR, uintptr(unsafe.Pointer(ptr)), uintptr(unsafe.Pointer(&dest[0])), uintptr(len(dest)))
+	if errno != 0 {
+		return 0, errno
+	}
+	return int(ret), nil
+}
+
+// lgetxattr is the l-prefixed call that package syscall does not wrap.
+func lgetxattr(path, attr string, dest []byte) (int, error) {
+	p, err := syscall.BytePtrFromString(path)
+	if err != nil {
+		return 0, err
+	}
+	a, err := syscall.BytePtrFromString(attr)
+	if err != nil {
+		return 0, err
+	}
+	ret, _, errno := syscall.Syscall6(syscall.SYS_LGETXATTR, uintptr(unsafe.Pointer(p)), uintptr(unsafe.Pointer(a)), uintptr(unsafe.Pointer(&dest[0])), uintptr(len(dest)), 0, 0)
 	if errno != 0 {
 		return 0, errno
 	}
