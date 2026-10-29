@@ -52,6 +52,13 @@ func checkXattr() {
 	if size, err := llistxattr(link, buf); step.do("Llistxattr", err) && bytes.Contains(buf[:size], []byte(name)) {
 		step.do("Llistxattr follows the link", os.ErrInvalid)
 	}
+	// An empty buffer asks for the size. macOS answered ERANGE for it, and a copier that sizes its buffer first copied nothing.
+	if size, err := syscall.Getxattr(path, name, nil); step.do("Getxattr size query", err) && size != len(value) {
+		step.do("Getxattr size query value", os.ErrInvalid)
+	}
+	if size, err := syscall.Listxattr(path, nil); step.do("Listxattr size query", err) && size < len(name)+1 {
+		step.do("Listxattr size query value", os.ErrInvalid)
+	}
 	// On a regular file the l-prefixed calls answer as the plain ones do. A copier that does not follow links uses them.
 	if size, err := llistxattr(path, buf); step.do("Llistxattr on a file", err) && !bytes.Contains(buf[:size], []byte(name+"\x00")) {
 		step.do("Llistxattr on a file names", os.ErrNotExist)
