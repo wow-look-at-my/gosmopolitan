@@ -1,6 +1,8 @@
 // Copyright The Go Authors. All rights reserved. Use of this source code is
 // governed by a BSD-style license that can be found in the LICENSE file.
 
+// KeepReplacedIndices gives a package compiled with its test files the symbol indices of the same package compiled without them, when -testvariant names that compile's archive.
+
 package noder
 
 import (

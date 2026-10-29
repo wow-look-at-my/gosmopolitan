@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// Splice is not supported on cosmo - fall back to regular I/O.
+
 package poll
 
 // Splice is not supported on cosmo - fall back to regular I/O.

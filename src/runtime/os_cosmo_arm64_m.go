@@ -3,6 +3,8 @@
 
 //go:build cosmo && arm64
 
+// mOS contains OS-specific m fields for cosmo arm64.
+
 package runtime
 
 import "internal/runtime/atomic"

@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// Address families that only Linux hosts implement.
+
 package syscall
 
 import "unsafe"

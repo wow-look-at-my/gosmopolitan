@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// Apple's RTM_NEWADDR and RTM_DELADDR.
+
 package routebsd
 
 // Apple's RTM_NEWADDR and RTM_DELADDR.

@@ -3,6 +3,8 @@
 
 //go:build js && wasm && wasm.threads
 
+// sleep and wakeup on one-time events. before any calls to notesleep or notewakeup, must call noteclear.
+
 package runtime
 
 // sleep and wakeup on one-time events. before any calls to notesleep or

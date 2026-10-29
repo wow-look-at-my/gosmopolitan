@@ -3,6 +3,8 @@
 
 //go:build cosmo && arm64
 
+// _SYSLIB_MIN_VERSION is the oldest Syslib this runtime accepts.
+
 package runtime
 
 import (

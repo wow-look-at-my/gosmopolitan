@@ -3,6 +3,8 @@
 
 //go:build cmd_go_bootstrap && !compiler_bootstrap
 
+// go_bootstrap carries no tools: it drives the ones cmd/dist installed under pkg/tool.
+
 package selftool
 
 // go_bootstrap carries no tools: it drives the ones cmd/dist installed under pkg/tool.

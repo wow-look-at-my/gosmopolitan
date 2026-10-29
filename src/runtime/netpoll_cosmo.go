@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// This file holds the epoll poller used on Linux hosts.
+
 package runtime
 
 import (

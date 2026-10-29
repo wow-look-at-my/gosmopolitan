@@ -3,6 +3,8 @@
 
 //go:build cosmo && amd64
 
+// iswindows returns true if running on Windows NT.
+
 package runtime
 
 import "unsafe"

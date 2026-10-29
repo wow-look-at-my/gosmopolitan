@@ -3,6 +3,8 @@
 
 //go:build linux
 
+// scratch must have length ScratchSize.
+
 package cgroup
 
 // ReadMemoryLimit returns the memory limit in bytes of the memory cgroup

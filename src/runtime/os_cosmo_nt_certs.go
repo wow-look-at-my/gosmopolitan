@@ -3,6 +3,8 @@
 
 //go:build cosmo && amd64
 
+// Where an NT host keeps its trusted roots.
+
 package runtime
 
 import (

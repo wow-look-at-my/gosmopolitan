@@ -3,6 +3,8 @@
 
 //go:build js && wasm && wasm.threads
 
+// GOWASM=threads thread creation (phase B2).
+
 package runtime
 
 // GOWASM=threads thread creation (phase B2).

@@ -3,6 +3,8 @@
 
 //go:build !cmd_go_bootstrap && !js && !wasip1
 
+// fileLines calls visit with each line of the file at path, as a subslice of a read-only mapping.
+
 package gendep
 
 import "github.com/wow-look-at-my/go-mmap"

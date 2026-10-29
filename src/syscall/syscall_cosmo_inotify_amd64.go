@@ -3,6 +3,8 @@
 
 //go:build cosmo && amd64
 
+// InotifyInit has a syscall number in the amd64 table and none in the arm64 table.
+
 package syscall
 
 // InotifyInit has a syscall number in the amd64 table and none in the arm64

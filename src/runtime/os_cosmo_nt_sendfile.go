@@ -3,6 +3,8 @@
 
 //go:build cosmo && amd64
 
+// ntSendfileChunk is the bounce buffer one pass copies.
+
 package runtime
 
 import "unsafe"

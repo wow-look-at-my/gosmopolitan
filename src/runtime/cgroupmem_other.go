@@ -3,6 +3,8 @@
 
 //go:build !linux
 
+// cgroupMemoryLimit returns no limit: only Linux has cgroups.
+
 package runtime
 
 // cgroupMemoryLimit returns no limit: only Linux has cgroups.

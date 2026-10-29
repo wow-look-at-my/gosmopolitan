@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// Signal table for Cosmopolitan Libc.
+
 package runtime
 
 // Signal table for Cosmopolitan Libc. Cosmopolitan uses Linux signal numbers.

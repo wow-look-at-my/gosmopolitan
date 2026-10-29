@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// One APE boots on kernels, so both readers are compiled in and the host picks.
+
 package net
 
 import "runtime"

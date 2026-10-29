@@ -3,6 +3,8 @@
 
 //go:build !cosmo
 
+// highPrecisionTicks has no host-specific counter to offer here.
+
 package runtime
 
 // highPrecisionTicks has no host-specific counter to offer here.

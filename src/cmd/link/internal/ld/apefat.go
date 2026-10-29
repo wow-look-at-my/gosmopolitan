@@ -1,6 +1,8 @@
 // Copyright The Go Authors. All rights reserved. Use of this source code is
 // governed by a BSD-style license that can be found in the LICENSE file.
 
+// apeFatMerge implements the -apefat linker mode: it assembles the given GOOS=cosmo binaries (at most one per architecture; each either an APE produced by this linker or a raw ELF) into a single APE at outfile, skipping normal linking entirely.
+
 package ld
 
 import (

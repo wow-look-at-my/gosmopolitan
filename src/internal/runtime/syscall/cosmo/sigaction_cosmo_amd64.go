@@ -3,6 +3,8 @@
 
 //go:build cosmo && amd64
 
+// rt_sigaction emulation for macOS-Intel hosts.
+
 package cosmo
 
 import (

@@ -3,6 +3,8 @@
 
 //go:build cosmo && amd64
 
+// statfs and fstatfs are shared (bigbuf_cosmo.go).
+
 package syscall
 
 import "unsafe"

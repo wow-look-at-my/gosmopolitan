@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// Splice exists here for source compatibility.
+
 package syscall
 
 // Splice exists here for source compatibility.

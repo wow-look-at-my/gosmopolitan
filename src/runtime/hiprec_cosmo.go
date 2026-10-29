@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// highPrecisionTicks answers a counter fine enough to measure tens of nanoseconds.
+
 package runtime
 
 // highPrecisionTicks answers a counter fine enough to measure tens of nanoseconds.

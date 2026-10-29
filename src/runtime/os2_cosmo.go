@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// It is hard to tease out exactly how big a Sigset is.
+
 package runtime
 
 const (

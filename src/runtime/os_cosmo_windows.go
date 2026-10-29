@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// Windows support for Cosmopolitan APE binaries.
+
 package runtime
 
 // Windows support for Cosmopolitan APE binaries.

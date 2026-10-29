@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// The inotify group.
+
 package syscall
 
 import "unsafe"

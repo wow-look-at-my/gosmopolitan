@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// Process tracing.
+
 package syscall
 
 import "unsafe"

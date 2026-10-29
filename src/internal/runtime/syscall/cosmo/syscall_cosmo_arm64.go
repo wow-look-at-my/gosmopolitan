@@ -3,6 +3,8 @@
 
 //go:build cosmo && arm64
 
+// Darwin (macOS ARM64) syscall emulation.
+
 package cosmo
 
 import "unsafe"

@@ -3,6 +3,8 @@
 
 //go:build wasip1 && wasip1.wasmedgesock
 
+// This file replaces net_wasip1.go when GOWASI=wasmedgesock is set.
+
 package syscall
 
 import (

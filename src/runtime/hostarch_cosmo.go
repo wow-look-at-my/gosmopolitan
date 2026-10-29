@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// Image file machine values (winnt.h), as IsWow64Process2 reports them.
+
 package runtime
 
 import "unsafe"

@@ -3,6 +3,8 @@
 
 //go:build cosmo && arm64
 
+// File and metadata syscalls emulated on macOS with dlsym-resolved Apple libc entries.
+
 package cosmo
 
 import "unsafe"

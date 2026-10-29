@@ -1,6 +1,8 @@
 // Copyright The Go Authors. All rights reserved. Use of this source code is
 // governed by a BSD-style license that can be found in the LICENSE file.
 
+// An org module (see cmd/go/internal/orgmod) carries no version of its own.
+
 package modload
 
 import (

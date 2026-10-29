@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// The Linux socket filter group.
+
 package syscall
 
 import "unsafe"

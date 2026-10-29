@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// mkdir(2) and open(2) carry the sticky bit on Linux and drop it on the BSDs.
+
 package os
 
 import "runtime"

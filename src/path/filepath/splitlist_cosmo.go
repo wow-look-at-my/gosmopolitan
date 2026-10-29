@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// splitList follows the host, because one APE reads both shapes of PATH.
+
 package filepath
 
 import (

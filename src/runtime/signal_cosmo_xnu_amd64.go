@@ -3,6 +3,8 @@
 
 //go:build cosmo && amd64
 
+// Real signal-handler installation on macOS-Intel hosts.
+
 package runtime
 
 import (
@@ -111,7 +113,6 @@ func darwinSigprocmask(how int32, new, old *sigset) {
 	}
 }
 
-//
 // Crashes on failure like the Linux asm path: a stack the kernel did not
 // take would surface later as a fault on the wrong stack.
 //
