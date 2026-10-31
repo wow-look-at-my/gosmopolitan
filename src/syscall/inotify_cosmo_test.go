@@ -563,7 +563,7 @@ func TestInotifyCloseReleasesInstance(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		return
 	}
-	before := syscall.InotifyLiveForTest()
+	awaitInotifyLive(t, 0)
 	fd, err := syscall.InotifyInit1(syscall.IN_CLOEXEC)
 	if err != nil {
 		t.Fatal(err)
@@ -571,14 +571,21 @@ func TestInotifyCloseReleasesInstance(t *testing.T) {
 	if _, err := syscall.InotifyAddWatch(fd, t.TempDir(), syscall.IN_CREATE); err != nil {
 		t.Fatal(err)
 	}
-	if live := syscall.InotifyLiveForTest(); live != before+1 {
-		t.Fatalf("%d instances live, want %d", live, before+1)
+	if live := syscall.InotifyLiveForTest(); live != 1 {
+		t.Fatalf("%d instances live, want 1", live)
 	}
 	syscall.Close(fd)
+	awaitInotifyLive(t, 0)
+}
+
+// awaitInotifyLive waits for closed instances to finish going away. Earlier
+// tests' instances count until their goroutines have seen the close.
+func awaitInotifyLive(t *testing.T, want int) {
+	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
-	for syscall.InotifyLiveForTest() != before {
+	for syscall.InotifyLiveForTest() != want {
 		if time.Now().After(deadline) {
-			t.Fatalf("%d instances live after close, want %d", syscall.InotifyLiveForTest(), before)
+			t.Fatalf("%d instances live, want %d", syscall.InotifyLiveForTest(), want)
 		}
 		time.Sleep(time.Millisecond)
 	}
