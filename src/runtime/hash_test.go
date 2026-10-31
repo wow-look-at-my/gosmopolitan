@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"internal/byteorder"
+	"internal/goarch"
 	"internal/race"
 	"internal/testenv"
 	"math"
@@ -732,8 +733,9 @@ func TestIssue66841(t *testing.T) {
 	h.check(t)
 }
 
-// size of the hash output (32 or 64 bits)
-const hashSize = 32 + int(^uintptr(0)>>63<<5)
+// size of the hash output. Wasm keeps a 32-bit hash in a 64-bit uintptr, so
+// the port decides the width, not the pointer.
+const hashSize = goarch.PtrBits - 32*goarch.IsWasm
 
 func randBytes(r *rand.Rand, b []byte) {
 	for i := range b {
