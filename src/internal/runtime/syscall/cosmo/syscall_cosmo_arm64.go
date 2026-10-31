@@ -326,6 +326,17 @@ func darwinXattrNofollow(nofollow bool) uintptr {
 	return 0
 }
 
+// darwinXattrBuf passes a NULL buffer for a size of zero. Linux reads the
+// first size as a query for the size.
+//
+//go:nosplit
+func darwinXattrBuf(buf, size uintptr) uintptr {
+	if size == 0 {
+		return 0
+	}
+	return buf
+}
+
 // darwinXattrFlags maps Linux XATTR_CREATE and XATTR_REPLACE to Apple's values.
 //
 //go:nosplit
@@ -457,10 +468,10 @@ func syscall6SlowDarwin(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uint
 		return darwinCall(darwinFns.Readlinkat, darwinXlatDirfd(a1), a2, a3, a4, 0, 0)
 	case sysLISTXATTR, sysLLISTXATTR:
 		// listxattr(path, namebuf, size, options)
-		return darwinCall(darwinFns.Listxattr, a1, a2, a3, darwinXattrNofollow(num == sysLLISTXATTR), 0, 0)
+		return darwinCall(darwinFns.Listxattr, a1, darwinXattrBuf(a2, a3), a3, darwinXattrNofollow(num == sysLLISTXATTR), 0, 0)
 	case sysGETXATTR, sysLGETXATTR:
 		// getxattr(path, name, value, size, position, options)
-		return darwinCall(darwinFns.Getxattr, a1, a2, a3, a4, 0, darwinXattrNofollow(num == sysLGETXATTR))
+		return darwinCall(darwinFns.Getxattr, a1, a2, darwinXattrBuf(a3, a4), a4, 0, darwinXattrNofollow(num == sysLGETXATTR))
 	case sysSETXATTR, sysLSETXATTR:
 		// setxattr(path, name, value, size, position, options)
 		return darwinCall(darwinFns.Setxattr, a1, a2, a3, a4, 0, darwinXattrFlags(a5)|darwinXattrNofollow(num == sysLSETXATTR))
