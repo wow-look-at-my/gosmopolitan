@@ -1,1 +1,1 @@
-pkg testing, method (*T) Serial() #109
+pkg testing, method (*T) Serial(string) #109

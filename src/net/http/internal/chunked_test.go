@@ -107,7 +107,7 @@ func TestChunkReadMultiple(t *testing.T) {
 }
 
 func TestChunkReaderAllocs(t *testing.T) {
-	t.Serial() // AllocsPerRun measures the whole process.
+	t.Serial("reading a chunked body must not allocate per chunk, and nothing else may allocate while that is counted")
 	if testing.Short() {
 		t.Skip("skipping in short mode")
 	}
