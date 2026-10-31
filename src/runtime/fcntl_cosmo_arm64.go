@@ -3,6 +3,8 @@
 
 //go:build cosmo && arm64
 
+// fcntl performs the fcntl syscall with Linux cmd/arg encodings.
+
 package runtime
 
 import "internal/runtime/syscall/cosmo"

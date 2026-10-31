@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// lookupCriticalEnv answers the name NT spells.
+
 package exec
 
 // lookupCriticalEnv answers the name NT spells.

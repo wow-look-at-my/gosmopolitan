@@ -3,6 +3,8 @@
 
 //go:build !cosmo
 
+// interfacesServedHere is true everywhere but cosmo: a port that builds for one kernel implements the table for that kernel.
+
 package net
 
 // interfacesServedHere is true everywhere but cosmo: a port that builds for one kernel implements the table for that kernel.

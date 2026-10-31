@@ -3,6 +3,8 @@
 
 //go:build cosmo && amd64
 
+// The amd64 members of the time and clock group.
+
 package syscall
 
 import "unsafe"

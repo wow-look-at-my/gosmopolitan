@@ -3,6 +3,8 @@
 
 //go:build !windows && !darwin && !ios
 
+// hasPlatformVerifier reports whether this build carries a systemVerify that asks the host to verify a chain.
+
 package x509
 
 // hasPlatformVerifier reports whether this build carries a systemVerify that asks the host to verify a chain.

@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// cosmoHostIsLinux reports whether this process runs on a Linux host.
+
 package syscall
 
 import "runtime"

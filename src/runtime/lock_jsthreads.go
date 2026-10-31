@@ -3,6 +3,8 @@
 
 //go:build js && wasm && wasm.threads
 
+// GOWASM=threads runtime locks.
+
 package runtime
 
 // GOWASM=threads runtime locks.

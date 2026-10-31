@@ -3,6 +3,8 @@
 
 //go:build (darwin || dragonfly || freebsd || netbsd || openbsd) && !cosmo
 
+// bsdIffMulticast is this kernel's own IFF_MULTICAST. cosmo cannot read it from package syscall, where the name carries the Linux value.
+
 package net
 
 import "syscall"

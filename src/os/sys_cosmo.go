@@ -1,6 +1,8 @@
 // Copyright The Go Authors. All rights reserved. Use of this source code is
 // governed by a BSD-style license that can be found in the LICENSE file.
 
+// One APE runs on kernels, and each keeps the machine's name somewhere else. uname's nodename answers on Linux and on NT.
+
 package os
 
 import (

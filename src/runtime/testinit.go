@@ -1,6 +1,8 @@
 // Copyright The Go Authors. All rights reserved. Use of this source code is
 // governed by a BSD-style license that can be found in the LICENSE file.
 
+// testInitUnit lists the initialization records the tests of one package run before they start.
+
 package runtime
 
 import _ "unsafe" // for go:linkname

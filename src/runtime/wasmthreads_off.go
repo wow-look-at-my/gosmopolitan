@@ -3,6 +3,8 @@
 
 //go:build wasm && !(js && wasm.threads)
 
+// GOWASM=threads is off (or the target is wasip1, which the linker rejects in combination with GOWASM=threads).
+
 package runtime
 
 // GOWASM=threads is off (or the target is wasip1, which the linker rejects in combination with GOWASM=threads).

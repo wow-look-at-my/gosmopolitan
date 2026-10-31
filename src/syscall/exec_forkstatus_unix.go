@@ -3,6 +3,8 @@
 
 //go:build unix && !cosmo
 
+// readForkExecStatus reads the child's exec status off the pipe.
+
 package syscall
 
 // readForkExecStatus reads the child's exec status off the pipe.

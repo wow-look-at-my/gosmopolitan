@@ -3,6 +3,8 @@
 
 //go:build cosmo || linux || android
 
+// sendfileIsLinuxShaped says the platform's sendfile reads from the input file's own position and advances it, so a caller passes no offset.
+
 package poll
 
 // sendfileIsLinuxShaped says the platform's sendfile reads from the input file's own position and advances it, so a caller passes no offset.

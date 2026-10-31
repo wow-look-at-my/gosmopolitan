@@ -3,6 +3,8 @@
 
 //go:build cosmo && arm64
 
+// rawSyscallNoErrorDarwin is the darwin branch of rawSyscallNoError (asm_cosmo_arm64.s tail-jumps here on macOS, where raw SVC would SIGSYS).
+
 package syscall
 
 import (

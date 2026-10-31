@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// runtime_cancelIO ends the transfers other threads have blocked on fd.
+
 package poll
 
 import _ "unsafe" // for go:linkname

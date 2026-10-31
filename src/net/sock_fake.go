@@ -3,6 +3,8 @@
 
 //go:build js || (wasip1 && !wasip1.wasmedgesock)
 
+// socket returns a network file descriptor that is ready for I/O using the fake network.
+
 package net
 
 import (

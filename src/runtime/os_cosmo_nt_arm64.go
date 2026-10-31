@@ -3,6 +3,8 @@
 
 //go:build cosmo && arm64
 
+// iswindows reports whether the host is Windows NT.
+
 package runtime
 
 import _ "unsafe" // for go:linkname

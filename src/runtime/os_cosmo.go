@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// sigPerThreadSyscall is the same signal (SIGSETXID) used by glibc for per-thread syscalls.
+
 package runtime
 
 import (

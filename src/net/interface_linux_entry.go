@@ -3,6 +3,8 @@
 
 //go:build linux && !cosmo
 
+// A linux build has one kernel under it.
+
 package net
 
 // A linux build has one kernel under it.

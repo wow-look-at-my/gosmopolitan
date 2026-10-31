@@ -3,6 +3,8 @@
 
 //go:build !cmd_go_bootstrap && !compiler_bootstrap
 
+// tools are every tool the installed go command carries, by the name the go command asks for them under.
+
 package selftool
 
 import (

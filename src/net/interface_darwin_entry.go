@@ -3,6 +3,8 @@
 
 //go:build darwin && !cosmo
 
+// Only the multicast reader needs a shim here.
+
 package net
 
 // Only the multicast reader needs a shim here.

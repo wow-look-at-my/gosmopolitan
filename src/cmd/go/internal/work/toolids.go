@@ -1,6 +1,8 @@
 // Copyright The Go Authors. All rights reserved. Use of this source code is
 // governed by a BSD-style license that can be found in the LICENSE file.
 
+// linkedToolIDs answers the tool IDs of the tools linked into root's binary, as "name=id" pairs sorted by name and joined by commas.
+
 package work
 
 import (

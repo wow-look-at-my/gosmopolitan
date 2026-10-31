@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// secureMode is declared in os_cosmo.go and initialized from AT_SECURE in sysauxv.
+
 package runtime
 
 // secureMode is declared in os_cosmo.go and initialized from AT_SECURE in sysauxv.

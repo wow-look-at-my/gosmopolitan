@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// Apple ABI facts the darwin emulation translates against, and the pure functions that do the translating.
+
 package cosmo
 
 // Apple ABI facts the darwin emulation translates against, and the pure

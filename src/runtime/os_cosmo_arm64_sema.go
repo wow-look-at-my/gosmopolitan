@@ -3,6 +3,8 @@
 
 //go:build cosmo && arm64
 
+// Semaphore implementation for cosmo arm64, used by lock_spinbit.go and lock_sema.go for M parking.
+
 package runtime
 
 // Semaphore implementation for cosmo arm64, used by lock_spinbit.go and

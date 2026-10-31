@@ -3,6 +3,8 @@
 
 //go:build !compiler_bootstrap
 
+// dwarfCompressCodec returns the ELF compression header type used for the target's compressed DWARF sections: ELFCOMPRESS_ZSTD for GOOS=cosmo.
+
 package ld
 
 import (

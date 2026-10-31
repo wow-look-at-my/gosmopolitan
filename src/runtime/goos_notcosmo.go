@@ -3,6 +3,8 @@
 
 //go:build !cosmo
 
+// GOOS is the running program's operating system target: one of darwin, freebsd, linux, and so on.
+
 package runtime
 
 import (

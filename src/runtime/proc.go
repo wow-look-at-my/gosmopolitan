@@ -4768,20 +4768,33 @@ func stealWork(now int64) (gp *g, inheritTime bool, rnow, pollUntil int64, newWo
 //
 // On entry we have no P. If a G is available to steal and a P is available,
 // the P is returned which the caller should acquire and attempt to steal the
-// work to.
+// work to. A runnext G that its P should get the chance to run first is not
+// available yet: sysmonStealRunnext wakes a thief for it later.
 func checkRunqsNoP(allpSnapshot []*p, idlepMaskSnapshot pMask) *p {
+	var now int64
 	for id, p2 := range allpSnapshot {
-		if !idlepMaskSnapshot.read(uint32(id)) && !runqempty(p2) {
-			lock(&sched.lock)
-			pp, _ := pidlegetSpinning(0)
-			if pp == nil {
-				// Can't get a P, don't bother checking remaining Ps.
-				unlock(&sched.lock)
-				return nil
-			}
-			unlock(&sched.lock)
-			return pp
+		if idlepMaskSnapshot.read(uint32(id)) || runqempty(p2) {
+			continue
 		}
+		if atomic.Load(&p2.runqhead) == atomic.Load(&p2.runqtail) {
+			if next := p2.runnext; next != 0 {
+				if now == 0 {
+					now = nanotime()
+				}
+				if !runnextStealable(p2, next, now) {
+					continue
+				}
+			}
+		}
+		lock(&sched.lock)
+		pp, _ := pidlegetSpinning(0)
+		if pp == nil {
+			// Can't get a P, don't bother checking remaining Ps.
+			unlock(&sched.lock)
+			return nil
+		}
+		unlock(&sched.lock)
+		return pp
 	}
 
 	// No work available.
@@ -7690,7 +7703,7 @@ func sysmon() {
 		}
 		// retake P's blocked in syscalls
 		// and preempt long running G's
-		if retake(now) != 0 {
+		if retake(now) != 0 || sysmonStealRunnext(now) {
 			idle = 0
 		} else {
 			idle++
@@ -8803,6 +8816,76 @@ retry:
 	return
 }
 
+// runnextStealDelay is how long a thief leaves a runnext G to the P that
+// holds it. The important use case is when the g running on that P
+// ready()s another g and then almost immediately blocks: the P then runs
+// runnext itself, and stealing it in that window would thrash Gs between
+// Ps. A sync chan send/recv takes ~50ns as of time of writing, so 3us
+// gives ~50x overshoot.
+const runnextStealDelay = 3 * 1000
+
+// runnextStealable reports whether a thief may take next from pp.runnext
+// now. A thief that may not does not wait for it: it parks as it would
+// with no work at all, and sysmonStealRunnext wakes a thief once next has
+// sat for runnextStealDelay.
+//
+// If curg is nil, the P is likely to be in the scheduler. If curg isn't
+// nil and isn't in a syscall, then it's either running, waiting, or
+// runnable, and the P might either call into the scheduler soon
+// (running), or already is (since a waiting or runnable goroutine hanging
+// off of a running P suggests it either recently transitioned out of
+// running, or will transition to running shortly). In both cases the P
+// gets runnextStealDelay to run next first.
+func runnextStealable(pp *p, next guintptr, now int64) bool {
+	if !haveSysmon || hostHasLowResTimer() {
+		// Without sysmon nothing wakes the thief. With a 1-15ms
+		// sysmon tick the delay is far too long for this optimization.
+		return true
+	}
+	if pp.status != _Prunning {
+		return true
+	}
+	mp := pp.m.ptr()
+	if mp == nil {
+		return true
+	}
+	if gp := mp.curg; gp != nil && readgstatus(gp)&^_Gscan == _Gsyscall {
+		return true
+	}
+	if pp.runnextSeen.Load() != uintptr(next) {
+		pp.runnextSeenAt.Store(now)
+		pp.runnextSeen.Store(uintptr(next))
+		return false
+	}
+	return now >= pp.runnextSeenAt.Load()+runnextStealDelay
+}
+
+// sysmonStealRunnext starts a spinning M when a P is idle and a runnext G
+// that thieves left to its running P has sat for runnextStealDelay. It
+// reports whether it found one. sysmon calls it on its own tick, so no
+// thief waits on a clock.
+func sysmonStealRunnext(now int64) bool {
+	if hostHasLowResTimer() || sched.npidle.Load() == 0 || sched.nmspinning.Load() != 0 {
+		return false
+	}
+	found := false
+	lock(&allpLock)
+	for _, pp := range allp {
+		if pp == nil || pp.status != _Prunning || atomic.Load(&pp.runqhead) != atomic.Load(&pp.runqtail) {
+			continue
+		}
+		if next := pp.runnext; next != 0 && runnextStealable(pp, next, now) {
+			found = true
+			break
+		}
+	}
+	unlock(&allpLock)
+	if found {
+		wakep()
+	}
+	return found
+}
+
 // Grabs a batch of goroutines from pp's runnable queue into batch.
 // Batch is a ring buffer starting at batchHead.
 // Returns number of grabbed goroutines.
@@ -8817,9 +8900,9 @@ func runqgrab(pp *p, batch *[256]guintptr, batchHead uint32, stealRunNextG bool)
 			if stealRunNextG {
 				// Try to steal from pp.runnext.
 				if next := pp.runnext; next != 0 {
-					// The thief takes runnext at once. Nothing tells a thief
-					// when pp is about to run next itself, so a delay here
-					// would be a guess, not a wait on pp.
+					if !runnextStealable(pp, next, nanotime()) {
+						return 0
+					}
 					if !pp.runnext.cas(next, 0) {
 						continue
 					}

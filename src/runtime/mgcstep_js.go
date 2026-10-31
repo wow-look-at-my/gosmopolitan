@@ -3,6 +3,8 @@
 
 //go:build js && wasm
 
+// wasm_gc_mark_step implements the "go_gc_mark_step" wasm export, the JS-visible contract being.
+
 package runtime
 
 // wasm_gc_mark_step implements the "go_gc_mark_step" wasm export, the

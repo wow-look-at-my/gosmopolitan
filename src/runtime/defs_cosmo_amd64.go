@@ -3,6 +3,8 @@
 
 //go:build cosmo && amd64
 
+// Type definitions for Cosmopolitan Libc on amd64.
+
 package runtime
 
 import "unsafe"

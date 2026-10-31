@@ -3,6 +3,8 @@
 
 //go:build cosmo && arm64
 
+// uname is the big-buffer call that is arm64-only, so statfs sits in bigbuf_cosmo.go and this does not.
+
 package syscall
 
 import (

@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// Windows NT syscall emulation hook.
+
 package cosmo
 
 // Windows NT syscall emulation hook.

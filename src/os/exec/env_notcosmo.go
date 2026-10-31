@@ -3,6 +3,8 @@
 
 //go:build !cosmo
 
+// lookupCriticalEnv reads the environment the way this port spells it.
+
 package exec
 
 import "os"

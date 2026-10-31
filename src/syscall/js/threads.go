@@ -3,6 +3,8 @@
 
 //go:build js && wasm
 
+// GOWASM=threads: JavaScript values live on the main thread.
+
 package js
 
 import (

@@ -3,6 +3,8 @@
 
 //go:build !js
 
+// wasmIdleMarkCanYield is a stub for non-js platforms; idle mark throttling (see wasmIdleMarkThrottled in mgcmark.go) is js/wasm only.
+
 package runtime
 
 // wasmIdleMarkCanYield is a stub for non-js platforms; idle mark

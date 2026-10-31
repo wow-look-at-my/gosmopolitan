@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// struct termios, both shapes, and the translation between them.
+
 package cosmo
 
 // struct termios, both shapes, and the translation between them.

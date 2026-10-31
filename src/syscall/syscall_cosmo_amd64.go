@@ -3,6 +3,8 @@
 
 //go:build cosmo && amd64
 
+// A leading NUL means the abstract namespace, which only Linux has.
+
 package syscall
 
 import (

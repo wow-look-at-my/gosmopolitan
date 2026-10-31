@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// apeMagic opens every Portable Executable: the DOS stub whose bytes are also the shell script that boots the file on a kernel.
+
 package exec
 
 import (
