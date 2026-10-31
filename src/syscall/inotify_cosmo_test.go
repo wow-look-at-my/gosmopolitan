@@ -392,8 +392,11 @@ func TestInotifyAddWatchErrors(t *testing.T) {
 	path := filepath.Join(dir, "file")
 	writeFile(t, path, "text")
 
-	if _, err := syscall.InotifyAddWatch(ino.fd, dir, syscall.IN_ONESHOT); err != syscall.EINVAL {
-		t.Errorf("mask with no events = %v, want EINVAL", err)
+	if _, err := syscall.InotifyAddWatch(ino.fd, dir, 0); err != syscall.EINVAL {
+		t.Errorf("empty mask = %v, want EINVAL", err)
+	}
+	if _, err := syscall.InotifyAddWatch(ino.fd, dir, syscall.IN_ONESHOT); err != nil {
+		t.Errorf("IN_ONESHOT alone = %v, want a watch", err)
 	}
 	if _, err := syscall.InotifyAddWatch(ino.fd, dir, syscall.IN_CREATE|syscall.IN_MASK_ADD|0x10000000); err != syscall.EINVAL {
 		t.Errorf("IN_MASK_ADD with IN_MASK_CREATE = %v, want EINVAL", err)

@@ -52,7 +52,13 @@ const (
 	// inMaskCreate is IN_MASK_CREATE, which Linux added after the syscall package's constants were frozen.
 	inMaskCreate = 0x10000000
 
-	inotifyKept      = IN_ALL_EVENTS | IN_ONESHOT
+	inotifyKept = IN_ALL_EVENTS | IN_ONESHOT
+
+	// inotifyMaskBits is Linux's ALL_INOTIFY_BITS. inotify_add_watch refuses
+	// only a mask with none of them, so IN_ONESHOT alone is a valid mask.
+	inotifyMaskBits = IN_ALL_EVENTS | IN_UNMOUNT | IN_Q_OVERFLOW | IN_IGNORED | IN_ONLYDIR | IN_DONT_FOLLOW |
+		IN_EXCL_UNLINK | inMaskCreate | IN_MASK_ADD | IN_ISDIR | IN_ONESHOT
+
 	inotifyOpenFlags = O_RDONLY | O_NONBLOCK | O_CLOEXEC
 
 	// inotifyQueueMax is the default of Linux's max_queued_events.
@@ -277,7 +283,7 @@ func inotifyAddWatch(fd int, path *byte, mask uint32) (uintptr, Errno) {
 	if path == nil {
 		return 0, EFAULT
 	}
-	if mask&IN_ALL_EVENTS == 0 || mask&IN_MASK_ADD != 0 && mask&inMaskCreate != 0 {
+	if mask&inotifyMaskBits == 0 || mask&IN_MASK_ADD != 0 && mask&inMaskCreate != 0 {
 		return 0, EINVAL
 	}
 	flags := inotifyOpenFlags
