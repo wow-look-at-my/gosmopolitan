@@ -27,7 +27,7 @@ import (
 // A module is fetched in parts.
 
 // overlayVersion names the entry format.
-const overlayVersion = "overlay v4"
+const overlayVersion = "overlay v5"
 
 // overlayKey is the cache key of the overlay of mod whose base zip has checksum
 // baseSum. An org module has no checksum: its pseudo-version names its commit.
