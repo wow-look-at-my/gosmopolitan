@@ -40,6 +40,8 @@ type InotifyQueueForTest = inotifyQueue
 
 const InotifyQueueMaxForTest = inotifyQueueMax
 
+var KernelLeaseWaitsForTest = kernelLeaseWaits
+
 func (queue *inotifyQueue) PushForTest(wd int32, mask, cookie uint32, name string) {
 	queue.push(wd, mask, cookie, name)
 }
