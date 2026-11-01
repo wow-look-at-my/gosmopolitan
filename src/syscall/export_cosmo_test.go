@@ -48,21 +48,17 @@ func (queue *inotifyQueue) RecordsForTest() [][]byte {
 	return queue.records
 }
 
-// InotifyLiveForTest counts the instances whose goroutine is still running.
+// InotifyLiveForTest counts the instances that have not let go of everything.
 func InotifyLiveForTest() int {
-	inotifies.Lock()
-	defer inotifies.Unlock()
-	ntInotifies.Lock()
-	defer ntInotifies.Unlock()
-	return len(inotifies.m) + len(ntInotifies.m)
+	return int(inotifyLive.Load())
 }
 
-// InotifyDoneForTest returns what closes when an NT instance has let go of
-// every handle, or nil for any other descriptor.
+// InotifyDoneForTest returns what closes when an instance has let go of
+// everything, or nil for any other descriptor.
 func InotifyDoneForTest(fd int) <-chan struct{} {
-	ntInotifies.Lock()
-	defer ntInotifies.Unlock()
-	if ino := ntInotifies.m[fd]; ino != nil {
+	inotifies.Lock()
+	defer inotifies.Unlock()
+	if ino := inotifies.m[fd]; ino != nil {
 		return ino.done
 	}
 	return nil

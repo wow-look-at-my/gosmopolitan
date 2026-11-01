@@ -61,6 +61,11 @@ func CosmoHostRootCerts() [][]byte {
 // CosmoDarwinSysctl issues Apple's sysctl with a numeric MIB and reports how
 // many bytes it wrote.
 //
+//go:linkname syscall_inotifySleep syscall.inotifySleep
+func syscall_inotifySleep(nanos int64) {
+	timeSleep(nanos)
+}
+
 //go:linkname syscall_cosmoDarwinSysctl syscall.cosmoDarwinSysctl
 func syscall_cosmoDarwinSysctl(mib []uint32, out []byte) (int, bool) {
 	return CosmoDarwinSysctl(mib, out)

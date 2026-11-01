@@ -154,3 +154,15 @@ func ntSocketUnread(fd int32) (unread int, errno uintptr) {
 	}
 	return int(count), 0
 }
+
+// ntSocketAwait blocks in WSAPoll, which leaves the socket's other calls running
+// where a blocking recv would stop them.
+func ntSocketAwait(fd int32) {
+	e, eno := ntSockLookup(fd)
+	if eno != 0 {
+		return
+	}
+	polled := ntWSAPollFD{fd: e.handle, events: _NT_POLLRDNORM}
+	ntcallSE(ntWSAPollFn, uintptr(unsafe.Pointer(&polled)), 1, ^uintptr(0), 0, 0, 0, 0)
+	KeepAlive(&polled)
+}

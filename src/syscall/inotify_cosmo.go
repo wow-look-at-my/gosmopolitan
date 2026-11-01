@@ -3,14 +3,13 @@
 
 //go:build cosmo
 
-// inotify_cosmo.go holds what the macOS and NT inotify emulations share: the
-// trap dispatch, the record format, the queue and the mask rules.
+// inotify_cosmo.go holds the trap dispatch, the record format. The queue and the
+// mask rules of the inotify calls this package serves on every host.
 
 package syscall
 
 import (
 	"internal/bytealg"
-	"internal/runtime/syscall/cosmo"
 	"unsafe"
 )
 
@@ -67,14 +66,13 @@ type inotifyEntry struct {
 	kind uint8
 }
 
-// inotifyTrap reports whether trap is an inotify syscall this package serves,
-// which it does on a macOS or NT host.
+// inotifyTrap reports whether trap is an inotify syscall.
 //
 //go:nosplit
 func inotifyTrap(trap uintptr) bool {
 	switch trap {
 	case SYS_INOTIFY_INIT1, SYS_INOTIFY_ADD_WATCH, SYS_INOTIFY_RM_WATCH, darwinSysInotifyInit:
-		return cosmo.Darwin() || cosmo.Windows() != nil
+		return true
 	}
 	return false
 }
@@ -143,28 +141,4 @@ func inotifyMerged(current, mask uint32) uint32 {
 		return current | mask&inotifyKept
 	}
 	return mask & inotifyKept
-}
-
-func inotifyInit(flags uintptr) (uintptr, Errno) {
-	if flags&^(IN_CLOEXEC|IN_NONBLOCK) != 0 {
-		return 0, EINVAL
-	}
-	if cosmo.Windows() != nil {
-		return ntInotifyInit(flags)
-	}
-	return kqueueInotifyInit(flags)
-}
-
-func inotifyAddWatch(fd int, path *byte, mask uint32) (uintptr, Errno) {
-	if cosmo.Windows() != nil {
-		return ntInotifyAddWatch(fd, path, mask)
-	}
-	return kqueueInotifyAddWatch(fd, path, mask)
-}
-
-func inotifyRmWatch(fd int, wd int32) Errno {
-	if cosmo.Windows() != nil {
-		return ntInotifyRmWatch(fd, wd)
-	}
-	return kqueueInotifyRmWatch(fd, wd)
 }
