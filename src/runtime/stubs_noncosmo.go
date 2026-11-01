@@ -17,6 +17,14 @@ func cosmoHostIsWindows() bool {
 	return false
 }
 
+// cosmoSigG is a stub for non-cosmo systems; see sigFetchG in signal_unix.go
+// and the GOOS=cosmo implementation in signal_cosmo_arm64.go.
+//
+//go:nosplit
+func cosmoSigG(pc uintptr) (*g, bool) {
+	return nil, false
+}
+
 // cosmoNTGoargs is a stub for non-cosmo systems; see goargs in
 // runtime1.go and the GOOS=cosmo implementation in os_cosmo_nt.go.
 func cosmoNTGoargs() bool {

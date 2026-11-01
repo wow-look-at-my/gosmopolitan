@@ -89,6 +89,10 @@ func checkInotify() {
 		fail("inotify", "%v", err)
 		return
 	}
+	if err := inotifyUnderPreemption(); err != nil {
+		fail("inotify", "%v", err)
+		return
+	}
 	ok("inotify", "create, write, rename and delete reported, and every host's events agree")
 }
 

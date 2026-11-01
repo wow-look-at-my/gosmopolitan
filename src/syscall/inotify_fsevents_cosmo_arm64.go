@@ -257,10 +257,12 @@ func (source *fseventSource) name(dir *inotifyDir, name string, flags uint32) {
 	known, watch := dir.children[name], dir.selves[name]
 	fresh := inotifyStat(dir.join(name))
 	switch {
+	case fresh == nil && flags&(fseventRemoved|fseventRenamed) == 0:
+		// A name that has gone gets its answer from the event that carries the leaving.
 	case fresh == nil && (known != nil || watch != nil):
 		ino.removed(dir, name, flags&fseventRenamed != 0)
 	case fresh == nil:
-		source.vanished(dir, name, flags)
+		source.vanished(dir, name)
 	case known != nil && known.id == fresh.id, known == nil && watch != nil && watch.entry.id == fresh.id:
 		ino.modifiedName(dir, name)
 	default:
@@ -268,12 +270,11 @@ func (source *fseventSource) name(dir *inotifyDir, name string, flags uint32) {
 	}
 }
 
-// vanished handles an event about a name that is gone and was never seen. Only
-// the event that carries the leaving means the name's whole life is over, and
-// earlier events. About it say nothing a later one will not.
-func (source *fseventSource) vanished(dir *inotifyDir, name string, flags uint32) {
+// vanished handles the leaving of a name that was never seen, whose whole life
+// fell between looks at the directory.
+func (source *fseventSource) vanished(dir *inotifyDir, name string) {
 	ino := source.ino
-	if dir.children == nil || flags&(fseventRemoved|fseventRenamed) == 0 || ino.heldNamed(dir, name) != nil {
+	if dir.children == nil || ino.heldNamed(dir, name) != nil {
 		return
 	}
 	ino.added(dir, name)

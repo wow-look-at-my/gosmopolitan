@@ -89,6 +89,13 @@ type xnuSiginfo struct {
 	_         [7]uint64
 }
 
+// cosmoSigG has nothing to add: sigFetchG takes g from the register here.
+//
+//go:nosplit
+func cosmoSigG(pc uintptr) (*g, bool) {
+	return nil, false
+}
+
 //go:nosplit
 //go:nowritebarrierrec
 func (c *sigctxt) regs() *sigcontext {
