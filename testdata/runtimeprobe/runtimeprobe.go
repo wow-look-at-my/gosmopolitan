@@ -119,6 +119,7 @@ func main() {
 	timed("volume", checkVolume)
 	timed("sysinfo", checkSysInfo)
 	timed("flock", checkFlock)
+	timed("inotify", checkInotify)
 	timed("pipeclose", checkPipeClose)
 	timed("durable", checkDurable)
 	timed("rusage", checkRusage)

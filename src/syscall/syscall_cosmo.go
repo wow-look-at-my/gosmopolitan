@@ -38,6 +38,9 @@ func RawSyscall6(trap, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2 uintptr, err Errn
 	if darwinEpollTrap(trap) {
 		return darwinEpollSyscall(trap, a1, a2, a3, a4, a5, a6)
 	}
+	if darwinInotifyTrap(trap) {
+		return darwinInotifySyscall(trap, a1, a2, a3)
+	}
 	var errno uintptr
 	if w := cosmo.Windows(); w != nil {
 		// NT host: route through the runtime's emulation table.
@@ -65,6 +68,9 @@ func Syscall(trap, a1, a2, a3 uintptr) (r1, r2 uintptr, err Errno) {
 	if darwinEpollTrap(trap) {
 		return darwinEpollSyscall(trap, a1, a2, a3, 0, 0, 0)
 	}
+	if darwinInotifyTrap(trap) {
+		return darwinInotifySyscall(trap, a1, a2, a3)
+	}
 	runtime_entersyscall()
 	r1, r2, err = RawSyscall6(trap, a1, a2, a3, 0, 0, 0)
 	runtime_exitsyscall()
@@ -86,6 +92,9 @@ func Syscall6(trap, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2 uintptr, err Errno) 
 	}
 	if darwinEpollTrap(trap) {
 		return darwinEpollSyscall(trap, a1, a2, a3, a4, a5, a6)
+	}
+	if darwinInotifyTrap(trap) {
+		return darwinInotifySyscall(trap, a1, a2, a3)
 	}
 	runtime_entersyscall()
 	r1, r2, err = RawSyscall6(trap, a1, a2, a3, a4, a5, a6)
