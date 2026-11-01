@@ -34,6 +34,27 @@ var (
 	DarwinUtsnameToLinuxForTest  = darwinUtsnameToLinux
 )
 
+// Exports for inotify_cosmo_test.go.
+
+type InotifyQueueForTest = inotifyQueue
+
+const InotifyQueueMaxForTest = inotifyQueueMax
+
+func (queue *inotifyQueue) PushForTest(wd int32, mask, cookie uint32, name string) {
+	queue.push(wd, mask, cookie, name)
+}
+
+func (queue *inotifyQueue) RecordsForTest() [][]byte {
+	return queue.records
+}
+
+// InotifyLiveForTest counts the instances whose goroutine is still running.
+func InotifyLiveForTest() int {
+	inotifies.Lock()
+	defer inotifies.Unlock()
+	return len(inotifies.m)
+}
+
 const (
 	AppleMntRdonlyForTest  = appleMNT_RDONLY
 	AppleMntSyncForTest    = appleMNT_SYNCHRONOUS
