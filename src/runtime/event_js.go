@@ -3,6 +3,8 @@
 
 //go:build js && wasm
 
+// This file holds the JavaScript event-loop integration of the js/wasm port: pausing to the host when all goroutines are idle.
+
 package runtime
 
 import (

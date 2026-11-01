@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// PathSeparator stays the slash.
+
 package os
 
 import "runtime"

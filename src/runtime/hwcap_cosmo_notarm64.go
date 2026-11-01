@@ -3,6 +3,8 @@
 
 //go:build cosmo && !arm64
 
+// AT_HWCAP is an arm64 question.
+
 package runtime
 
 // AT_HWCAP is an arm64 question. An x86 program asks the CPU itself with

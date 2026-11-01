@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// Apple's own fchmodat takes the flag, so the emulation forwards it (translated) and no detour is needed.
+
 package unix
 
 import (

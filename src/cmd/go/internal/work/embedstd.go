@@ -1,6 +1,8 @@
 // Copyright The Go Authors. All rights reserved. Use of this source code is
 // governed by a BSD-style license that can be found in the LICENSE file.
 
+// embeddedStdAction finishes the compile action of a standard package in embedded mode: the archive already exists inside this binary.
+
 package work
 
 import (

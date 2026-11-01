@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// hostRootPool builds the root pool from the certificates the host hands over directly, and reports whether it has one.
+
 package x509
 
 import "runtime"
