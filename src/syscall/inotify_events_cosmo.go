@@ -5,17 +5,18 @@
 
 // What a hint from a source means. A source says a name appeared, left or may
 // have changed. A stat and the last stat of the name decide the events, on
-// every host, so a host cannot report anything another host would not. That
-// sets the events a caller can see: - IN_ACCESS, IN_OPEN and IN_CLOSE_NOWRITE
-// never fire. Neither macOS nor NT tells an unprivileged process about them.
-// - IN_CLOSE_WRITE fires with each IN_MODIFY. That IN_CLOSE_WRITE is for the
-// same reason. - A rename seen at both ends is IN_MOVED_FROM and IN_MOVED_TO.
-// A name arriving from an unwatched directory is IN_CREATE, and one leaving
-// for such a directory is IN_DELETE. This is because NT cannot tell them
-// apart., A name that arrives with content reports its write after its
-// IN_CREATE. A name created and deleted between looks reports both. - A size
-// or a write time that moved is a write. A mode or an owner that moved is
-// IN_ATTRIB. A hint that changes neither reports nothing.
+// every host, so a host cannot report anything another host would not.
+//
+// IN_ACCESS, IN_OPEN and IN_CLOSE_NOWRITE never fire. Neither macOS nor NT
+// tells an unprivileged process about them.
+//
+// A write is reported when the descriptor that made it closes, as IN_MODIFY
+// then IN_CLOSE_WRITE. Neither macOS nor NT reports one sooner. A truncate, a
+// new mode and a new owner are reported when they happen.
+//
+// A rename seen at both ends is IN_MOVED_FROM and IN_MOVED_TO. A name arriving
+// from an unwatched directory is IN_CREATE, and one leaving for such a
+// directory is IN_DELETE. NT cannot tell either from the real thing.
 
 package syscall
 

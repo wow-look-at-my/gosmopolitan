@@ -17,9 +17,9 @@ import (
 )
 
 // checkInotify watches a directory the way fsnotify does: a nonblocking
-// instance read through the runtime poller, with the calls x/sys/unix makes. A
-// Linux host serves it, a macOS host emulates it over kqueue, and an NT host
-// emulates it over ReadDirectoryChangesW.
+// instance read through the runtime poller, with the calls x/sys/unix makes.
+// Every host reports the same events. inotify_contract_cosmo.go holds the ones
+// where a host's own API would say something else.
 func checkInotify() {
 	dir, err := os.MkdirTemp("", "rp-inotify")
 	if err != nil {
@@ -85,12 +85,17 @@ func checkInotify() {
 		fail("inotify", "%v", err)
 		return
 	}
-	ok("inotify", "create, write, rename and delete reported")
+	if err := inotifyContract(); err != nil {
+		fail("inotify", "%v", err)
+		return
+	}
+	ok("inotify", "create, write, rename and delete reported, and every host's events agree")
 }
 
 // An inotifyReader keeps what one read returned past the record await wanted.
 type inotifyReader struct {
 	file *os.File
+	fd   int
 	rest []byte
 }
 
