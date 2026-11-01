@@ -6,6 +6,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"runtime"
@@ -31,15 +32,23 @@ func inotifyUnderPreemption() error {
 	defer os.RemoveAll(dir)
 
 	var stop atomic.Bool
+	var rounds atomic.Int64
 	var failure atomic.Pointer[error]
 	var group sync.WaitGroup
 	for range runtime.GOMAXPROCS(0) {
 		group.Go(func() {
 			for !stop.Load() {
-				if err := inotifyOpenClose(dir); err != nil {
+				err := inotifyOpenClose(dir)
+				if errors.Is(err, syscall.EMFILE) {
+					// Linux counts a closed instance until a later grace period ends.
+					time.Sleep(10 * time.Millisecond)
+					continue
+				}
+				if err != nil {
 					failure.CompareAndSwap(nil, &err)
 					return
 				}
+				rounds.Add(1)
 			}
 		})
 	}
@@ -50,6 +59,9 @@ func inotifyUnderPreemption() error {
 	group.Wait()
 	if err := failure.Load(); err != nil {
 		return *err
+	}
+	if rounds.Load() == 0 {
+		return errors.New("no watch opened and closed")
 	}
 	return nil
 }
