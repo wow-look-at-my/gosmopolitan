@@ -155,14 +155,10 @@ func ntSocketUnread(fd int32) (unread int, errno uintptr) {
 	return int(count), 0
 }
 
-// ntSocketAwait blocks in WSAPoll, which leaves the socket's other calls running
-// where a blocking recv would stop them.
-func ntSocketAwait(fd int32) {
-	e, eno := ntSockLookup(fd)
-	if eno != 0 {
-		return
-	}
-	polled := ntWSAPollFD{fd: e.handle, events: _NT_POLLRDNORM}
-	ntcallSE(ntWSAPollFn, uintptr(unsafe.Pointer(&polled)), 1, ^uintptr(0), 0, 0, 0, 0)
-	KeepAlive(&polled)
+// ntWatchPair makes the socket pair under an inotify instance. A synchronous
+// handle runs one call at a time, so a wait on one end would stop a write to
+// it.
+func ntWatchPair(sv *[2]int32) uintptr {
+	_, _, errno := ntEmuSocketpair(_NT_AF_UNIX, _NT_SOCK_STREAM|_NT_SOCK_CLOEXEC, 0, sv, _NT_WSA_FLAG_OVERLAPPED)
+	return errno
 }

@@ -118,31 +118,11 @@ func inotifyWhole(buf []byte) int {
 	return total
 }
 
-// inotifyAwait waits for records on a blocking NT instance, for the reason
-// inotifyHangup gives. It reports whether it waited.
-func inotifyAwait(fd int) bool {
-	windows := cosmo.Windows()
-	if windows == nil {
-		return false
-	}
-	flags, err := fcntl(fd, F_GETFL, 0)
-	if err != nil || flags&O_NONBLOCK != 0 {
-		return false
-	}
-	windows.SocketAwait(int32(fd))
-	return true
-}
-
 // take takes whole records into view. The lock keeps readers from each taking
 // what both looked at. A count below zero means a reader must look again.
-func (ino *inotifyInstance) take(fd int, view []byte, waited bool) (int, Errno) {
+func (ino *inotifyInstance) take(fd int, view []byte) (int, Errno) {
 	ino.reading.Lock()
 	defer ino.reading.Unlock()
-	if waited {
-		if unread, errno := inotifyUnread(fd); errno != 0 || unread == 0 {
-			return -1, errno
-		}
-	}
 	var head [SizeofInotifyEvent]byte
 	count, errno := inotifyPeek(fd, head[:])
 	if errno != 0 || count == 0 {
@@ -181,7 +161,7 @@ func inotifyRead(fd int, buf *byte, size int) (uintptr, Errno) {
 	}
 	view := unsafe.Slice(buf, size)
 	for {
-		taken, errno := ino.take(fd, view, inotifyAwait(fd))
+		taken, errno := ino.take(fd, view)
 		if errno != 0 {
 			return 0, errno
 		}

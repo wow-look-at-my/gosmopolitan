@@ -22,8 +22,8 @@ type WindowsFns struct {
 	// SocketUnread reports how many bytes wait to be read on a socket descriptor.
 	SocketUnread func(fd int32) (unread int, errno uintptr)
 
-	// SocketAwait returns once a socket descriptor can be read or its peer has closed.
-	SocketAwait func(fd int32)
+	// SocketPair makes a connected stream pair whose ends take calls from many threads at once.
+	SocketPair func(pair *[2]int32) (errno uintptr)
 
 	// The Watch functions are the inotify emulation's ReadDirectoryChangesW reads, gathered in one completion port.
 	WatchPort   func() (port, errno uintptr)

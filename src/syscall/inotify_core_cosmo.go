@@ -201,8 +201,8 @@ func inotifyInit(flags uintptr) (uintptr, Errno) {
 		return 0, EINVAL
 	}
 	var pair [2]int32
-	if err := socketpair(AF_UNIX, SOCK_STREAM|SOCK_CLOEXEC, 0, &pair); err != nil {
-		return 0, err.(Errno)
+	if errno := inotifyPair(&pair); errno != 0 {
+		return 0, errno
 	}
 	reader, writer := int(pair[0]), int(pair[1])
 	ino := &inotifyInstance{
@@ -238,6 +238,16 @@ func inotifyInit(flags uintptr) (uintptr, Errno) {
 	go ino.clock()
 	go ino.monitor()
 	return uintptr(reader), 0
+}
+
+func inotifyPair(pair *[2]int32) Errno {
+	if windows := cosmo.Windows(); windows != nil {
+		return Errno(windows.SocketPair(pair))
+	}
+	if err := socketpair(AF_UNIX, SOCK_STREAM|SOCK_CLOEXEC, 0, pair); err != nil {
+		return err.(Errno)
+	}
+	return 0
 }
 
 // inotifySetup gives the caller's end the flags inotify_init1 asked for.
@@ -532,14 +542,8 @@ func (ino *inotifyInstance) clock() {
 	}
 }
 
-// inotifyHangup returns once the other end of fd has closed. A blocking recv on
-// an NT socket stops every other call on that socket until it returns, a write
-// included. NT waits in the poller's call.
+// inotifyHangup returns once the other end of fd has closed.
 func inotifyHangup(fd int) {
-	if windows := cosmo.Windows(); windows != nil {
-		windows.SocketAwait(int32(fd))
-		return
-	}
 	buf := make([]byte, 16)
 	for {
 		count, err := read(fd, buf)
