@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// The ARM64_NT_CONTEXT layout, built for every cosmo architecture so the host-run runtime tests can pin its offsets.
+
 package runtime
 
 // The ARM64_NT_CONTEXT layout, built for every cosmo architecture so the

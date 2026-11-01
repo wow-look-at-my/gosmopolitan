@@ -3,6 +3,8 @@
 
 //go:build unix && !cosmo && !darwin && !linux
 
+// execAPEFallback is the retry of an execve that answered ENOEXEC on an APE, in exec_ape.go.
+
 package syscall
 
 // execAPEFallback is the retry of an execve that answered ENOEXEC on an APE,

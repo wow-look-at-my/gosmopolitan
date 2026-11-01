@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// The parts of the sigaction translation that do not depend on how the host is reached.
+
 package cosmo
 
 // The parts of the sigaction translation that do not depend on how the host

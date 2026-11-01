@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// SysProcIDMap holds Container ID to Host ID mappings used for User Namespaces.
+
 package syscall
 
 import (

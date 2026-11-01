@@ -3,6 +3,8 @@
 
 //go:build cosmo && !amd64
 
+// The NT call machinery is amd64-only (os_cosmo_nt.go), which is the only architecture an APE boots on Windows.
+
 package runtime
 
 // The NT call machinery is amd64-only (os_cosmo_nt.go), which is the only architecture an APE boots on Windows.

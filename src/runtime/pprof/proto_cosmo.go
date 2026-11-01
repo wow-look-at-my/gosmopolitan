@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// readMapping writes this process's mappings to b.pb.
+
 package pprof
 
 import (

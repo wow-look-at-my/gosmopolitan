@@ -1,6 +1,8 @@
 // Copyright The Go Authors. All rights reserved. Use of this source code is
 // governed by a BSD-style license that can be found in the LICENSE file.
 
+// sysmonKq is the kqueue sysmon sleeps on, on an XNU host. sysmon creates it on its first sleep and is its only user.
+
 package runtime
 
 const (
