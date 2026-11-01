@@ -40,13 +40,13 @@ A watched name that leaves unpaired reports `IN_DELETE_SELF` then `IN_IGNORED`.
 
 `IN_DONT_FOLLOW` on a symlink watches the link, through its parent directory. It never answers ELOOP.
 
-A read returns whole records. It answers EINVAL when the next record does not fit the buffer. `dup`, `dup2`, `dup3` and `fcntl` give another name for the instance, and a read through that name behaves the same.
+A read returns whole records. It answers EINVAL when the next record does not fit the buffer. `dup`, `dup2`, `dup3`, `fcntl` and `net.FileConn` give another name for the instance, and a read through that name behaves the same.
 
 ## Limits
 
 A Linux write of zeros that stays inside the last block of the old end reads as a truncate. It is reported at once. A Linux host cannot take a read lease on another user's file, so a same-size change to one waits for `IN_CLOSE_WRITE`.
 
-A descriptor that reaches a program past `syscall`, through `net.FileConn` or across `exec`, is the bare socket. A read through it gets raw socket bytes.
+An instance lives in the process that made it. A descriptor that leaves that process, across `exec` or over a socket, is the bare socket. A read through it gets raw socket bytes.
 
 A macOS watch fails with the host's errno when `$TMPDIR` is not writable. Its cookie is a file named `.inotify-fsevents-*`, which every cosmo watch hides. Another program watching `$TMPDIR` natively can see it.
 
@@ -54,4 +54,4 @@ macOS on Intel has no inotify, because no APE starts on that host. See the macOS
 
 ## Coverage
 
-`src/syscall/inotify_cosmo_test.go` runs on the Linux host. The runtimeprobe `inotify` check, `testdata/runtimeprobe/inotify_cosmo.go` and `inotify_contract_cosmo.go`, runs the same contract on all hosts and is mandatory on each. `inotify_held_cosmo.go` holds the checks of descriptors kept open across a watch, and of `dup`.
+`src/syscall/inotify_cosmo_test.go` runs on the Linux host. The runtimeprobe `inotify` check, `testdata/runtimeprobe/inotify_cosmo.go` and `inotify_contract_cosmo.go`, runs the same contract on all hosts and is mandatory on each. `inotify_held_cosmo.go` holds the checks of descriptors kept open across a watch, of `dup` and of `net.FileConn`.

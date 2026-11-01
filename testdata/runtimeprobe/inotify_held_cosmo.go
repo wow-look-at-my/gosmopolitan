@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -139,6 +140,44 @@ func inotifyTempUntouched(dir string) error {
 			return fmt.Errorf("the host's own file was reported: %q", buf[:count])
 		}
 	}
+}
+
+// inotifyFileConn reads records through the descriptor net.FileConn duplicates
+// outside package syscall, after the descriptor it came from has closed.
+func inotifyFileConn(dir string) error {
+	reader, err := inotifyOpen()
+	if err != nil {
+		return err
+	}
+	if err := reader.add(dir, syscall.IN_CREATE); err != nil {
+		reader.file.Close()
+		return err
+	}
+	conn, err := net.FileConn(reader.file)
+	reader.file.Close()
+	if err != nil {
+		return fmt.Errorf("net.FileConn: %v", err)
+	}
+	defer conn.Close()
+	if err := os.WriteFile(filepath.Join(dir, "name"), nil, 0o600); err != nil {
+		return err
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		return err
+	}
+	var small [syscall.SizeofInotifyEvent]byte
+	if _, err := conn.Read(small[:]); !errors.Is(err, syscall.EINVAL) {
+		return fmt.Errorf("a read too small for a record = %v, want EINVAL", err)
+	}
+	buf := make([]byte, syscall.SizeofInotifyEvent+16)
+	count, err := conn.Read(buf)
+	if err != nil {
+		return fmt.Errorf("a read that fits the record: %v", err)
+	}
+	if count != len(buf) || string(buf[syscall.SizeofInotifyEvent:syscall.SizeofInotifyEvent+4]) != "name" {
+		return fmt.Errorf("a read that fits the record returned %q", buf[:count])
+	}
+	return nil
 }
 
 // inotifyDuplicate has a duplicate outlive the descriptor it came from, which
