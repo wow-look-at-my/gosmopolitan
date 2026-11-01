@@ -225,7 +225,8 @@ export PATH="$PWD/../bin:$PATH"
 # after linker or go-command changes:
 GOOS=linux GOARCH=amd64 go install cmd/go/main   # refresh bin/go, which carries every HOST tool (see gotcha above)
 GOOS=cosmo go build -o /tmp/fizzbuzz.com ./testdata/fizzbuzz/fizzbuzz.go   # emits fat APE
-cd testdata/ape/apetest && FIZZBUZZ_BIN=/tmp/fizzbuzz.com go test -count=1 ./...   # upstream go
+(cd testdata/fsnotifyprobe && GOOS=cosmo go build -o /tmp/fsnotifyprobe.com .)
+cd testdata/ape/apetest && FIZZBUZZ_BIN=/tmp/fizzbuzz.com FSNOTIFYPROBE_BIN=/tmp/fsnotifyprobe.com go test -count=1 ./...   # upstream go
 ```
 
 ## Uprevving to a new upstream Go release

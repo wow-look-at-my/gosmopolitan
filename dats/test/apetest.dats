@@ -5,15 +5,19 @@
 # Only the Linux leg has cosmocc, so only the Linux origin has a cgoprobe.
 tests:
 	- desc: the Linux-origin binaries pass apetest here
-	  cmd: export GOCACHE="$TMPDIR/gocache"; cd testdata/ape/apetest && FIZZBUZZ_BIN="$PWD/../../../binaries/ape-binary-Linux/fizzbuzz.com" RUNTIMEPROBE_BIN="$PWD/../../../binaries/ape-binary-Linux/runtimeprobe.com" SQLITEPROBE_BIN="$PWD/../../../binaries/ape-binary-Linux/sqliteprobe.com" CGOPROBE_BIN="$PWD/../../../binaries/ape-binary-Linux/cgoprobe.com" sh ./with-deadline.sh 540 go test -v ./...
+	  cmd: export GOCACHE="$TMPDIR/gocache"; cd testdata/ape/apetest && FIZZBUZZ_BIN="$PWD/../../../binaries/ape-binary-Linux/fizzbuzz.com" RUNTIMEPROBE_BIN="$PWD/../../../binaries/ape-binary-Linux/runtimeprobe.com" SQLITEPROBE_BIN="$PWD/../../../binaries/ape-binary-Linux/sqliteprobe.com" FSNOTIFYPROBE_BIN="$PWD/../../../binaries/ape-binary-Linux/fsnotifyprobe.com" CGOPROBE_BIN="$PWD/../../../binaries/ape-binary-Linux/cgoprobe.com" sh ./with-deadline.sh 540 go test -v ./...
 	  exit: 0
 	  outputs:
 		stdout:
 			- "--- PASS: TestCgoProbe"
+			- "--- PASS: TestFsnotifyProbe"
 
 	- desc: the macOS-origin binaries pass apetest here
-	  cmd: export GOCACHE="$TMPDIR/gocache"; cd testdata/ape/apetest && FIZZBUZZ_BIN="$PWD/../../../binaries/ape-binary-macOS/fizzbuzz.com" RUNTIMEPROBE_BIN="$PWD/../../../binaries/ape-binary-macOS/runtimeprobe.com" SQLITEPROBE_BIN="$PWD/../../../binaries/ape-binary-macOS/sqliteprobe.com" sh ./with-deadline.sh 540 go test -v ./...
+	  cmd: export GOCACHE="$TMPDIR/gocache"; cd testdata/ape/apetest && FIZZBUZZ_BIN="$PWD/../../../binaries/ape-binary-macOS/fizzbuzz.com" RUNTIMEPROBE_BIN="$PWD/../../../binaries/ape-binary-macOS/runtimeprobe.com" SQLITEPROBE_BIN="$PWD/../../../binaries/ape-binary-macOS/sqliteprobe.com" FSNOTIFYPROBE_BIN="$PWD/../../../binaries/ape-binary-macOS/fsnotifyprobe.com" sh ./with-deadline.sh 540 go test -v ./...
 	  exit: 0
+	  outputs:
+		stdout:
+			- "--- PASS: TestFsnotifyProbe"
 
 #	- desc: the Windows-origin binaries pass apetest here
 #	  cmd: export GOCACHE="$TMPDIR/gocache"; cd testdata/ape/apetest && FIZZBUZZ_BIN="$PWD/../../../binaries/ape-binary-Windows/fizzbuzz.com" RUNTIMEPROBE_BIN="$PWD/../../../binaries/ape-binary-Windows/runtimeprobe.com" sh ./with-deadline.sh go test -v ./...

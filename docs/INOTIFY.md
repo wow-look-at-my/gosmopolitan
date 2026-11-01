@@ -55,3 +55,5 @@ macOS on Intel has no inotify, because no APE starts on that host. See the macOS
 ## Coverage
 
 `src/syscall/inotify_cosmo_test.go` runs on the Linux host. The runtimeprobe `inotify` check, `testdata/runtimeprobe/inotify_cosmo.go` and `inotify_contract_cosmo.go`, runs the same contract on all hosts and is mandatory on each. `inotify_held_cosmo.go` holds the checks of descriptors kept open across a watch, of `dup` and of `net.FileConn`.
+
+`testdata/fsnotifyprobe` runs the real fsnotify library. `TestFsnotifyProbe` in apetest runs it on every host, and fails when `FSNOTIFYPROBE_BIN` is unset.
