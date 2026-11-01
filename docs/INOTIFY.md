@@ -44,7 +44,9 @@ A read returns whole records. It answers EINVAL when the next record does not fi
 
 ## Limits
 
-A Linux write of zeros that stays inside the last block of the old end reads as a truncate. It is reported at once. A Linux host cannot take a read lease on another user's file, so a same-size change to one waits for `IN_CLOSE_WRITE`.
+A Linux write of zeros that stays inside the last block of the end reads as a truncate. It is reported at once. A Linux host cannot take a read lease on another user's file, so a same-size change to one is reported at once as well. In each case the kernel gives nothing that separates a write from a truncate. A truncate has no close to wait for.
+
+macOS answers EPERM to `F_SETLEASE`, even for a program's own file with no writer. So macOS cannot wait for a writer to close, and these cases stay Linux's.
 
 An instance lives in the process that made it. A descriptor that leaves that process, across `exec` or over a socket, is the bare socket. A read through it gets raw socket bytes.
 

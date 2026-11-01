@@ -181,18 +181,20 @@ func (source *kernelSource) record(wd int32, mask uint32, name string) {
 // write always has a descriptor to close, which IN_CLOSE_WRITE reports.
 func (source *kernelSource) modified(dir *inotifyDir, name string) {
 	path := dir.join(name)
-	if source.truncated(dir, name, path) || !kernelWriterOpen(path) {
+	truncated, unchanged := source.resized(dir, name, path)
+	if truncated || !kernelWriterOpen(path, unchanged) {
 		delete(source.sizes, kernelName{dir, name})
 		source.ino.modifiedName(dir, name)
 	}
 }
 
-// truncated reports whether a change can only be a truncate: the file shrank,
-// or it grew by nothing a write leaves behind.
-func (source *kernelSource) truncated(dir *inotifyDir, name, path string) bool {
+// resized compares a file with its last size. truncated says the change can
+// only be a truncate: the file shrank, or it grew by nothing a write leaves
+// behind. unchanged says the size stayed the same.
+func (source *kernelSource) resized(dir *inotifyDir, name, path string) (truncated, unchanged bool) {
 	fresh := inotifyStat(path)
 	if fresh == nil {
-		return false
+		return false, false
 	}
 	key := kernelName{dir, name}
 	last, seen := source.sizes[key]
@@ -202,12 +204,13 @@ func (source *kernelSource) truncated(dir *inotifyDir, name, path string) bool {
 			entry = &watch.entry
 		}
 		if entry == nil {
-			return false
+			return false, false
 		}
 		last = entry.size
 	}
 	source.sizes[key] = fresh.size
-	return fresh.size < last || fresh.size > last && kernelNoDataPast(path, last, fresh.size)
+	truncated = fresh.size < last || fresh.size > last && kernelNoDataPast(path, last, fresh.size)
+	return truncated, fresh.size == last
 }
 
 // kernelNoDataPast reports whether a file holds zeros from an offset to the end
@@ -237,18 +240,25 @@ func kernelNoDataPast(path string, from, end int64) bool {
 	return true
 }
 
-// kernelWriterOpen reports whether a descriptor may have a file open for
-// writing. The kernel refuses a read lease while one does. It refuses anyone
-// but the file's owner too, and what they change waits for IN_CLOSE_WRITE.
-func kernelWriterOpen(path string) bool {
+// kernelWriterOpen reports whether a change should wait for a descriptor to
+// close. The kernel refuses a read lease while one has the file open for
+// writing.
+func kernelWriterOpen(path string, unchanged bool) bool {
 	fd, err := Open(path, kernelProbeFlags, 0)
 	if err != nil {
-		return true
+		return kernelLeaseWaits(err.(Errno), unchanged)
 	}
 	defer Close(fd)
-	if _, _, errno := cosmo.Syscall6(SYS_FCNTL, uintptr(fd), kernelSetLease, F_RDLCK, 0, 0, 0); errno != 0 {
-		return true
+	_, _, errno := cosmo.Syscall6(SYS_FCNTL, uintptr(fd), kernelSetLease, F_RDLCK, 0, 0, 0)
+	if errno != 0 {
+		return kernelLeaseWaits(Errno(errno), unchanged)
 	}
 	cosmo.Syscall6(SYS_FCNTL, uintptr(fd), kernelSetLease, F_UNLCK, 0, 0, 0)
 	return false
+}
+
+// kernelLeaseWaits reads a refused lease. The kernel answers EACCES to anyone
+// but the file's owner, which says nothing about writers.
+func kernelLeaseWaits(errno Errno, unchanged bool) bool {
+	return errno != EACCES || !unchanged
 }
