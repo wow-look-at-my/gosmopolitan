@@ -27,8 +27,18 @@ import (
 // osArchInit on NT hosts, before any user code runs.
 func ntSetSyscallFns() {
 	cosmo.SetWindowsFns(&cosmo.WindowsFns{
-		Emulate: ntSyscallEmulate,
-		Spawn:   ntSpawn,
+		Emulate:      ntSyscallEmulate,
+		Spawn:        ntSpawn,
+		FinalPath:    ntFinalPath,
+		SocketUnread: ntSocketUnread,
+		WatchPort:    ntWatchPort,
+		WatchOpen:    ntWatchOpen,
+		WatchPath:    ntHandlePath,
+		WatchRead:    ntWatchRead,
+		WatchWait:    ntWatchWait,
+		WatchWake:    ntWatchWake,
+		WatchCancel:  ntWatchCancel,
+		WatchClose:   ntWatchClose,
 	})
 }
 

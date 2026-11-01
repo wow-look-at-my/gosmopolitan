@@ -18,17 +18,9 @@ import (
 // checkInotify watches a directory the way fsnotify does: a nonblocking
 // instance read through the runtime poller, with the calls x/sys/unix makes. A
 // Linux host serves it, a macOS host emulates it over kqueue, and an NT host
-// has no emulation and answers ENOSYS.
+// emulates it over ReadDirectoryChangesW.
 func checkInotify() {
 	fd, _, errno := syscall.RawSyscall(syscall.SYS_INOTIFY_INIT1, syscall.IN_CLOEXEC|syscall.IN_NONBLOCK, 0, 0)
-	if cosmoHostOS() == "windows" {
-		if errno != syscall.ENOSYS {
-			fail("inotify", "inotify_init1 on NT = %v, want ENOSYS", errno)
-			return
-		}
-		ok("inotify", "ENOSYS on NT")
-		return
-	}
 	if errno != 0 {
 		fail("inotify", "inotify_init1: %v", errno)
 		return
@@ -47,7 +39,7 @@ func checkInotify() {
 		fail("inotify", "path: %v", err)
 		return
 	}
-	mask := uintptr(syscall.IN_CREATE | syscall.IN_DELETE)
+	mask := uintptr(syscall.IN_CREATE | syscall.IN_MODIFY | syscall.IN_MOVE | syscall.IN_DELETE)
 	if _, _, errno := syscall.Syscall(syscall.SYS_INOTIFY_ADD_WATCH, fd, uintptr(unsafe.Pointer(path)), mask); errno != 0 {
 		fail("inotify", "inotify_add_watch: %v", errno)
 		return
@@ -62,15 +54,36 @@ func checkInotify() {
 		fail("inotify", "%v", err)
 		return
 	}
-	if err := os.Remove(child); err != nil {
-		fail("inotify", "remove: %v", err)
+	if err := os.WriteFile(child, []byte("text"), 0o600); err != nil {
+		fail("inotify", "write: %v", err)
 		return
 	}
-	if err := awaitInotify(file, syscall.IN_DELETE, "child"); err != nil {
+	if err := awaitInotify(file, syscall.IN_MODIFY, "child"); err != nil {
 		fail("inotify", "%v", err)
 		return
 	}
-	ok("inotify", "create and delete reported")
+	moved := filepath.Join(dir, "moved")
+	if err := os.Rename(child, moved); err != nil {
+		fail("inotify", "rename: %v", err)
+		return
+	}
+	if err := awaitInotify(file, syscall.IN_MOVED_FROM, "child"); err != nil {
+		fail("inotify", "%v", err)
+		return
+	}
+	if err := awaitInotify(file, syscall.IN_MOVED_TO, "moved"); err != nil {
+		fail("inotify", "%v", err)
+		return
+	}
+	if err := os.Remove(moved); err != nil {
+		fail("inotify", "remove: %v", err)
+		return
+	}
+	if err := awaitInotify(file, syscall.IN_DELETE, "moved"); err != nil {
+		fail("inotify", "%v", err)
+		return
+	}
+	ok("inotify", "create, write, rename and delete reported")
 }
 
 // awaitInotify reads records until one matches.

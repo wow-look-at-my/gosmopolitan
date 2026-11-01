@@ -36,23 +36,36 @@ type inotifyFile struct {
 	pending []inotifyEvent
 }
 
-// newInotify makes a nonblocking instance. On a Windows host the syscall
-// answers ENOSYS, which is what the test then asserts.
-func newInotify(t *testing.T) (*inotifyFile, bool) {
+// newInotify makes a nonblocking instance. Asking for the temporary directory
+// first orders its removal after the instance's close, because NT cannot remove
+// a directory while a watch holds it open.
+func newInotify(t *testing.T) *inotifyFile {
 	t.Helper()
+	t.TempDir()
 	fd, err := syscall.InotifyInit1(syscall.IN_CLOEXEC | syscall.IN_NONBLOCK)
-	if runtime.GOOS == "windows" {
-		if err != syscall.ENOSYS {
-			t.Fatalf("InotifyInit1 on a Windows host = %d, %v, want ENOSYS", fd, err)
-		}
-		return nil, false
-	}
 	if err != nil {
 		t.Fatalf("InotifyInit1: %v", err)
 	}
 	file := os.NewFile(uintptr(fd), "inotify")
-	t.Cleanup(func() { file.Close() })
-	return &inotifyFile{t: t, file: file, fd: fd}, true
+	t.Cleanup(func() { closeInotify(t, fd, file.Close) })
+	return &inotifyFile{t: t, file: file, fd: fd}
+}
+
+// closeInotify closes an instance and waits for it to let go of its handles.
+func closeInotify(t *testing.T, fd int, closer func() error) {
+	t.Helper()
+	done := syscall.InotifyDoneForTest(fd)
+	if err := closer(); err != nil {
+		t.Errorf("close: %v", err)
+	}
+	if done == nil {
+		return
+	}
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Errorf("instance %d never let go of its handles", fd)
+	}
 }
 
 func decodeInotify(buf []byte) []inotifyEvent {
@@ -143,10 +156,7 @@ func writeFile(t *testing.T, path, text string) {
 }
 
 func TestInotifyCreateAndWrite(t *testing.T) {
-	ino, ok := newInotify(t)
-	if !ok {
-		return
-	}
+	ino := newInotify(t)
 	dir := t.TempDir()
 	wd := ino.add(dir, syscall.IN_CREATE|syscall.IN_MODIFY|syscall.IN_CLOSE_WRITE)
 
@@ -161,16 +171,17 @@ func TestInotifyCreateAndWrite(t *testing.T) {
 	if _, err := file.WriteString("hello"); err != nil {
 		t.Fatal(err)
 	}
+	// NTFS reports a write once the handle writing it closes.
+	if runtime.GOOS == "windows" {
+		file.Close()
+	}
 	ino.await(syscall.IN_MODIFY, "created")
 	file.Close()
 	ino.await(syscall.IN_CLOSE_WRITE, "created")
 }
 
 func TestInotifyExistingChildWrite(t *testing.T) {
-	ino, ok := newInotify(t)
-	if !ok {
-		return
-	}
+	ino := newInotify(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "present")
 	writeFile(t, path, "before")
@@ -178,17 +189,15 @@ func TestInotifyExistingChildWrite(t *testing.T) {
 
 	writeFile(t, path, "after")
 	ino.await(syscall.IN_MODIFY, "present")
-	if err := os.Chmod(path, 0o600); err != nil {
+	// The write bit is the only part of a mode NT has.
+	if err := os.Chmod(path, 0o400); err != nil {
 		t.Fatal(err)
 	}
 	ino.await(syscall.IN_ATTRIB, "present")
 }
 
 func TestInotifyDelete(t *testing.T) {
-	ino, ok := newInotify(t)
-	if !ok {
-		return
-	}
+	ino := newInotify(t)
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "file"), "text")
 	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o755); err != nil {
@@ -207,10 +216,7 @@ func TestInotifyDelete(t *testing.T) {
 }
 
 func TestInotifySubdirectoryCreate(t *testing.T) {
-	ino, ok := newInotify(t)
-	if !ok {
-		return
-	}
+	ino := newInotify(t)
 	dir := t.TempDir()
 	ino.add(dir, syscall.IN_CREATE)
 	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o755); err != nil {
@@ -220,10 +226,7 @@ func TestInotifySubdirectoryCreate(t *testing.T) {
 }
 
 func TestInotifyRenamePairsCookies(t *testing.T) {
-	ino, ok := newInotify(t)
-	if !ok {
-		return
-	}
+	ino := newInotify(t)
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "before"), "text")
 	ino.add(dir, syscall.IN_MOVE|syscall.IN_CREATE|syscall.IN_DELETE)
@@ -239,10 +242,7 @@ func TestInotifyRenamePairsCookies(t *testing.T) {
 }
 
 func TestInotifyRenameBetweenDirectories(t *testing.T) {
-	ino, ok := newInotify(t)
-	if !ok {
-		return
-	}
+	ino := newInotify(t)
 	first, second := t.TempDir(), t.TempDir()
 	writeFile(t, filepath.Join(first, "file"), "text")
 	ino.add(first, syscall.IN_MOVE)
@@ -258,10 +258,7 @@ func TestInotifyRenameBetweenDirectories(t *testing.T) {
 // TestInotifyRenameOverKeepsWriteWatch is how editors save: a temporary file
 // replaces the original, and writes after that must still be seen.
 func TestInotifyRenameOverKeepsWriteWatch(t *testing.T) {
-	ino, ok := newInotify(t)
-	if !ok {
-		return
-	}
+	ino := newInotify(t)
 	dir := t.TempDir()
 	target := filepath.Join(dir, "target")
 	writeFile(t, target, "old")
@@ -282,17 +279,14 @@ func TestInotifyRenameOverKeepsWriteWatch(t *testing.T) {
 }
 
 func TestInotifyWatchedFile(t *testing.T) {
-	ino, ok := newInotify(t)
-	if !ok {
-		return
-	}
+	ino := newInotify(t)
 	path := filepath.Join(t.TempDir(), "file")
 	writeFile(t, path, "before")
 	wd := ino.add(path, syscall.IN_MODIFY|syscall.IN_ATTRIB|syscall.IN_DELETE_SELF)
 
 	writeFile(t, path, "after")
 	ino.await(syscall.IN_MODIFY, "")
-	if err := os.Chmod(path, 0o600); err != nil {
+	if err := os.Chmod(path, 0o400); err != nil {
 		t.Fatal(err)
 	}
 	ino.await(syscall.IN_ATTRIB, "")
@@ -306,10 +300,7 @@ func TestInotifyWatchedFile(t *testing.T) {
 }
 
 func TestInotifyMoveSelf(t *testing.T) {
-	ino, ok := newInotify(t)
-	if !ok {
-		return
-	}
+	ino := newInotify(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "file")
 	writeFile(t, path, "text")
@@ -321,10 +312,7 @@ func TestInotifyMoveSelf(t *testing.T) {
 }
 
 func TestInotifyDirectoryDeleteSelf(t *testing.T) {
-	ino, ok := newInotify(t)
-	if !ok {
-		return
-	}
+	ino := newInotify(t)
 	dir := filepath.Join(t.TempDir(), "sub")
 	if err := os.Mkdir(dir, 0o755); err != nil {
 		t.Fatal(err)
@@ -341,10 +329,7 @@ func TestInotifyDirectoryDeleteSelf(t *testing.T) {
 }
 
 func TestInotifyRmWatch(t *testing.T) {
-	ino, ok := newInotify(t)
-	if !ok {
-		return
-	}
+	ino := newInotify(t)
 	dir := t.TempDir()
 	wd := ino.add(dir, syscall.IN_CREATE)
 	if _, err := syscall.InotifyRmWatch(ino.fd, uint32(wd)); err != nil {
@@ -361,10 +346,7 @@ func TestInotifyRmWatch(t *testing.T) {
 }
 
 func TestInotifySamePathSharesWatch(t *testing.T) {
-	ino, ok := newInotify(t)
-	if !ok {
-		return
-	}
+	ino := newInotify(t)
 	dir := t.TempDir()
 	first := ino.add(dir, syscall.IN_CREATE)
 	second := ino.add(dir, syscall.IN_DELETE|syscall.IN_MASK_ADD)
@@ -384,10 +366,7 @@ func TestInotifySamePathSharesWatch(t *testing.T) {
 }
 
 func TestInotifyAddWatchErrors(t *testing.T) {
-	ino, ok := newInotify(t)
-	if !ok {
-		return
-	}
+	ino := newInotify(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "file")
 	writeFile(t, path, "text")
@@ -414,22 +393,13 @@ func TestInotifyAddWatchErrors(t *testing.T) {
 
 func TestInotifyInitFlags(t *testing.T) {
 	fd, err := syscall.InotifyInit1(0x1)
-	if runtime.GOOS == "windows" {
-		if err != syscall.ENOSYS {
-			t.Errorf("InotifyInit1 on a Windows host = %d, %v, want ENOSYS", fd, err)
-		}
-		return
-	}
 	if err != syscall.EINVAL {
 		t.Errorf("InotifyInit1 with an unknown flag = %d, %v, want EINVAL", fd, err)
 	}
 }
 
 func TestInotifyEmptyNonblockingRead(t *testing.T) {
-	ino, ok := newInotify(t)
-	if !ok {
-		return
-	}
+	ino := newInotify(t)
 	var buf [64]byte
 	if _, err := syscall.Read(ino.fd, buf[:]); err != syscall.EAGAIN {
 		t.Errorf("read of an empty instance = %v, want EAGAIN", err)
@@ -438,18 +408,12 @@ func TestInotifyEmptyNonblockingRead(t *testing.T) {
 
 // TestInotifyBlockingRead has no IN_NONBLOCK, so a read waits for an event.
 func TestInotifyBlockingRead(t *testing.T) {
+	dir := t.TempDir()
 	fd, err := syscall.InotifyInit()
-	if runtime.GOOS == "windows" {
-		if err != syscall.ENOSYS {
-			t.Errorf("InotifyInit on a Windows host = %d, %v, want ENOSYS", fd, err)
-		}
-		return
-	}
 	if err != nil {
 		t.Fatalf("InotifyInit: %v", err)
 	}
-	defer syscall.Close(fd)
-	dir := t.TempDir()
+	defer closeInotify(t, fd, func() error { return syscall.Close(fd) })
 	if _, err := syscall.InotifyAddWatch(fd, dir, syscall.IN_CREATE); err != nil {
 		t.Fatal(err)
 	}
@@ -477,18 +441,15 @@ func TestInotifyBlockingRead(t *testing.T) {
 // TestInotifyThroughRawSyscall takes the route x/sys/unix does, past the
 // exported wrappers.
 func TestInotifyThroughRawSyscall(t *testing.T) {
-	fd, _, errno := syscall.RawSyscall(syscall.SYS_INOTIFY_INIT1, syscall.IN_CLOEXEC|syscall.IN_NONBLOCK, 0, 0)
-	if runtime.GOOS == "windows" {
-		if errno != syscall.ENOSYS {
-			t.Errorf("inotify_init1 on a Windows host = %v, want ENOSYS", errno)
-		}
-		return
+	path, err := syscall.BytePtrFromString(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
 	}
+	fd, _, errno := syscall.RawSyscall(syscall.SYS_INOTIFY_INIT1, syscall.IN_CLOEXEC|syscall.IN_NONBLOCK, 0, 0)
 	if errno != 0 {
 		t.Fatalf("inotify_init1: %v", errno)
 	}
-	defer syscall.Close(int(fd))
-	path, err := syscall.BytePtrFromString(t.TempDir())
+	defer closeInotify(t, int(fd), func() error { return syscall.Close(int(fd)) })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -504,10 +465,7 @@ func TestInotifyThroughRawSyscall(t *testing.T) {
 // TestInotifyManyChildren has more children than one read of the directory
 // returns, and more than one kevent batch.
 func TestInotifyManyChildren(t *testing.T) {
-	ino, ok := newInotify(t)
-	if !ok {
-		return
-	}
+	ino := newInotify(t)
 	dir := t.TempDir()
 	const children = 300
 	for idx := range children {
@@ -534,10 +492,7 @@ func TestInotifyManyChildren(t *testing.T) {
 // TestInotifyBacklog makes more events than a pipe holds before reading any.
 // Nothing may be lost once the reader starts draining.
 func TestInotifyBacklog(t *testing.T) {
-	ino, ok := newInotify(t)
-	if !ok {
-		return
-	}
+	ino := newInotify(t)
 	dir := t.TempDir()
 	ino.add(dir, syscall.IN_CREATE)
 	const files = 1500
@@ -563,21 +518,22 @@ func TestInotifyBacklog(t *testing.T) {
 // TestInotifyCloseReleasesInstance checks that the goroutine and its
 // descriptors go away when the caller closes the instance.
 func TestInotifyCloseReleasesInstance(t *testing.T) {
-	if runtime.GOOS != "darwin" {
+	if runtime.GOOS == "linux" {
 		return
 	}
 	awaitInotifyLive(t, 0)
+	dir := t.TempDir()
 	fd, err := syscall.InotifyInit1(syscall.IN_CLOEXEC)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := syscall.InotifyAddWatch(fd, t.TempDir(), syscall.IN_CREATE); err != nil {
+	if _, err := syscall.InotifyAddWatch(fd, dir, syscall.IN_CREATE); err != nil {
 		t.Fatal(err)
 	}
 	if live := syscall.InotifyLiveForTest(); live != 1 {
 		t.Fatalf("%d instances live, want 1", live)
 	}
-	syscall.Close(fd)
+	closeInotify(t, fd, func() error { return syscall.Close(fd) })
 	awaitInotifyLive(t, 0)
 }
 

@@ -52,7 +52,20 @@ func (queue *inotifyQueue) RecordsForTest() [][]byte {
 func InotifyLiveForTest() int {
 	inotifies.Lock()
 	defer inotifies.Unlock()
-	return len(inotifies.m)
+	ntInotifies.Lock()
+	defer ntInotifies.Unlock()
+	return len(inotifies.m) + len(ntInotifies.m)
+}
+
+// InotifyDoneForTest returns what closes when an NT instance has let go of
+// every handle, or nil for any other descriptor.
+func InotifyDoneForTest(fd int) <-chan struct{} {
+	ntInotifies.Lock()
+	defer ntInotifies.Unlock()
+	if ino := ntInotifies.m[fd]; ino != nil {
+		return ino.done
+	}
+	return nil
 }
 
 const (

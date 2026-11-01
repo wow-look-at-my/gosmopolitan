@@ -15,6 +15,22 @@ type WindowsFns struct {
 
 	// Spawn launches a child through CreateProcessW.
 	Spawn func(argv0, dir string, cmdline, env []uint16, stdio [3]int32, flags uint32) (pid int32, errno uintptr)
+
+	// FinalPath resolves a path to the file's own, absolute, Linux-style path.
+	FinalPath func(path string, follow bool) (final string, errno uintptr)
+
+	// SocketUnread reports how many bytes wait to be read on a socket descriptor.
+	SocketUnread func(fd int32) (unread int, errno uintptr)
+
+	// The Watch functions are the inotify emulation's ReadDirectoryChangesW reads, gathered in one completion port.
+	WatchPort   func() (port, errno uintptr)
+	WatchOpen   func(path string, port, key uintptr) (handle, errno uintptr)
+	WatchPath   func(handle uintptr) (path string, errno uintptr)
+	WatchRead   func(handle uintptr, buffer []byte, overlapped *[4]uintptr) (failure uintptr)
+	WatchWait   func(port uintptr, millis uint32) (transferred uint32, key uintptr, completed bool, failure uintptr)
+	WatchWake   func(port uintptr)
+	WatchCancel func(handle uintptr)
+	WatchClose  func(handle uintptr)
 }
 
 // Spawn flag bits. An abstraction over the CreateProcessW creation
