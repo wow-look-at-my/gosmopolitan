@@ -3,6 +3,8 @@
 
 //go:build linux && !cosmo
 
+// sysOpenRead opens path, a NUL-terminated string, for reading.
+
 package cgroup
 
 import (

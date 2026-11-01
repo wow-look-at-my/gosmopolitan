@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// Apple sigaction flag values (upstream defs_darwin_*.go).
+
 package runtime
 
 // Apple sigaction flag values (upstream defs_darwin_*.go).

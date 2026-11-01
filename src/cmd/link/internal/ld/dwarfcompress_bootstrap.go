@@ -3,6 +3,8 @@
 
 //go:build compiler_bootstrap
 
+// The toolchain1 bootstrap build compiles cmd/link without the cmd/vendor tree.
+
 package ld
 
 import (

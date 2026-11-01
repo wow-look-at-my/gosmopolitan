@@ -3,6 +3,8 @@
 
 //go:build cosmo && amd64
 
+// statfs(2) and fstatfs(2) on an NT host.
+
 package runtime
 
 import "unsafe"

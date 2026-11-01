@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// hostNameservers asks the host for its resolvers.
+
 package net
 
 import "runtime"

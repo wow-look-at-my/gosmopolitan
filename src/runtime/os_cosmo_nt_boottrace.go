@@ -3,6 +3,8 @@
 
 //go:build cosmo && cosmontdebug
 
+// ntBoot prints one boot milestone.
+
 package runtime
 
 import "unsafe"
