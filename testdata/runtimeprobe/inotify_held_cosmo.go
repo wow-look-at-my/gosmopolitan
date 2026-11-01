@@ -6,6 +6,8 @@
 package main
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -104,6 +106,39 @@ func inotifyWriteBeforeWatch(dir string) error {
 		return err
 	}
 	return reader.await(syscall.IN_CLOSE_WRITE, "file")
+}
+
+// inotifyTempUntouched watches the temporary directory, where a host can keep
+// its own files, while another watch starts. Other programs share that
+// directory, so only this program's names count.
+func inotifyTempUntouched(dir string) error {
+	reader, err := inotifyOpen()
+	if err != nil {
+		return err
+	}
+	defer reader.file.Close()
+	if err := reader.add(filepath.Dir(dir), syscall.IN_CREATE|syscall.IN_DELETE); err != nil {
+		return err
+	}
+	if err := reader.add(dir, syscall.IN_CREATE); err != nil {
+		return err
+	}
+	if err := reader.file.SetReadDeadline(time.Now().Add(300 * time.Millisecond)); err != nil {
+		return err
+	}
+	buf := make([]byte, 65536)
+	for {
+		count, err := reader.file.Read(buf)
+		if errors.Is(err, os.ErrDeadlineExceeded) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if bytes.Contains(buf[:count], []byte(".inotify-")) {
+			return fmt.Errorf("the host's own file was reported: %q", buf[:count])
+		}
+	}
 }
 
 // inotifyDuplicate has a duplicate outlive the descriptor it came from, which

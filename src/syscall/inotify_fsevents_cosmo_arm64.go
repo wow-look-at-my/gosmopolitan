@@ -20,7 +20,9 @@ package syscall
 import (
 	"internal/bytealg"
 	"internal/byteorder"
+	"internal/strconv"
 	"sync"
+	"sync/atomic"
 )
 
 const (
@@ -29,6 +31,11 @@ const (
 	fseventKernelDropped = 0x4
 	fseventRemoved       = 0x200
 	fseventRenamed       = 0x800
+
+	fseventDropped = fseventMustScan | fseventUserDropped | fseventKernelDropped
+
+	// fseventCookieName starts the name of every instance's cookies, which no watch of the temporary directory reports.
+	fseventCookieName = ".inotify-fsevents-"
 
 	// fseventHeaderBytes is the id, flags and path length cosmo_fsevents_callback writes.
 	fseventHeaderBytes = 16
@@ -44,7 +51,7 @@ func cosmoFSEventQueue() uintptr
 
 func cosmoFSEventDrain(queue uintptr)
 
-func cosmoFSEventOpen(path *byte, fd int32, queue uintptr) uintptr
+func cosmoFSEventOpen(path, cookie *byte, fd int32, queue uintptr) uintptr
 
 func cosmoFSEventClose(stream uintptr)
 
@@ -55,12 +62,32 @@ var fseventLoaded struct {
 	ok   bool
 }
 
+var fseventCookies atomic.Uint64
+
+// An fseventStream is a directory's stream.
+type fseventStream struct {
+	stream uintptr
+	cookie string
+	since  uint64
+	closed bool
+}
+
+// An fseventRecord is an event waiting for a cookie.
+type fseventRecord struct {
+	id    uint64
+	flags uint32
+	path  string
+}
+
 type fseventSource struct {
 	ino     *inotifyInstance
 	queue   uintptr
 	readFd  int
 	writeFd int
 	seen    map[uint64]struct{}
+	cookies string
+	marks   map[string]*fseventStream
+	held    []fseventRecord
 
 	mu      sync.Mutex
 	arrived sync.Cond
@@ -73,6 +100,14 @@ func fseventNewSource(ino *inotifyInstance) (inotifySource, Errno) {
 	if !fseventLoaded.ok {
 		return nil, ENOSYS
 	}
+	temp, found := Getenv("TMPDIR")
+	if !found || temp == "" {
+		temp = "/tmp"
+	}
+	cookies, errno := fseventCanonical(temp, true)
+	if errno != 0 {
+		return nil, errno
+	}
 	var pair [2]int
 	if err := Pipe2(pair[:], O_CLOEXEC); err != nil {
 		return nil, err.(Errno)
@@ -83,14 +118,21 @@ func fseventNewSource(ino *inotifyInstance) (inotifySource, Errno) {
 		readFd:  pair[0],
 		writeFd: pair[1],
 		seen:    map[uint64]struct{}{},
+		cookies: cookies + "/" + fseventCookieName,
+		marks:   map[string]*fseventStream{},
 	}
 	source.arrived.L = &source.mu
 	return source, 0
 }
 
-// canonical takes its answer from the file's open handle, so a directory is
-// named the way FSEvents will name it. The stat is what gives an error its errno.
 func (source *fseventSource) canonical(path string, follow bool) (string, Errno) {
+	return fseventCanonical(path, follow)
+}
+
+// fseventCanonical takes its answer from the file's open handle, so a directory
+// is named the way FSEvents will name it. The stat is what gives an error its
+// errno.
+func fseventCanonical(path string, follow bool) (string, Errno) {
 	var stat Stat_t
 	var err error
 	if follow {
@@ -117,16 +159,65 @@ func (source *fseventSource) open(dir *inotifyDir) Errno {
 	if err != nil {
 		return err.(Errno)
 	}
-	stream := cosmoFSEventOpen(path, int32(source.writeFd), source.queue)
+	cookie := source.cookies + strconv.Itoa(Getpid()) + "-" + strconv.Itoa(int(fseventCookies.Add(1)))
+	cookieName, err := BytePtrFromString(cookie)
+	if err != nil {
+		return err.(Errno)
+	}
+	stream := cosmoFSEventOpen(path, cookieName, int32(source.writeFd), source.queue)
 	if stream == 0 {
 		return EIO
 	}
-	dir.host = stream
+	if errno := fseventTouch(cookie); errno != 0 {
+		cosmoFSEventClose(stream)
+		return errno
+	}
+	owner := &fseventStream{stream: stream, cookie: cookie, since: ^uint64(0)}
+	dir.host = owner
+	source.marks[cookie] = owner
+	return 0
+}
+
+// fseventTouch gives a stream its cookie event.
+func fseventTouch(cookie string) Errno {
+	fd, err := Open(cookie, O_CREAT|O_EXCL|O_WRONLY|O_CLOEXEC, 0o600)
+	if err != nil {
+		return err.(Errno)
+	}
+	Close(fd)
+	if err := Unlink(cookie); err != nil {
+		return err.(Errno)
+	}
 	return 0
 }
 
 func (source *fseventSource) close(dir *inotifyDir) {
-	cosmoFSEventClose(dir.host.(uintptr))
+	owner := dir.host.(*fseventStream)
+	if owner.stream == 0 {
+		return
+	}
+	if source.marks[owner.cookie] == owner {
+		owner.closed = true
+		return
+	}
+	cosmoFSEventClose(owner.stream)
+}
+
+// settle says a stream's cookie has arrived, with the events waiting for it.
+func (source *fseventSource) settle(owner *fseventStream, id uint64) {
+	owner.since = id
+	delete(source.marks, owner.cookie)
+	if owner.closed {
+		cosmoFSEventClose(owner.stream)
+	}
+	if len(source.marks) > 0 {
+		return
+	}
+	held := source.held
+	source.held = nil
+	for _, item := range held {
+		source.event(item.id, item.flags, item.path)
+	}
 }
 
 // moved follows a directory to its new path. A stream watches a path, so what
@@ -134,16 +225,23 @@ func (source *fseventSource) close(dir *inotifyDir) {
 func (source *fseventSource) moved(dir *inotifyDir, old string) {
 	source.close(dir)
 	if source.open(dir) != 0 {
-		dir.host = uintptr(0)
+		dir.host = &fseventStream{}
 		source.ino.lost(dir)
 		return
 	}
 	source.ino.resync(dir)
 }
 
-// stop runs after every stream has stopped. The pipe closes when the last
-// callback has finished, which ends pump and then run.
+// stop runs after every directory has closed. The streams still waiting for a
+// cookie stop here. The pipe closes when the last callback has finished, which
+// ends pump and then run.
 func (source *fseventSource) stop() {
+	source.ino.mu.Lock()
+	for _, owner := range source.marks {
+		cosmoFSEventClose(owner.stream)
+	}
+	clear(source.marks)
+	source.ino.mu.Unlock()
 	cosmoFSEventDrain(source.queue)
 	Close(source.writeFd)
 }
@@ -207,12 +305,35 @@ func (source *fseventSource) events(buf []byte) []byte {
 		if len(buf) < end {
 			break
 		}
-		if source.first(id) {
-			source.event(string(buf[fseventHeaderBytes:end]), flags)
-		}
+		source.record(id, flags, string(buf[fseventHeaderBytes:end]))
 		buf = buf[end:]
 	}
 	return append([]byte(nil), buf...)
+}
+
+func (source *fseventSource) record(id uint64, flags uint32, path string) {
+	if owner := source.marks[path]; owner != nil {
+		source.settle(owner, id)
+		return
+	}
+	cookies := len(source.cookies)
+	if len(path) > cookies && path[:cookies] == source.cookies || !source.first(id) {
+		return
+	}
+	if flags&fseventDropped != 0 {
+		for _, owner := range source.marks {
+			source.settle(owner, 0)
+		}
+		for _, dir := range source.ino.paths {
+			source.ino.resync(dir)
+		}
+		return
+	}
+	if len(source.marks) > 0 {
+		source.held = append(source.held, fseventRecord{id, flags, path})
+		return
+	}
+	source.event(id, flags, path)
 }
 
 // first reports whether no stream has delivered the event yet.
@@ -227,15 +348,14 @@ func (source *fseventSource) first(id uint64) bool {
 	return true
 }
 
-func (source *fseventSource) event(path string, flags uint32) {
+// reports says whether a directory's watch began before an event.
+func (source *fseventSource) reports(dir *inotifyDir, id uint64) bool {
+	return id > dir.host.(*fseventStream).since
+}
+
+func (source *fseventSource) event(id uint64, flags uint32, path string) {
 	ino := source.ino
-	if flags&(fseventMustScan|fseventUserDropped|fseventKernelDropped) != 0 {
-		for _, dir := range ino.paths {
-			ino.resync(dir)
-		}
-		return
-	}
-	if dir := ino.paths[path]; dir != nil {
+	if dir := ino.paths[path]; dir != nil && source.reports(dir, id) {
 		ino.selfChanged(dir)
 	}
 	slash := bytealg.LastIndexByteString(path, '/')
@@ -246,7 +366,7 @@ func (source *fseventSource) event(path string, flags uint32) {
 	if slash == 0 {
 		above = "/"
 	}
-	if dir := ino.paths[above]; dir != nil && !dir.closing {
+	if dir := ino.paths[above]; dir != nil && !dir.closing && source.reports(dir, id) {
 		source.name(dir, path[slash+1:], flags)
 	}
 }

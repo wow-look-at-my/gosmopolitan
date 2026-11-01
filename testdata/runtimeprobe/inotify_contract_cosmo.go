@@ -36,6 +36,7 @@ func inotifyContract() error {
 		{"truncate by path past a held reader", inotifyTruncatePastReader},
 		{"write through a descriptor older than the watch", inotifyWriteBeforeWatch},
 		{"duplicated instance", inotifyDuplicate},
+		{"a watch leaves the temporary directory alone", inotifyTempUntouched},
 	}
 	var failures []error
 	for _, check := range checks {

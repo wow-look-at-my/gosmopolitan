@@ -153,18 +153,25 @@ func syscall_cosmoFSEventDrain(queue uintptr) {
 	cosmoC(fseventFns.queueRelease, queue, 0, 0, 0, 0, 0)
 }
 
-// syscall_cosmoFSEventOpen starts a stream of a directory's file events and
-// reports it, or zero. A stream with no latency delivers each event as it
-// happens. The callback writes them to fd.
+// syscall_cosmoFSEventOpen starts a stream of the file events of a directory and
+// a second path, and reports it, or zero. A stream with no latency delivers each
+// event as it happens. The callback writes them to fd.
 //
 //go:linkname syscall_cosmoFSEventOpen syscall.cosmoFSEventOpen
-func syscall_cosmoFSEventOpen(path *byte, fd int32, queue uintptr) uintptr {
-	text := cosmoC(fseventFns.stringCreate, 0, uintptr(unsafe.Pointer(path)), _CF_ENCODING_UTF8, 0, 0, 0)
-	if text == 0 {
-		return 0
+func syscall_cosmoFSEventOpen(path, cookie *byte, fd int32, queue uintptr) uintptr {
+	texts := [2]uintptr{
+		cosmoC(fseventFns.stringCreate, 0, uintptr(unsafe.Pointer(path)), _CF_ENCODING_UTF8, 0, 0, 0),
+		cosmoC(fseventFns.stringCreate, 0, uintptr(unsafe.Pointer(cookie)), _CF_ENCODING_UTF8, 0, 0, 0),
 	}
-	paths := cosmoC(fseventFns.arrayCreate, 0, uintptr(unsafe.Pointer(&text)), 1, fseventFns.arrayCallbacks, 0, 0)
-	cosmoC(fseventFns.release, text, 0, 0, 0, 0, 0)
+	paths := uintptr(0)
+	if texts[0] != 0 && texts[1] != 0 {
+		paths = cosmoC(fseventFns.arrayCreate, 0, uintptr(unsafe.Pointer(&texts)), 2, fseventFns.arrayCallbacks, 0, 0)
+	}
+	for _, text := range texts {
+		if text != 0 {
+			cosmoC(fseventFns.release, text, 0, 0, 0, 0, 0)
+		}
+	}
 	if paths == 0 {
 		return 0
 	}
