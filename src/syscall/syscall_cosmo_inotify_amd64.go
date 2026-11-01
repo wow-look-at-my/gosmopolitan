@@ -7,8 +7,9 @@
 
 package syscall
 
-// InotifyInit has a syscall number in the amd64 table and none in the arm64
-// table. The arm64 file builds the same name on InotifyInit1.
+// InotifyInit has a syscall number in the amd64 table and none in the arm64 table.
+
+const darwinSysInotifyInit = SYS_INOTIFY_INIT
 
 func InotifyInit() (fd int, err error) {
 	r0, _, e1 := RawSyscall(SYS_INOTIFY_INIT, 0, 0, 0)

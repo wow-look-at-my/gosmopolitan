@@ -7,8 +7,9 @@
 
 package syscall
 
-// The arm64 table has no inotify_init number. The linux port builds the name
-// on inotify_init1 with no flags, and so does this.
+// The arm64 table has no inotify_init number.
+
+const darwinSysInotifyInit = ^uintptr(2)
 
 func InotifyInit() (fd int, err error) {
 	return InotifyInit1(0)

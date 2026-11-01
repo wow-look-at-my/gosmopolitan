@@ -160,6 +160,8 @@ func cosmoXnuSyscall6(num, a1, a2, a3, a4, a5, a6 uintptr) (r1 uintptr, errno in
 func cosmoDarwinKqueueSupported() bool { return true }
 
 // cosmoDarwinKqueue creates a kqueue.
+//
+//go:linkname cosmoDarwinKqueue
 func cosmoDarwinKqueue() (int32, int32) {
 	r, e := cosmoXnuSyscall6(_XNU_kqueue, 0, 0, 0, 0, 0, 0)
 	if e != 0 {
@@ -170,7 +172,11 @@ func cosmoDarwinKqueue() (int32, int32) {
 
 // cosmoDarwinKevent registers changes and collects events. A nil ts
 // means "block indefinitely", which XNU spells the same way Apple libc
-// does: a null pointer.
+// does: a null pointer. It is nosplit because the syscall package blocks in
+// it between entersyscall and exitsyscall.
+//
+//go:linkname cosmoDarwinKevent
+//go:nosplit
 func cosmoDarwinKevent(kq int32, ch *keventt, nch int32, ev *keventt, nev int32, ts *timespec) (int32, int32) {
 	r, e := cosmoXnuSyscall6(_XNU_kevent,
 		uintptr(uint32(kq)),
