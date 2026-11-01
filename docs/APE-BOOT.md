@@ -73,7 +73,9 @@ A container with nothing writable at all reaches none of them. `memfd` is immune
 
 The kernel then starts the APE with no file anywhere.
 
-**The loader removes its own copy before the program starts.** The script execs it as `apeld -u <ape>`. `-u` makes it unlink `argv[0]` as its first act. The loader has to do this. A script cannot delete anything after it execs.
+**The loader removes its own copy before the program starts.** The script execs it as `apeld -u <ape>`. `-u` makes it unlink its own file. The loader has to do this. A script cannot delete anything after it execs. On linux the first run unlinks the file and execs itself again through `/proc/self/exe`.
+
+On darwin the second run unlinks it, because that run execs from the file. The marker that carries the request names the file.
 
 So nothing is left for anybody to find. On linux nothing was written to a disk in the first place. The name carries the PID. The mode is 700. No run can therefore read or collide with another's.
 
@@ -96,6 +98,10 @@ APE: no apeld-linux-amd64 on this host, and nowhere to unpack the embedded one: 
 ```
 
 ## What it costs the program
+
+**ps, top and htop show the program's argv, not the loader's.** The kernel starts the loader with the loader's own path as `argv[0]`, and the kernel shows that argv. So the loader execs itself one more time, with the program's argv. `APE_REEXEC` in the environment marks that second run, and the second run removes it before the program starts. A linux host with no `/proc` refuses that exec. The loader then moves the program's strings over its own, so the program's argv comes first.
+
+An empty string follows for each loader argument. runtimeprobe's `cmdline` check compares the host's copy with `os.Args`.
 
 On Linux the loader maps the payload itself, so `/proc/self/exe` names the loader. The loader passes the APE's open descriptor as `AT_EXECFD`, and `os.Executable` reads the path from `/proc/self/fd/<n>`. A program that re-execs itself, or reads its own file, gets an openable path. `/proc/self/maps` names the APE.
 

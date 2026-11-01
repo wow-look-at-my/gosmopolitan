@@ -6,6 +6,11 @@
 // would give the payload and jumps to its entry. AT_EXECFD names the APE,
 // because /proc/self/exe names this loader.
 //
+// The kernel shows ps the argv it started this loader with. That argv names
+// the loader first. So the loader first execs itself again with the
+// program's own argv. The REEXEC marker in the environment tells the second
+// run that argv[0] is the program. The second run removes the marker.
+//
 // The host arch selects the payload. This binary is compiled per arch, so
 // the selector is a compile-time constant.
 
@@ -101,17 +106,82 @@ __attribute__((noreturn)) static void die(const char *msg) {
 	__builtin_unreachable();
 }
 
+// lit hides the address of a string literal from the compiler. The loader
+// links above the range a non-PIC amd64 build can store as a sign-extended
+// immediate.
+static inline char *lit(const char *str) {
+	char *out = (char *)str;
+	__asm__("" : "+r"(out));
+	return out;
+}
+
 // shell runs a file with no payload for this machine the way the kernel does
 // with no binfmt_misc entry: as a script. That script is under /bin/sh. Every
 // APE is a valid shell script. Root registers this loader for the APE magic
 // system-wide, so a foreign APE reaches it too.
-__attribute__((noreturn)) static void shell(char **argv, char **envp) {
-	char *sh = (char *)"/bin/sh";
-	// The loader sits too high for a sign-extended store of the literal, so the pointer goes through a register.
-	__asm__("" : "+r"(sh));
-	argv[0] = sh;
-	sc3(SYS_execve, sh, argv, envp);
+__attribute__((noreturn)) static void shell(char **pargv, i64 pargc, char **envp) {
+	char *argv[pargc + 2];
+	argv[0] = lit("/bin/sh");
+	for (i64 idx = 0; idx < pargc; idx++) argv[idx + 1] = pargv[idx];
+	argv[pargc + 1] = 0;
+	sc3(SYS_execve, argv[0], argv, envp);
 	die("no payload for this machine, and /bin/sh did not start");
+}
+
+// REEXEC marks the second run of this loader. Its value is empty.
+#define REEXEC "APE_REEXEC="
+
+static int ismark(const char *entry) {
+	const char *mark = lit(REEXEC);
+	for (; *mark; mark++, entry++)
+		if (*entry != *mark) return 0;
+	return 1;
+}
+
+// stripmark removes every marker from envp, so the payload never sees one.
+// It moves *end back to the new terminating null.
+static int stripmark(char **envp, char ***end) {
+	int found = 0;
+	for (char **entry = envp; *entry;) {
+		if (!ismark(*entry)) {
+			entry++;
+			continue;
+		}
+		for (char **next = entry; *next; next++) next[0] = next[1];
+		(*end)--;
+		found = 1;
+	}
+	return found;
+}
+
+// retitle moves the program's argv strings over this loader's, where the
+// kernel shows them. Each string stays in the order it had. The bytes the
+// loader's strings left over become nulls.
+static void retitle(char **argv, i64 argc, i64 skip) {
+	char *dst = argv[0];
+	char *last = argv[argc - 1];
+	while (*last) last++;
+	for (i64 idx = skip; idx < argc; idx++) {
+		char *src = argv[idx];
+		argv[idx] = dst;
+		do *dst++ = *src; while (*src++);
+	}
+	for (volatile char *zero = dst; zero <= last; zero++) *zero = 0;
+}
+
+// reexec starts this loader again with the program's own argv. It returns
+// only when the kernel refuses that exec, which a host with no /proc does.
+// Consider the program's strings. Those strings then move over the
+// loader's own instead. The file /proc/self/cmdline then holds the
+// program's argv. An empty string for each loader argument follows it.
+static void reexec(char **argv, i64 argc, i64 skip, char **envp, char **end) {
+	i64 nenv = end - envp;
+	char *env[nenv + 2];
+	for (i64 idx = 0; idx < nenv; idx++) env[idx] = envp[idx];
+	env[nenv] = lit(REEXEC);
+	env[nenv + 1] = 0;
+	sc3(SYS_execve, lit("/proc/self/exe"), argv + skip, env);
+	retitle(argv, argc, skip);
 }
 
 // bootcopy copies the payload's PT_LOAD ranges into a memfd and execs that.
@@ -142,22 +212,34 @@ __attribute__((noreturn)) static void bootcopy(i64 fd, const char *name, u64 off
 }
 
 __attribute__((noreturn, used)) static void run(i64 argc, char **argv) {
-	if (argc < 2) die("usage: apeld [-u] PROG.com [args...]");
 	char **envp = argv + argc + 1;
+	// The environment ends in a null, and the auxv follows it. Find the auxv
+	// before stripmark moves that null.
+	char **e = envp;
+	while (*e) e++;
+	u64 *auxv = (u64 *)(e + 1);
 
-	// -u removes this loader's own file before anything else. A caller that
-	// unpacked a throwaway copy passes it, so an APE leaves no second file on
-	// the host. It is argv and not an environment variable on purpose. An
-	// environment variable reaches the payload, and a nested run could then
-	// delete a loader somebody installed.
-	if (argc > 2 && argv[1][0] == '-' && argv[1][1] == 'u' && argv[1][2] == 0) {
-		sc3(SYS_unlinkat, AT_FDCWD, argv[0], 0);
-		argv++;
-		argc--;
+	char **pargv = argv;
+	i64 pargc = argc;
+	if (!stripmark(envp, &e)) {
+		if (argc < 2) die("usage: apeld [-u] PROG.com [args...]");
+		// -u removes this loader's own file before anything else. A caller
+		// that unpacked a throwaway copy passes it, so an APE leaves no second
+		// file on the host. It is argv and not an environment variable on
+		// purpose. An environment variable reaches the payload. A nested run
+		// could then delete a loader somebody installed. /proc/self/exe still
+		// execs the file after the unlink.
+		i64 skip = 1;
+		if (argc > 2 && argv[1][0] == '-' && argv[1][1] == 'u' && argv[1][2] == 0) {
+			sc3(SYS_unlinkat, AT_FDCWD, argv[0], 0);
+			skip = 2;
+		}
+		reexec(argv, argc, skip, envp, e);
+		pargv = argv + skip;
+		pargc = argc - skip;
 	}
-	const char *path = argv[1];
-	char **pargv = argv + 1;
-	i64 pargc = argc - 1;
+	if (pargc < 1) die("usage: apeld [-u] PROG.com [args...]");
+	const char *path = pargv[0];
 
 	// The descriptor stays open: AT_EXECFD hands it to the payload.
 	i64 fd = sc4(SYS_openat, AT_FDCWD, path, O_RDONLY | O_CLOEXEC, 0);
@@ -181,7 +263,7 @@ __attribute__((noreturn, used)) static void run(i64 argc, char **argv) {
 	} eh;
 	u64 off = PAYLOAD_ALIGN;
 	for (;; off += PAYLOAD_ALIGN) {
-		if (sc4(SYS_pread, fd, &eh, 64, off) != 64) shell(argv, envp);
+		if (sc4(SYS_pread, fd, &eh, 64, off) != 64) shell(pargv, pargc, envp);
 		if (eh.magic == 0x464c457f && eh.machine == EM_HOST) break;
 	}
 	if (eh.phentsize != sizeof(phdr) || eh.phnum == 0 || eh.phnum > MAX_PHDRS) die("bad program headers");
@@ -189,10 +271,6 @@ __attribute__((noreturn, used)) static void run(i64 argc, char **argv) {
 	i64 phlen = (i64)eh.phnum * sizeof(phdr);
 	if (sc4(SYS_pread, fd, ph, phlen, off + eh.phoff) != phlen) die("cannot read program headers");
 
-	// The environment ends in a null, and the auxv follows it.
-	char **e = envp;
-	while (*e) e++;
-	u64 *auxv = (u64 *)(e + 1);
 	u64 pagesz = 4096;
 	u64 naux = 0;
 	for (; auxv[2 * naux] != AT_NULL; naux++)
