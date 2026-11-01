@@ -185,7 +185,11 @@ TEXT runtime·cosmo_ccall_trampoline(SB),NOSPLIT,$0
 	MOVD	32(R19), R3
 	MOVD	40(R19), R4
 	MOVD	48(R19), R5
+	MOVD	72(R19), R6
+	SUB	$16, RSP
+	MOVD	R6, (RSP)
 	BL	(R12)
+	ADD	$16, RSP
 	MOVD	R0, 64(R19)
 	RET
 
