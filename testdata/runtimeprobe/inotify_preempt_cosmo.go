@@ -16,14 +16,15 @@ import (
 	"time"
 )
 
-// inotifyPreemptRun is how long the workers open and close watches.
+// inotifyPreemptRun is how long the workers add and remove watches.
 const inotifyPreemptRun = 3 * time.Second
 
-// inotifyUnderPreemption opens and closes watches while collections stop the
+// inotifyUnderPreemption adds and removes watches while collections stop the
 // world. A stop sends preemption signals, and on macOS a watch is host library
 // code that holds a thread for milliseconds. The signals land inside it. The
 // host library owns the g register there. A handler that trusts it faults on
-// its own fault forever, and the stop never ends.
+// its own fault forever, and the stop never ends. Each worker keeps one
+// instance, because Linux counts a closed instance against the user for a while.
 func inotifyUnderPreemption() error {
 	dir, err := os.MkdirTemp("", "rp-inotify-preempt")
 	if err != nil {
@@ -37,14 +38,15 @@ func inotifyUnderPreemption() error {
 	var group sync.WaitGroup
 	for range runtime.GOMAXPROCS(0) {
 		group.Go(func() {
+			fd, err := syscall.InotifyInit1(syscall.IN_CLOEXEC)
+			if err != nil {
+				err = fmt.Errorf("inotify_init1: %w", err)
+				failure.CompareAndSwap(nil, &err)
+				return
+			}
+			defer syscall.Close(fd)
 			for !stop.Load() {
-				err := inotifyOpenClose(dir)
-				if errors.Is(err, syscall.EMFILE) {
-					// Linux counts a closed instance until a later grace period ends.
-					time.Sleep(10 * time.Millisecond)
-					continue
-				}
-				if err != nil {
+				if err := inotifyAddRemove(fd, dir); err != nil {
 					failure.CompareAndSwap(nil, &err)
 					return
 				}
@@ -61,20 +63,19 @@ func inotifyUnderPreemption() error {
 		return *err
 	}
 	if rounds.Load() == 0 {
-		return errors.New("no watch opened and closed")
+		return errors.New("no watch added and removed")
 	}
 	return nil
 }
 
-// inotifyOpenClose starts one watch and stops it.
-func inotifyOpenClose(dir string) error {
-	fd, err := syscall.InotifyInit1(syscall.IN_CLOEXEC)
+// inotifyAddRemove starts one watch and stops it.
+func inotifyAddRemove(fd int, dir string) error {
+	wd, err := syscall.InotifyAddWatch(fd, dir, syscall.IN_CREATE)
 	if err != nil {
-		return fmt.Errorf("inotify_init1: %w", err)
-	}
-	defer syscall.Close(fd)
-	if _, err := syscall.InotifyAddWatch(fd, dir, syscall.IN_CREATE); err != nil {
 		return fmt.Errorf("inotify_add_watch: %w", err)
+	}
+	if _, err := syscall.InotifyRmWatch(fd, uint32(wd)); err != nil {
+		return fmt.Errorf("inotify_rm_watch: %w", err)
 	}
 	return nil
 }
