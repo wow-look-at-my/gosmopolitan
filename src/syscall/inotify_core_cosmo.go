@@ -94,9 +94,6 @@ type inotifyDir struct {
 	host    any // the source's own state
 	closing bool
 
-	probeStream uintptr
-	probeBox    uintptr
-
 	watch    *inotifyWatch            // nil unless the directory is watched
 	children map[string]*inotifyFile  // nil unless the directory is watched
 	selves   map[string]*inotifyWatch // the watches on names here
@@ -117,12 +114,9 @@ func (dir *inotifyDir) list() (entries []inotifyEntry, ok bool) {
 		return nil, false
 	}
 	defer Close(fd)
-	dir.probe("list open")
 	buf := make([]byte, 16384)
-	dir.probe("list make")
 	for {
 		count, err := Getdents(fd, buf)
-		dir.probe("list getdents")
 		if err != nil {
 			return nil, false
 		}
@@ -130,22 +124,8 @@ func (dir *inotifyDir) list() (entries []inotifyEntry, ok bool) {
 			return entries, true
 		}
 		entries = inotifyParse(buf[:count], entries)
-		dir.probe("list parse")
 	}
 }
-
-func (dir *inotifyDir) probe(where string) {
-	if dir.host != nil || where != "never" {
-		return
-	}
-	if stream := dir.host.(uintptr); stream != dir.probeStream {
-		var local int
-		println("PROBE", where, stream, "want", dir.probeStream, "box", dir.probeBox, "typ", (*[2]uintptr)(unsafe.Pointer(&dir.host))[0], "now", (*[2]uintptr)(unsafe.Pointer(&dir.host))[1], "dir", unsafe.Pointer(dir), "sp", uintptr(unsafe.Pointer(&local)))
-		probeSpan(dir.probeBox)
-	}
-}
-
-func probeSpan(addr uintptr)
 
 type inotifyWatch struct {
 	wd    int32
@@ -168,7 +148,6 @@ type inotifyInstance struct {
 
 	mu         sync.Mutex
 	busy       sync.Cond // something waits for the clock
-	probeDir   *inotifyDir
 	closed     bool
 	watches    map[int32]*inotifyWatch
 	files      map[epollID]*inotifyWatch
@@ -343,17 +322,9 @@ func inotifyAddWatch(fd int, path *byte, mask uint32) (uintptr, Errno) {
 	ino.files[entry.id] = watch
 	if entry.isDir {
 		errno = ino.watchDirectory(watch, full)
-		if watch.dir != nil {
-			watch.dir.probe("watched")
-		}
 	}
-	if !probeSkip('a') {
-		if selfErrno := ino.attach(watch, full); !entry.isDir {
-			errno = selfErrno
-		}
-	}
-	if watch.dir != nil {
-		watch.dir.probe("attached")
+	if selfErrno := ino.attach(watch, full); !entry.isDir {
+		errno = selfErrno
 	}
 	if errno != 0 {
 		ino.dropWatch(watch)
@@ -374,20 +345,9 @@ func inotifyRmWatch(fd int, wd int32) Errno {
 		return EINVAL
 	}
 	ino.dropWatch(watch)
-	if probeSkip('q') {
-		return 0
-	}
 	ino.queue.push(wd, IN_IGNORED, 0, "")
-	if probeSkip('f') {
-		return 0
-	}
 	ino.flush()
 	return 0
-}
-
-func probeSkip(letter byte) bool {
-	text, _ := Getenv("RP_SKIP")
-	return bytealg.IndexByteString(text, letter) >= 0
 }
 
 // directory returns the directory at path, opening it if need be.
@@ -396,11 +356,9 @@ func (ino *inotifyInstance) directory(path string) (*inotifyDir, Errno) {
 		return dir, 0
 	}
 	dir := &inotifyDir{path: path, selves: map[string]*inotifyWatch{}}
-	ino.probeHere("directory new")
 	if errno := ino.source.open(dir); errno != 0 {
 		return nil, errno
 	}
-	ino.probeHere("directory opened")
 	ino.paths[path] = dir
 	return dir, 0
 }
@@ -415,9 +373,6 @@ func (ino *inotifyInstance) watchDirectory(watch *inotifyWatch, path string) Err
 	watch.dir = dir
 	dir.watch = watch
 	dir.children = map[string]*inotifyFile{}
-	if probeSkip('l') {
-		return 0
-	}
 	entries, ok := dir.list()
 	if !ok {
 		return EIO
@@ -442,24 +397,14 @@ func (ino *inotifyInstance) attach(watch *inotifyWatch, path string) Errno {
 	if slash == 0 {
 		above = "/"
 	}
-	ino.probeDir = watch.dir
-	ino.probeHere("attach start")
 	parent, errno := ino.directory(above)
-	ino.probeHere("attach directory")
 	if errno != 0 {
 		return errno
 	}
 	watch.parent = parent
 	watch.name = path[slash+1:]
 	parent.selves[watch.name] = watch
-	ino.probeHere("attach selves")
 	return 0
-}
-
-func (ino *inotifyInstance) probeHere(where string) {
-	if ino.probeDir != nil {
-		ino.probeDir.probe(where)
-	}
 }
 
 func (ino *inotifyInstance) setChild(dir *inotifyDir, name string, entry *inotifyFile) {
@@ -499,16 +444,12 @@ func (ino *inotifyInstance) dropWatch(watch *inotifyWatch) {
 	watch.gone = true
 	delete(ino.watches, watch.wd)
 	delete(ino.files, watch.entry.id)
-	if watch.dir != nil {
-		watch.dir.probe("dropping")
-	}
 	if parent := watch.parent; parent != nil {
 		delete(parent.selves, watch.name)
 		watch.parent = nil
 		ino.released(parent)
 	}
 	if dir := watch.dir; dir != nil {
-		dir.probe("drop")
 		for _, child := range dir.children {
 			ino.dropChild(child)
 		}
@@ -550,11 +491,7 @@ func (ino *inotifyInstance) flush() {
 	if ino.closed || ino.fd < 0 {
 		return
 	}
-	var unread int
-	var errno Errno
-	if !probeSkip('u') {
-		unread, errno = inotifyUnread(ino.fd)
-	}
+	unread, errno := inotifyUnread(ino.fd)
 	if errno != 0 {
 		return
 	}
@@ -574,7 +511,7 @@ func (ino *inotifyInstance) flush() {
 	} else {
 		ino.busy.Signal()
 	}
-	if len(batch) > 0 && !probeSkip('w') {
+	if len(batch) > 0 {
 		write(ino.writeFd, batch)
 	}
 }

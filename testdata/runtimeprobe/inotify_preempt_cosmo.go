@@ -55,10 +55,6 @@ func inotifyUnderPreemption() error {
 		})
 	}
 	for deadline := time.Now().Add(inotifyPreemptRun); time.Now().Before(deadline); {
-		if os.Getenv("RP_NOGC") != "" {
-			time.Sleep(time.Millisecond)
-			continue
-		}
 		runtime.GC()
 	}
 	stop.Store(true)

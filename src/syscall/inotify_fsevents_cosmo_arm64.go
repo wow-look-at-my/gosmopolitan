@@ -21,12 +21,10 @@ import (
 	"internal/bytealg"
 	"internal/byteorder"
 	"sync"
-	"sync/atomic"
-	"unsafe"
 )
 
 const (
-	fseventMustScan     = 0x1
+	fseventMustScan      = 0x1
 	fseventUserDropped   = 0x2
 	fseventKernelDropped = 0x4
 	fseventRemoved       = 0x200
@@ -115,105 +113,20 @@ func (source *fseventSource) canonical(path string, follow bool) (string, Errno)
 }
 
 func (source *fseventSource) open(dir *inotifyDir) Errno {
-	source.ino.probeHere("open start")
 	path, err := BytePtrFromString(dir.path)
 	if err != nil {
 		return err.(Errno)
 	}
-	source.ino.probeHere("open bytes")
-	var stream uintptr
-	if mode, _ := Getenv("RP_FSE"); mode == "noop" {
-		stream = 1<<33 + 0x5a5a5a
-	} else {
-		stream = cosmoFSEventOpen(path, int32(source.writeFd), source.queue)
-	}
+	stream := cosmoFSEventOpen(path, int32(source.writeFd), source.queue)
 	if stream == 0 {
 		return EIO
 	}
-	source.ino.probeHere("open c")
 	dir.host = stream
-	dir.probeStream = stream
-	dir.probeBox = (*[2]uintptr)(unsafe.Pointer(&dir.host))[1]
-	source.ino.probeHere("open host")
-	probeKeep(dir)
-	probeStop(dir)
 	return 0
-}
-
-var probeStopped atomic.Bool
-
-var (
-	probeKeepMu  sync.Mutex
-	probeKeepDir []*inotifyDir
-	probeKeepBox []unsafe.Pointer
-)
-
-func probeKeep(dir *inotifyDir) {
-	mode := getenvProbe()
-	if mode == 0 {
-		return
-	}
-	probeKeepMu.Lock()
-	defer probeKeepMu.Unlock()
-	if mode == 1 {
-		probeKeepDir = append(probeKeepDir, dir)
-		return
-	}
-	probeKeepBox = append(probeKeepBox, (*[2]unsafe.Pointer)(unsafe.Pointer(&dir.host))[1])
-}
-
-func getenvProbe() int {
-	text, _ := Getenv("RP_KEEP")
-	switch text {
-	case "dir":
-		return 1
-	case "box":
-		return 2
-	}
-	return 0
-}
-
-func probeDigits(value uintptr) string {
-	var out [20]byte
-	idx := len(out)
-	for {
-		idx--
-		out[idx] = byte('0' + value%10)
-		value /= 10
-		if value == 0 {
-			return string(out[idx:])
-		}
-	}
-}
-
-// probeStop parks a preempt-check worker until lldb has armed a watchpoint.
-func probeStop(dir *inotifyDir) {
-	if len(dir.path) < 30 || dir.path[13:30] != "rp-inotify-preemp" || probeStopped.Swap(true) {
-		return
-	}
-	text := "process handle SIGURG -n false -p true -s false\n" +
-		"process handle SIGPIPE -n false -p true -s false\n" +
-		"watchpoint set expression -w write -s 8 -- " + probeDigits(dir.probeBox) + "\n" +
-		"platform shell touch /private/tmp/rp-go\n" +
-		"continue\nregister read\nthread backtrace all\nkill\nquit\n"
-	fd, _ := Open("/private/tmp/rp-lldb.tmp", O_CREAT|O_WRONLY|O_TRUNC, 0644)
-	Write(fd, []byte(text))
-	Close(fd)
-	fd, _ = Open("/private/tmp/rp-pid", O_CREAT|O_WRONLY|O_TRUNC, 0644)
-	Write(fd, []byte(probeDigits(uintptr(Getpid()))))
-	Close(fd)
-	Rename("/private/tmp/rp-lldb.tmp", "/private/tmp/rp-lldb")
-	var stat Stat_t
-	for Stat("/private/tmp/rp-go", &stat) != nil {
-	}
 }
 
 func (source *fseventSource) close(dir *inotifyDir) {
-	dir.probe("close")
-	if dir.probeStream == 1<<33+0x5a5a5a {
-		return
-	}
-	cosmoFSEventClose(dir.probeStream)
+	cosmoFSEventClose(dir.host.(uintptr))
 }
 
 // moved follows a directory to its new path. A stream watches a path, so what

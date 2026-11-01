@@ -41,7 +41,8 @@ func inotifyRecord(wd int32, mask, cookie uint32, name string) []byte {
 		size = (len(name) + SizeofInotifyEvent) &^ (SizeofInotifyEvent - 1)
 	}
 	record := make([]byte, SizeofInotifyEvent+size)
-	*(*InotifyEvent)(unsafe.Pointer(&record[0])) = InotifyEvent{Wd: wd, Mask: mask, Cookie: cookie, Len: uint32(size)}
+	// InotifyEvent ends in an empty array, which Go pads past the end of a record.
+	*(*[SizeofInotifyEvent / 4]uint32)(unsafe.Pointer(&record[0])) = [...]uint32{uint32(wd), mask, cookie, uint32(size)}
 	copy(record[SizeofInotifyEvent:], name)
 	return record
 }

@@ -33,11 +33,10 @@ const (
 // A cosmoCCall is one call into C. The offsets are known to
 // cosmo_ccall_trampoline.
 type cosmoCCall struct {
-	fn       uintptr
-	args     [6]uintptr
-	float    float64
-	ret      uintptr
-	variadic uintptr // the one variadic argument, which arm64-apple takes on the stack
+	fn    uintptr
+	args  [6]uintptr
+	float float64
+	ret   uintptr
 }
 
 func cosmo_ccall_trampoline()
@@ -187,27 +186,6 @@ func syscall_cosmoFSEventOpen(path *byte, fd int32, queue uintptr) uintptr {
 	return stream
 }
 
-//go:linkname syscall_probeSpan syscall.probeSpan
-func syscall_probeSpan(addr uintptr) {
-	gp := getg()
-	s := spanOf(addr)
-	if s == nil {
-		println("PROBE span none stack", hex(gp.stack.lo), hex(gp.stack.hi))
-		return
-	}
-	println("PROBE span", hex(addr), "state", s.state.get(), "class", s.spanclass, "elem", s.elemsize, "base", hex(s.base()), "limit", hex(s.limit), "stack", hex(gp.stack.lo), hex(gp.stack.hi), "goid", gp.goid)
-	index := s.objIndex(addr)
-	mp := gp.m
-	var cached bool
-	var flushGen uint32
-	if mp.p != 0 {
-		c := mp.p.ptr().mcache
-		cached = c.alloc[s.spanclass] == s
-		flushGen = c.flushGen.Load()
-	}
-	println("PROBE bits index", index, "freeindex", s.freeindex, "allocCount", s.allocCount, "nelems", s.nelems, "isFree", s.isFree(index), "sweepgen", s.sweepgen, "heap", mheap_.sweepgen, "cached", cached, "flushGen", flushGen, "phase", gcphase, "incache", s.sweepgen == mheap_.sweepgen+3)
-}
-
 // syscall_cosmoFSEventClose stops a stream and lets it go.
 //
 //go:linkname syscall_cosmoFSEventClose syscall.cosmoFSEventClose
@@ -226,12 +204,11 @@ func syscall_cosmoFSEventPath(path *byte, follow bool, out *byte) bool {
 	if !follow {
 		flags |= _DARWIN_O_SYMLINK
 	}
-	fd := cosmoC(fseventFns.open, uintptr(unsafe.Pointer(path)), flags, 0, 0, 0, 0)
+	fd := cosmoLibcCallVariadic1(fseventFns.open, uintptr(unsafe.Pointer(path)), flags, 0)
 	if int32(fd) < 0 {
 		return false
 	}
-	getpath := cosmoCCall{fn: fseventFns.fcntl, args: [6]uintptr{fd, _DARWIN_F_GETPATH}, variadic: uintptr(unsafe.Pointer(out))}
-	failed := cosmoCall(&getpath)
-	cosmoC(fseventFns.close, fd, 0, 0, 0, 0, 0)
+	failed := cosmoLibcCallVariadic1(fseventFns.fcntl, fd, _DARWIN_F_GETPATH, uintptr(unsafe.Pointer(out)))
+	cosmoLibcCall6(fseventFns.close, fd, 0, 0, 0, 0, 0)
 	return int32(failed) == 0
 }
