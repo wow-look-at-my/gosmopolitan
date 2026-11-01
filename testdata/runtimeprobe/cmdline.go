@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 )
@@ -51,6 +52,16 @@ func checkCmdline() {
 	}
 	if !slices.Equal(got, os.Args) {
 		fail("cmdline", "the host shows argv %q, os.Args is %q", got, os.Args)
+		return
+	}
+	// htop shows argv[0] as the program. It must name this file, not a loader.
+	exe, err := os.Executable()
+	if err != nil {
+		fail("cmdline", "os.Executable(): %v", err)
+		return
+	}
+	if filepath.Base(got[0]) != filepath.Base(exe) {
+		fail("cmdline", "the host shows argv[0] %q, the program is %q", got[0], exe)
 		return
 	}
 	ok("cmdline", fmt.Sprintf("%q", got[0]))
