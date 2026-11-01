@@ -62,17 +62,64 @@ func inotifyFdSyscall(trap, a1, a2, a3 uintptr) (r1, r2 uintptr, err Errno) {
 	return epollResult(0, inotifyUnreadTo(int(a1), (*int32)(unsafe.Pointer(a3))))
 }
 
+// inotifyDupTrap reports whether a syscall duplicates a live instance.
+//
+//go:nosplit
+func inotifyDupTrap(trap, a1, a2 uintptr) bool {
+	if trap == SYS_FCNTL {
+		return (a2 == F_DUPFD || a2 == F_DUPFD_CLOEXEC) && inotifyFd(a1)
+	}
+	return (trap == SYS_DUP || trap == SYS_DUP3 || trap == inotifyDup2Trap) && inotifyFd(a1)
+}
+
+// inotifyDup makes a duplicate of an instance's descriptor name the instance as
+// well, so that it reads whole records and takes watches.
+func inotifyDup(trap, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2 uintptr, err Errno) {
+	named := trap == SYS_DUP3 || trap == inotifyDup2Trap
+	if named && a1 == a2 {
+		return RawSyscall6(trap, a1, a2, a3, a4, a5, a6)
+	}
+	if named {
+		inotifyForget(int(a2))
+	}
+	r1, r2, err = RawSyscall6(trap, a1, a2, a3, a4, a5, a6)
+	if err != 0 {
+		return r1, r2, err
+	}
+	fd := int(r1)
+	if named {
+		fd = int(a2)
+	}
+	inotifies.Lock()
+	if ino := inotifies.m[int(a1)]; ino != nil {
+		inotifies.m[fd] = ino
+		inotifyPublish()
+	}
+	inotifies.Unlock()
+	return r1, r2, 0
+}
+
 // inotifyForget stops fd meaning an instance, before the descriptor number can
-// be used again. The instance goes away once its goroutines see the close.
+// be used again. The instance goes away once its goroutines see the close of
+// its last descriptor.
 func inotifyForget(fd int) {
 	inotifies.Lock()
 	ino := inotifies.m[fd]
 	delete(inotifies.m, fd)
+	next := -1
+	for other, same := range inotifies.m {
+		if same == ino {
+			next = other
+			break
+		}
+	}
 	inotifyPublish()
 	inotifies.Unlock()
 	if ino != nil {
 		ino.mu.Lock()
-		ino.fd = -1
+		if ino.fd == fd {
+			ino.fd = next
+		}
 		ino.mu.Unlock()
 	}
 }

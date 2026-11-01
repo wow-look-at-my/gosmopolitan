@@ -31,7 +31,13 @@ func inotifyContract() error {
 		{"symlink", inotifySymlinkNoFollow},
 		{"read sizes", inotifyReadSizes},
 		{"descriptors", inotifyDescriptors},
+		{"truncates through a held descriptor", inotifyHeldTruncates},
+		{"truncate by path past a held writer", inotifyTruncatePastWriter},
+		{"truncate by path past a held reader", inotifyTruncatePastReader},
+		{"write through a descriptor older than the watch", inotifyWriteBeforeWatch},
+		{"duplicated instance", inotifyDuplicate},
 	}
+	var failures []error
 	for _, check := range checks {
 		dir, err := os.MkdirTemp("", "rp-inotify")
 		if err != nil {
@@ -40,10 +46,10 @@ func inotifyContract() error {
 		err = check.run(dir)
 		os.RemoveAll(dir)
 		if err != nil {
-			return fmt.Errorf("%s: %v", check.name, err)
+			failures = append(failures, fmt.Errorf("%s: %v", check.name, err))
 		}
 	}
-	return nil
+	return errors.Join(failures...)
 }
 
 func inotifyOpen() (*inotifyReader, error) {

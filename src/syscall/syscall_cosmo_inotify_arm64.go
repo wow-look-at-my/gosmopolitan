@@ -11,6 +11,9 @@ package syscall
 
 const darwinSysInotifyInit = ^uintptr(2)
 
+// inotifyDup2Trap is dup2's number, which the arm64 table does not have either.
+const inotifyDup2Trap = ^uintptr(3)
+
 func InotifyInit() (fd int, err error) {
 	return InotifyInit1(0)
 }

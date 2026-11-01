@@ -59,6 +59,9 @@ func Syscall(trap, a1, a2, a3 uintptr) (r1, r2 uintptr, err Errno) {
 	if inotifyTrap(trap) {
 		return inotifySyscall(trap, a1, a2, a3)
 	}
+	if inotifyDupTrap(trap, a1, a2) {
+		return inotifyDup(trap, a1, a2, a3, 0, 0, 0)
+	}
 	if inotifyFdTrap(trap, a1, a2) {
 		if trap != SYS_CLOSE {
 			return inotifyFdSyscall(trap, a1, a2, a3)
@@ -89,6 +92,9 @@ func Syscall(trap, a1, a2, a3 uintptr) (r1, r2 uintptr, err Errno) {
 func Syscall6(trap, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2 uintptr, err Errno) {
 	if inotifyTrap(trap) {
 		return inotifySyscall(trap, a1, a2, a3)
+	}
+	if inotifyDupTrap(trap, a1, a2) {
+		return inotifyDup(trap, a1, a2, a3, a4, a5, a6)
 	}
 	if inotifyFdTrap(trap, a1, a2) {
 		if trap != SYS_CLOSE {

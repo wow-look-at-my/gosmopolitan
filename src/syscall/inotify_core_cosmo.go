@@ -559,14 +559,15 @@ func (ino *inotifyInstance) monitor() {
 	inotifyHangup(ino.writeFd)
 
 	ino.mu.Lock()
-	fd := ino.fd
 	ino.fd = -1
 	ino.mu.Unlock()
 	inotifies.Lock()
-	if inotifies.m[fd] == ino {
-		delete(inotifies.m, fd)
-		inotifyPublish()
+	for fd, same := range inotifies.m {
+		if same == ino {
+			delete(inotifies.m, fd)
+		}
 	}
+	inotifyPublish()
 	inotifies.Unlock()
 
 	ino.mu.Lock()

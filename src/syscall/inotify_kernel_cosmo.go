@@ -16,11 +16,14 @@ import (
 )
 
 const (
-	kernelOPath    = 0x200000
-	kernelPollIn   = 0x1
-	kernelHandle   = IN_OPEN | IN_CLOSE_WRITE | IN_CLOSE_NOWRITE
-	kernelMask     = kernelHandle | IN_CREATE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO | IN_MODIFY | IN_ATTRIB | IN_DELETE_SELF | IN_ONLYDIR
-	kernelBufBytes = 65536
+	kernelOPath      = 0x200000
+	kernelPollIn     = 0x1
+	kernelMask       = IN_CLOSE_WRITE | IN_CREATE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO | IN_MODIFY | IN_ATTRIB | IN_DELETE_SELF | IN_ONLYDIR
+	kernelBufBytes   = 65536
+	kernelBlockBytes = 4096
+	kernelSeekData   = 3
+	kernelSetLease   = 1024
+	kernelProbeFlags = O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC
 )
 
 type kernelPollFd struct {
@@ -39,7 +42,7 @@ type kernelSource struct {
 	ino   *inotifyInstance
 	fd    int
 	wds   map[int32]*inotifyDir
-	opens map[kernelName]int
+	sizes map[kernelName]int64 // the size last seen of a name with a write not yet reported
 }
 
 func kernelNewSource(ino *inotifyInstance) (inotifySource, Errno) {
@@ -47,7 +50,7 @@ func kernelNewSource(ino *inotifyInstance) (inotifySource, Errno) {
 	if errno != 0 {
 		return nil, Errno(errno)
 	}
-	return &kernelSource{ino: ino, fd: int(fd), wds: map[int32]*inotifyDir{}, opens: map[kernelName]int{}}, 0
+	return &kernelSource{ino: ino, fd: int(fd), wds: map[int32]*inotifyDir{}, sizes: map[kernelName]int64{}}, 0
 }
 
 // canonical asks the kernel where the file an O_PATH descriptor refers to is.
@@ -152,19 +155,20 @@ func (source *kernelSource) record(wd int32, mask uint32, name string) {
 	switch {
 	case mask&(IN_DELETE_SELF|IN_UNMOUNT|IN_IGNORED) != 0:
 		ino.lost(dir)
-	case mask&kernelHandle != 0:
-		source.handle(dir, mask, name)
 	case name == "":
 		ino.selfChanged(dir)
 	case mask&(IN_CREATE|IN_MOVED_TO) != 0:
-		delete(source.opens, kernelName{dir, name})
+		delete(source.sizes, kernelName{dir, name})
 		ino.added(dir, name)
 	case mask&IN_DELETE != 0:
-		delete(source.opens, kernelName{dir, name})
+		delete(source.sizes, kernelName{dir, name})
 		ino.removed(dir, name, false)
 	case mask&IN_MOVED_FROM != 0:
-		delete(source.opens, kernelName{dir, name})
+		delete(source.sizes, kernelName{dir, name})
 		ino.removed(dir, name, true)
+	case mask&IN_CLOSE_WRITE != 0:
+		delete(source.sizes, kernelName{dir, name})
+		ino.modifiedName(dir, name)
 	case mask&IN_MODIFY != 0:
 		source.modified(dir, name)
 	case mask&IN_ATTRIB != 0:
@@ -172,38 +176,79 @@ func (source *kernelSource) record(wd int32, mask uint32, name string) {
 	}
 }
 
-// handle follows the descriptors open on a name. A closing descriptor is what
-// reports a write.
-func (source *kernelSource) handle(dir *inotifyDir, mask uint32, name string) {
-	if name == "" || mask&IN_ISDIR != 0 {
-		return
-	}
-	key := kernelName{dir, name}
-	if mask&IN_OPEN != 0 {
-		source.opens[key]++
-		return
-	}
-	if source.opens[key] > 1 {
-		source.opens[key]--
-	} else {
-		delete(source.opens, key)
-	}
-	source.ino.modifiedName(dir, name)
-}
-
 // modified handles IN_MODIFY, which means a write or a truncate. macOS and NT
-// report a write when its descriptor closes and a truncate when it happens.
+// report a write when its descriptor closes and a truncate when it happens. A
+// write always has a descriptor to close, which IN_CLOSE_WRITE reports.
 func (source *kernelSource) modified(dir *inotifyDir, name string) {
-	if source.opens[kernelName{dir, name}] == 0 || source.shrank(dir, name) {
+	path := dir.join(name)
+	if source.truncated(dir, name, path) || !kernelWriterOpen(path) {
+		delete(source.sizes, kernelName{dir, name})
 		source.ino.modifiedName(dir, name)
 	}
 }
 
-func (source *kernelSource) shrank(dir *inotifyDir, name string) bool {
-	entry := dir.children[name]
-	if watch := dir.selves[name]; entry == nil && watch != nil {
-		entry = &watch.entry
+// truncated reports whether a change can only be a truncate: the file shrank,
+// or it grew by nothing a write leaves behind.
+func (source *kernelSource) truncated(dir *inotifyDir, name, path string) bool {
+	fresh := inotifyStat(path)
+	if fresh == nil {
+		return false
 	}
-	fresh := inotifyStat(dir.join(name))
-	return entry != nil && fresh != nil && fresh.size < entry.size
+	key := kernelName{dir, name}
+	last, seen := source.sizes[key]
+	if !seen {
+		entry := dir.children[name]
+		if watch := dir.selves[name]; entry == nil && watch != nil {
+			entry = &watch.entry
+		}
+		if entry == nil {
+			return false
+		}
+		last = entry.size
+	}
+	source.sizes[key] = fresh.size
+	return fresh.size < last || fresh.size > last && kernelNoDataPast(path, last, fresh.size)
+}
+
+// kernelNoDataPast reports whether a file holds zeros from an offset to the end
+// of that block, and a hole after it up to its end.
+func kernelNoDataPast(path string, from, end int64) bool {
+	fd, err := Open(path, kernelProbeFlags, 0)
+	if err != nil {
+		return false
+	}
+	defer Close(fd)
+	boundary := (from + kernelBlockBytes) &^ (kernelBlockBytes - 1)
+	if boundary >= end {
+		boundary = end
+	} else if _, err := Seek(fd, boundary, kernelSeekData); err != ENXIO {
+		return false
+	}
+	buf := make([]byte, boundary-from)
+	count, err := pread(fd, buf, from)
+	if err != nil || count != len(buf) {
+		return false
+	}
+	for _, value := range buf {
+		if value != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// kernelWriterOpen reports whether a descriptor may have a file open for
+// writing. The kernel refuses a read lease while one does. It refuses anyone
+// but the file's owner too, and what they change waits for IN_CLOSE_WRITE.
+func kernelWriterOpen(path string) bool {
+	fd, err := Open(path, kernelProbeFlags, 0)
+	if err != nil {
+		return true
+	}
+	defer Close(fd)
+	if _, _, errno := cosmo.Syscall6(SYS_FCNTL, uintptr(fd), kernelSetLease, F_RDLCK, 0, 0, 0); errno != 0 {
+		return true
+	}
+	cosmo.Syscall6(SYS_FCNTL, uintptr(fd), kernelSetLease, F_UNLCK, 0, 0, 0)
+	return false
 }
