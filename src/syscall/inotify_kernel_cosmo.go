@@ -18,7 +18,8 @@ import (
 const (
 	kernelOPath    = 0x200000
 	kernelPollIn   = 0x1
-	kernelMask     = IN_CREATE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO | IN_MODIFY | IN_ATTRIB | IN_DELETE_SELF | IN_ONLYDIR
+	kernelHandle   = IN_OPEN | IN_CLOSE_WRITE | IN_CLOSE_NOWRITE
+	kernelMask     = kernelHandle | IN_CREATE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO | IN_MODIFY | IN_ATTRIB | IN_DELETE_SELF | IN_ONLYDIR
 	kernelBufBytes = 65536
 )
 
@@ -28,10 +29,17 @@ type kernelPollFd struct {
 	revents int16
 }
 
+// A kernelName is a name in a directory.
+type kernelName struct {
+	dir  *inotifyDir
+	name string
+}
+
 type kernelSource struct {
-	ino *inotifyInstance
-	fd  int
-	wds map[int32]*inotifyDir
+	ino   *inotifyInstance
+	fd    int
+	wds   map[int32]*inotifyDir
+	opens map[kernelName]int
 }
 
 func kernelNewSource(ino *inotifyInstance) (inotifySource, Errno) {
@@ -39,7 +47,7 @@ func kernelNewSource(ino *inotifyInstance) (inotifySource, Errno) {
 	if errno != 0 {
 		return nil, Errno(errno)
 	}
-	return &kernelSource{ino: ino, fd: int(fd), wds: map[int32]*inotifyDir{}}, 0
+	return &kernelSource{ino: ino, fd: int(fd), wds: map[int32]*inotifyDir{}, opens: map[kernelName]int{}}, 0
 }
 
 // canonical asks the kernel where the file an O_PATH descriptor refers to is.
@@ -144,15 +152,58 @@ func (source *kernelSource) record(wd int32, mask uint32, name string) {
 	switch {
 	case mask&(IN_DELETE_SELF|IN_UNMOUNT|IN_IGNORED) != 0:
 		ino.lost(dir)
+	case mask&kernelHandle != 0:
+		source.handle(dir, mask, name)
 	case name == "":
 		ino.selfChanged(dir)
 	case mask&(IN_CREATE|IN_MOVED_TO) != 0:
+		delete(source.opens, kernelName{dir, name})
 		ino.added(dir, name)
 	case mask&IN_DELETE != 0:
+		delete(source.opens, kernelName{dir, name})
 		ino.removed(dir, name, false)
 	case mask&IN_MOVED_FROM != 0:
+		delete(source.opens, kernelName{dir, name})
 		ino.removed(dir, name, true)
-	case mask&(IN_MODIFY|IN_ATTRIB) != 0:
+	case mask&IN_MODIFY != 0:
+		source.modified(dir, name)
+	case mask&IN_ATTRIB != 0:
 		ino.modifiedName(dir, name)
 	}
+}
+
+// handle follows the descriptors open on a name. A closing descriptor is what
+// reports a write.
+func (source *kernelSource) handle(dir *inotifyDir, mask uint32, name string) {
+	if name == "" || mask&IN_ISDIR != 0 {
+		return
+	}
+	key := kernelName{dir, name}
+	if mask&IN_OPEN != 0 {
+		source.opens[key]++
+		return
+	}
+	if source.opens[key] > 1 {
+		source.opens[key]--
+	} else {
+		delete(source.opens, key)
+	}
+	source.ino.modifiedName(dir, name)
+}
+
+// modified handles IN_MODIFY, which means a write or a truncate. macOS and NT
+// report a write when its descriptor closes and a truncate when it happens.
+func (source *kernelSource) modified(dir *inotifyDir, name string) {
+	if source.opens[kernelName{dir, name}] == 0 || source.shrank(dir, name) {
+		source.ino.modifiedName(dir, name)
+	}
+}
+
+func (source *kernelSource) shrank(dir *inotifyDir, name string) bool {
+	entry := dir.children[name]
+	if watch := dir.selves[name]; entry == nil && watch != nil {
+		entry = &watch.entry
+	}
+	fresh := inotifyStat(dir.join(name))
+	return entry != nil && fresh != nil && fresh.size < entry.size
 }

@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -171,13 +170,183 @@ func TestInotifyCreateAndWrite(t *testing.T) {
 	if _, err := file.WriteString("hello"); err != nil {
 		t.Fatal(err)
 	}
-	// NTFS reports a write once the handle writing it closes.
-	if runtime.GOOS == "windows" {
-		file.Close()
+	if events := ino.settle(); len(events) != 0 {
+		t.Errorf("a write on an open descriptor reported %+v", events)
 	}
-	ino.await(syscall.IN_MODIFY, "created")
 	file.Close()
+	ino.await(syscall.IN_MODIFY, "created")
 	ino.await(syscall.IN_CLOSE_WRITE, "created")
+}
+
+// TestInotifyTruncate has no descriptor to wait for, in either direction.
+func TestInotifyTruncate(t *testing.T) {
+	ino := newInotify(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "file")
+	writeFile(t, path, "text")
+	ino.add(dir, syscall.IN_MODIFY)
+
+	if err := os.Truncate(path, 2); err != nil {
+		t.Fatal(err)
+	}
+	ino.await(syscall.IN_MODIFY, "file")
+	if err := os.Truncate(path, 8); err != nil {
+		t.Fatal(err)
+	}
+	ino.await(syscall.IN_MODIFY, "file")
+}
+
+// TestInotifyNeverFires reads, opens and closes what the mask asks about.
+func TestInotifyNeverFires(t *testing.T) {
+	ino := newInotify(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "file")
+	writeFile(t, path, "text")
+	ino.add(dir, syscall.IN_ACCESS|syscall.IN_OPEN|syscall.IN_CLOSE_NOWRITE)
+	ino.add(path, syscall.IN_ACCESS|syscall.IN_OPEN|syscall.IN_CLOSE_NOWRITE)
+
+	if _, err := os.ReadFile(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.ReadDir(dir); err != nil {
+		t.Fatal(err)
+	}
+	if events := ino.settle(); len(events) != 0 {
+		t.Errorf("reading reported %+v", events)
+	}
+}
+
+// TestInotifyMovedInIsCreate brings a file from an unwatched directory.
+func TestInotifyMovedInIsCreate(t *testing.T) {
+	ino := newInotify(t)
+	dir := t.TempDir()
+	elsewhere := filepath.Join(t.TempDir(), "file")
+	writeFile(t, elsewhere, "text")
+	ino.add(dir, syscall.IN_CREATE|syscall.IN_MODIFY|syscall.IN_CLOSE_WRITE|syscall.IN_MOVE)
+
+	if err := os.Rename(elsewhere, filepath.Join(dir, "file")); err != nil {
+		t.Fatal(err)
+	}
+	ino.await(syscall.IN_CREATE, "file")
+	ino.await(syscall.IN_MODIFY, "file")
+	ino.await(syscall.IN_CLOSE_WRITE, "file")
+	if events := ino.settle(); len(events) != 0 {
+		t.Errorf("after the arrival, saw %+v", events)
+	}
+}
+
+// TestInotifyMovedOutIsDelete sends a file to an unwatched directory.
+func TestInotifyMovedOutIsDelete(t *testing.T) {
+	ino := newInotify(t)
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "file"), "text")
+	ino.add(dir, syscall.IN_DELETE|syscall.IN_MOVE)
+
+	if err := os.Rename(filepath.Join(dir, "file"), filepath.Join(t.TempDir(), "file")); err != nil {
+		t.Fatal(err)
+	}
+	ino.await(syscall.IN_DELETE, "file")
+	if events := ino.settle(); len(events) != 0 {
+		t.Errorf("after the departure, saw %+v", events)
+	}
+}
+
+// TestInotifyShortLivedName creates and deletes faster than a host looks.
+func TestInotifyShortLivedName(t *testing.T) {
+	ino := newInotify(t)
+	dir := t.TempDir()
+	ino.add(dir, syscall.IN_CREATE|syscall.IN_DELETE)
+	path := filepath.Join(dir, "brief")
+	for range 20 {
+		writeFile(t, path, "")
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+		ino.await(syscall.IN_CREATE, "brief")
+		ino.await(syscall.IN_DELETE, "brief")
+	}
+}
+
+// TestInotifySymlinkNoFollow watches a link, not what it names.
+func TestInotifySymlinkNoFollow(t *testing.T) {
+	ino := newInotify(t)
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target")
+	link := filepath.Join(dir, "link")
+	writeFile(t, target, "text")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	wd := ino.add(link, syscall.IN_MODIFY|syscall.IN_DELETE_SELF|syscall.IN_DONT_FOLLOW)
+
+	writeFile(t, target, "changed")
+	if events := ino.settle(); len(events) != 0 {
+		t.Errorf("a write through the link's target reported %+v", events)
+	}
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	ino.await(syscall.IN_DELETE_SELF, "")
+	if event := ino.await(syscall.IN_IGNORED, ""); event.wd != int32(wd) {
+		t.Errorf("IN_IGNORED carried wd %d, want %d", event.wd, wd)
+	}
+}
+
+// TestInotifyReadSizes checks that a read returns whole records, and refuses a
+// buffer the next one does not fit.
+func TestInotifyReadSizes(t *testing.T) {
+	ino := newInotify(t)
+	dir := t.TempDir()
+	ino.add(dir, syscall.IN_CREATE)
+	writeFile(t, filepath.Join(dir, "first"), "")
+	writeFile(t, filepath.Join(dir, "second"), "")
+	time.Sleep(200 * time.Millisecond)
+
+	var small [syscall.SizeofInotifyEvent]byte
+	if _, err := syscall.Read(ino.fd, small[:]); err != syscall.EINVAL {
+		t.Fatalf("a read too small for a record = %v, want EINVAL", err)
+	}
+	buf := make([]byte, syscall.SizeofInotifyEvent+16)
+	count, err := syscall.Read(ino.fd, buf)
+	if err != nil {
+		t.Fatalf("a read that fits one record: %v", err)
+	}
+	if events := decodeInotify(buf[:count]); len(events) != 1 || events[0].name != "first" {
+		t.Errorf("a read that fits one record returned %+v", events)
+	}
+	count, err = syscall.Read(ino.fd, buf)
+	if err != nil {
+		t.Fatalf("the read after that: %v", err)
+	}
+	if events := decodeInotify(buf[:count]); len(events) != 1 || events[0].name != "second" {
+		t.Errorf("the read after that returned %+v", events)
+	}
+}
+
+// TestInotifyDescriptorsPerChild checks that a directory's children cost no
+// descriptors, which is what kept a large tree under its descriptor limit.
+func TestInotifyDescriptorsPerChild(t *testing.T) {
+	ino := newInotify(t)
+	dir := t.TempDir()
+	const children = 256
+	for idx := range children {
+		writeFile(t, filepath.Join(dir, fmt.Sprintf("child-%03d", idx)), "")
+	}
+	before := lowestFreeFd(t, dir)
+	ino.add(dir, syscall.IN_ALL_EVENTS)
+	if after := lowestFreeFd(t, dir); after-before >= children/2 {
+		t.Errorf("a watch took the lowest free descriptor from %d to %d", before, after)
+	}
+}
+
+func lowestFreeFd(t *testing.T, path string) int {
+	t.Helper()
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	syscall.Close(fd)
+	return fd
 }
 
 func TestInotifyExistingChildWrite(t *testing.T) {
@@ -463,7 +632,7 @@ func TestInotifyThroughRawSyscall(t *testing.T) {
 }
 
 // TestInotifyManyChildren has more children than one read of the directory
-// returns, and more than one kevent batch.
+// returns.
 func TestInotifyManyChildren(t *testing.T) {
 	ino := newInotify(t)
 	dir := t.TempDir()
@@ -518,9 +687,6 @@ func TestInotifyBacklog(t *testing.T) {
 // TestInotifyCloseReleasesInstance checks that the goroutine and its
 // descriptors go away when the caller closes the instance.
 func TestInotifyCloseReleasesInstance(t *testing.T) {
-	if runtime.GOOS == "linux" {
-		return
-	}
 	awaitInotifyLive(t, 0)
 	dir := t.TempDir()
 	fd, err := syscall.InotifyInit1(syscall.IN_CLOEXEC)
