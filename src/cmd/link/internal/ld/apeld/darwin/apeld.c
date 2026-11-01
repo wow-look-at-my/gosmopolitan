@@ -16,12 +16,15 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <libkern/OSCacheControl.h>
+#include <limits.h>
 #include <mach/mach.h>
 #include <mach/vm_region.h>
 #include <pthread.h>
 #include <semaphore.h>
 #include <signal.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/random.h>
@@ -36,6 +39,7 @@
 extern kern_return_t mach_vm_region(vm_map_t, mach_vm_address_t *, mach_vm_size_t *,
                                     vm_region_flavor_t, vm_region_info_t,
                                     mach_msg_type_number_t *, mach_port_t *);
+extern int _NSGetExecutablePath(char *, uint32_t *);
 
 #define PAGESZ 16384
 #define PAYLOAD_ALIGN 0x10000
@@ -308,8 +312,61 @@ __attribute__((noreturn)) static void enter(long *sp, const char *path, uint64_t
 	__builtin_unreachable();
 }
 
+// XNU names a process after the last component of the path given to exec, and
+// offers no call to change it later. The payload runs inside this process, so
+// the name has to be right before it loads. This execs the loader again through
+// a symlink called PROG.com. That loader is in a directory of its own so that
+// concurrent runs of one program cannot collide, and -n removes both on
+// arrival. A host with nowhere to write still runs the program, so every
+// failure here returns and the process keeps the loader's name.
+static void take_name(int argc, char **argv, char **envp, const char *self, int drop) {
+	const char *slash = strrchr(argv[1], '/');
+	const char *name = slash ? slash + 1 : argv[1];
+	const char *own = strrchr(self, '/');
+	own = own ? own + 1 : self;
+	if (!*name || !strcmp(name, own)) return;
+
+	char exe[PATH_MAX], target[PATH_MAX], dir[PATH_MAX], alias[PATH_MAX];
+	uint32_t size = sizeof exe;
+	if (_NSGetExecutablePath(exe, &size) || !realpath(exe, target)) return;
+	const char *tmp = getenv("TMPDIR");
+	if (!tmp) tmp = "/tmp";
+	if (snprintf(dir, sizeof dir, "%s/apeld.XXXXXX", tmp) >= (int)sizeof dir) return;
+	if (!mkdtemp(dir)) return;
+	if (snprintf(alias, sizeof alias, "%s/%s", dir, name) < (int)sizeof alias && !symlink(target, alias)) {
+		char **av = __builtin_alloca((argc + 3) * sizeof *av);
+		int n = 0;
+		av[n++] = alias;
+		av[n++] = "-n";
+		if (drop) av[n++] = "-u";
+		for (int i = 1; i < argc; i++) av[n++] = argv[i];
+		av[n] = 0;
+		execve(alias, av, envp);
+		unlink(alias);
+	}
+	rmdir(dir);
+}
+
 int main(int argc, char **argv, char **envp) {
 	if (argc < 2) die("usage: apeld [-u] PROG.com [args...]");
+
+	// -n marks a run that came through take_name's symlink. The symlink and
+	// its directory go first, and the loader's real path survives for -u.
+	char target[PATH_MAX];
+	const char *self = argv[0];
+	int named = argc > 2 && argv[1][0] == '-' && argv[1][1] == 'n' && argv[1][2] == 0;
+	if (named) {
+		if (!realpath(argv[0], target)) die("cannot resolve the loader's path");
+		unlink(argv[0]);
+		// ps and pkill read argv[0] from this memory, so the slash goes back.
+		char *slash = strrchr(argv[0], '/');
+		*slash = 0;
+		rmdir(argv[0]);
+		*slash = '/';
+		self = target;
+		argv++;
+		argc--;
+	}
 
 	// -u removes this loader's own file before anything else. A caller that
 	// unpacked a throwaway copy passes it, so an APE leaves no second file on
@@ -321,11 +378,13 @@ int main(int argc, char **argv, char **envp) {
 	// what keeps the disk as it was. A caller cannot instead unlink the file
 	// and exec it through /dev/fd: XNU answers that with EACCES, where linux
 	// allows it.
-	if (argc > 2 && argv[1][0] == '-' && argv[1][1] == 'u' && argv[1][2] == 0) {
-		unlink(argv[0]);
+	int drop = argc > 2 && argv[1][0] == '-' && argv[1][1] == 'u' && argv[1][2] == 0;
+	if (drop) {
 		argv++;
 		argc--;
 	}
+	if (!named) take_name(argc, argv, envp, self, drop);
+	if (drop) unlink(self);
 	const char *path = argv[1];
 	int fd = open(path, O_RDONLY | O_CLOEXEC);
 	if (fd < 0) die("cannot open program");
