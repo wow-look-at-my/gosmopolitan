@@ -254,17 +254,17 @@ func (source *fseventSource) event(path string, flags uint32) {
 // name decides what an event about a name in a directory means.
 func (source *fseventSource) name(dir *inotifyDir, name string, flags uint32) {
 	ino := source.ino
-	known := dir.children[name]
+	known, watch := dir.children[name], dir.selves[name]
 	fresh := inotifyStat(dir.join(name))
 	switch {
-	case fresh == nil && (known != nil || dir.selves[name] != nil):
+	case fresh == nil && (known != nil || watch != nil):
 		ino.removed(dir, name, flags&fseventRenamed != 0)
 	case fresh == nil:
 		source.vanished(dir, name, flags)
-	case known == nil || known.id != fresh.id:
-		ino.added(dir, name)
-	default:
+	case known != nil && known.id == fresh.id, known == nil && watch != nil && watch.entry.id == fresh.id:
 		ino.modifiedName(dir, name)
+	default:
+		ino.added(dir, name)
 	}
 }
 
