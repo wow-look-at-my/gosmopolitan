@@ -54,9 +54,14 @@ func TestTUIProcessListsShowTheProgram(t *testing.T) {
 		t.Run(tool, func(t *testing.T) {
 			path, err := exec.LookPath(tool)
 			require.NoError(t, err, "APETEST_TUI_TOOLS names %s, which is not installed", tool)
+			// btop refuses to start without a UTF-8 locale.
+			utf8 := "C.UTF-8"
+			if runtime.GOOS == "darwin" {
+				utf8 = "en_US.UTF-8"
+			}
 			run := map[string]string{
 				"htop": path + " -p " + pid,
-				"btop": "env LANG=C.UTF-8 " + path + " --utf-force",
+				"btop": "env LANG=" + utf8 + " LC_ALL=" + utf8 + " " + path,
 			}[tool]
 			require.NotEmpty(t, run, "no way to run %s", tool)
 			screen := captureScreen(t, run)
