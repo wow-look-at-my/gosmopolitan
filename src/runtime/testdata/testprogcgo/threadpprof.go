@@ -114,7 +114,12 @@ func pprofThread() {
 		C.runCPUHogThread()
 	})
 
-	time.Sleep(1 * time.Second)
+	// The window is wall clock, but the sampler counts the process's CPU time:
+	// on a saturated runner the C thread this test is about can get no CPU
+	// inside one second, which leaves only the labelled samples above and reads
+	// as a missing traceback. The longer window keeps both traceback checks as
+	// they are and gives a loaded machine the CPU time they need.
+	time.Sleep(5 * time.Second)
 
 	pprof.StopCPUProfile()
 
