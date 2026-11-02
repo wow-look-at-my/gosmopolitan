@@ -507,6 +507,8 @@ func ntResolve() {
 	ntGetThreadTimesFn = k32sym(&ntNameGetThreadTimes[0])
 	ntGetProcessMemInfoFn = k32sym(&ntNameGetProcessMemInfo[0])
 
+	ntResolveWatch(k32sym)
+
 	// Chunk D: signals/VEH/preemption (all kernel32.
 	ntAddVectoredExceptionHandlerFn = k32sym(&ntNameAddVEH[0])
 	ntAddVectoredContinueHandlerFn = k32sym(&ntNameAddVCH[0])

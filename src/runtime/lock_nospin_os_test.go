@@ -31,6 +31,8 @@ func TestOSWaitsNeverSpin(t *testing.T) {
 		{"os_cosmo.go", []string{
 			"futexsleep", "xnuFutexsleep", "futexwakeup", "xnuFutexwakeup",
 			"osPreemptExtEnter", "threadStartWait",
+		}},
+		{"os_cosmo_perthread.go", []string{
 			"syscall_runtime_doAllThreadsSyscall", "runPerThreadSyscall",
 		}},
 		{"os_linux.go", []string{

@@ -40,6 +40,8 @@ type InotifyQueueForTest = inotifyQueue
 
 const InotifyQueueMaxForTest = inotifyQueueMax
 
+var KernelLeaseWaitsForTest = kernelLeaseWaits
+
 func (queue *inotifyQueue) PushForTest(wd int32, mask, cookie uint32, name string) {
 	queue.push(wd, mask, cookie, name)
 }
@@ -48,11 +50,20 @@ func (queue *inotifyQueue) RecordsForTest() [][]byte {
 	return queue.records
 }
 
-// InotifyLiveForTest counts the instances whose goroutine is still running.
+// InotifyLiveForTest counts the instances that have not let go of everything.
 func InotifyLiveForTest() int {
+	return int(inotifyLive.Load())
+}
+
+// InotifyDoneForTest returns what closes when an instance has let go of
+// everything, or nil for any other descriptor.
+func InotifyDoneForTest(fd int) <-chan struct{} {
 	inotifies.Lock()
 	defer inotifies.Unlock()
-	return len(inotifies.m)
+	if ino := inotifies.m[fd]; ino != nil {
+		return ino.done
+	}
+	return nil
 }
 
 const (

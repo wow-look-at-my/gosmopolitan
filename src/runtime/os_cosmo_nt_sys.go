@@ -27,8 +27,18 @@ import (
 // osArchInit on NT hosts, before any user code runs.
 func ntSetSyscallFns() {
 	cosmo.SetWindowsFns(&cosmo.WindowsFns{
-		Emulate: ntSyscallEmulate,
-		Spawn:   ntSpawn,
+		Emulate:      ntSyscallEmulate,
+		Spawn:        ntSpawn,
+		FinalPath:    ntFinalPath,
+		SocketUnread: ntSocketUnread,
+		SocketPair:   ntWatchPair,
+		WatchPort:    ntWatchPort,
+		WatchOpen:    ntWatchOpen,
+		WatchRead:    ntWatchRead,
+		WatchWait:    ntWatchWait,
+		WatchWake:    ntWatchWake,
+		WatchCancel:  ntWatchCancel,
+		WatchClose:   ntWatchClose,
 	})
 }
 
@@ -473,7 +483,7 @@ func ntSyscallEmulate(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uintpt
 	case ntSysRecvmsg:
 		return ntEmuRecvmsg(int32(a1), (*ntLinuxMsghdr)(unsafe.Pointer(a2)), int32(a3))
 	case ntSysSocketpair:
-		return ntEmuSocketpair(int32(a1), int32(a2), int32(a3), (*[2]int32)(unsafe.Pointer(a4)))
+		return ntEmuSocketpair(int32(a1), int32(a2), int32(a3), (*[2]int32)(unsafe.Pointer(a4)), 0)
 	case ntSysDup:
 		return ntEmuDup(int32(a1))
 	case ntSysDup2:
