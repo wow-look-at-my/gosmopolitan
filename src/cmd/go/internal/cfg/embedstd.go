@@ -1,6 +1,8 @@
 // Copyright The Go Authors. All rights reserved. Use of this source code is
 // governed by a BSD-style license that can be found in the LICENSE file.
 
+// EmbeddedStd reports that this go command builds against the standard library embedded in its own binary: there is no GOROOT tree.
+
 package cfg
 
 import (

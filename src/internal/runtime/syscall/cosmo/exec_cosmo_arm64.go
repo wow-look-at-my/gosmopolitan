@@ -3,6 +3,8 @@
 
 //go:build cosmo && arm64
 
+// Darwin (macOS ARM64) process syscall emulation: what os/exec needs beyond fork.
+
 package cosmo
 
 import "unsafe"

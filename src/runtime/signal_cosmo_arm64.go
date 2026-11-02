@@ -3,6 +3,8 @@
 
 //go:build cosmo && arm64
 
+// sigctxt is HOST-AWARE: one cosmo binary runs on Linux and macOS.
+
 package runtime
 
 import (

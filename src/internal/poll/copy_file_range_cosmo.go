@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// For best performance, call copy_file_range() with the largest len value possible.
+
 package poll
 
 import (

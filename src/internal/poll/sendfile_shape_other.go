@@ -3,6 +3,8 @@
 
 //go:build !(cosmo || linux || android)
 
+// sendfileIsLinuxShaped is false on a platform whose sendfile takes the offset as an argument.
+
 package poll
 
 // sendfileIsLinuxShaped is false on a platform whose sendfile takes the offset as an argument.

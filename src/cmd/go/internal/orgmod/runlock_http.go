@@ -3,6 +3,8 @@
 
 //go:build !cmd_go_bootstrap
 
+// An httpStore keeps the locks on a buildhost server.
+
 package orgmod
 
 import (

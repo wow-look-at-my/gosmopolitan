@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// The epoll syscalls darwinEpollTrap intercepts beyond those every architecture has.
+
 package syscall
 
 // The epoll syscalls darwinEpollTrap intercepts beyond those every

@@ -1,6 +1,8 @@
 // Copyright The Go Authors. All rights reserved. Use of this source code is
 // governed by a BSD-style license that can be found in the LICENSE file.
 
+// What this file adds to the tracer, and why each piece is needed to answer "what was this build doing".
+
 package trace
 
 import (

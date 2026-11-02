@@ -3,6 +3,8 @@
 
 //go:build unix && !cosmo
 
+// mapOffsetGrain answers what a mapping's file offset must be a multiple of.
+
 package base
 
 import "os"

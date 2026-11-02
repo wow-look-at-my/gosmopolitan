@@ -3,6 +3,8 @@
 
 //go:build cosmo && arm64
 
+// Pipe-backed, async-signal-safe implementation of the note used by sigqueue, for XNU hosts.
+
 package runtime
 
 import "unsafe"

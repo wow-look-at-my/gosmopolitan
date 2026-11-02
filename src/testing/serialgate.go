@@ -1,6 +1,8 @@
 // Copyright The Go Authors. All rights reserved. Use of this source code is
 // governed by a BSD-style license that can be found in the LICENSE file.
 
+// serialGate orders the tests that run at once against a test that asked for the process to itself.
+
 package testing
 
 import "sync"

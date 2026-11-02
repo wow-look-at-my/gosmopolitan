@@ -3,6 +3,8 @@
 
 //go:build cmd_go_bootstrap
 
+// The store speaks HTTP and the broker speaks to a socket, and go_bootstrap may not depend on net.
+
 package cache
 
 import "github.com/wow-look-at-my/go-s3-server/cacheclient/cachedisk"
