@@ -101,9 +101,19 @@ APE: no apeld-linux-amd64 on this host, and nowhere to unpack the embedded one: 
 
 Each loader moves the program's argv strings over its own, in the memory ps reads, before anything else. A second exec of the loader will give an exact copy. It costs every launch, and on darwin it costs a second load of libSystem. Linux reads back the loader's leftover bytes as nulls after the program's argv. XNU keeps the loader's argc, so one empty string follows the program's argv there. ps and htop show neither.
 
-**top, Activity Monitor and btop show the program's name.** On linux the loader sets the process name with `prctl(PR_SET_NAME)`. XNU has no such call. It names a process after the file it execs, in `p_comm` and `p_name`, and btop reads the path of that file. So on darwin the script execs the loader from a file with the program's own name. That file lives in a per-user cache, `.ape-<loader>-<tag>-<uid>`, in the first unpack directory that holds one.
+**top, Activity Monitor and btop show the program's name.** On linux the loader sets the process name with `prctl(PR_SET_NAME)`. XNU has no such call. It names a process after the file it execs, in `p_comm` and `p_name`, and btop reads the path of that file. So on darwin the script execs the loader from a file with the program's own name. That file lives in a per-user cache, `.ape-<loader>-<sha256>-<uid>`, in the first unpack directory that holds one.
 
-The first launch of a program name unpacks the loader there and moves it into place under that name. Every later launch finds it and execs it at once. That skips the unpack a darwin host without an installed loader otherwise does on each launch. The directory mode 700, and the script uses it only when this user owns it and it is no symlink. The cache stays after the program exits. macOS clears `/tmp` of files nobody used for some days.
+The key is the full SHA-256 of the loader the APE carries. A new loader gets a new entry.
+
+The first launch of a program name unpacks the loader into a per-run directory of that entry, `.<pid>`, under the program's name. The first launch execs it with `-i`. The loader hashes its own file, moves itself into the entry, and boots the program. Every later launch execs the entry at once, with no unpack and no test run.
+
+The cache is safe against another user and against corrupt bytes:
+
+- The script uses an entry only under a sticky directory, such as `/tmp`. No other user can rename it between the check and the exec.
+- The entry mode 700. The script requires that this user owns the entry and the file, and that neither is a symlink.
+- The loader hashes its own file on every start from the cache. A file that does not match its key is removed, and that run fails, so a corrupt copy never runs twice.
+
+The cache stays after the program exits. macOS clears `/tmp` of files nobody used for some days. A process of the same user can replace the file, as it can replace the APE itself.
 
 `APE_LOADER` still wins, and the script execs it where it lies. A darwin host where no unpack directory can be written execs an installed loader where it lies too. Such a process carries the loader's name.
 

@@ -193,6 +193,8 @@ func TestTheUnpackedLoaderDoesNotSurvive(t *testing.T) {
 		t.Skipf("%s boots the APE, so nothing is unpacked", p)
 	}
 	dir := t.TempDir()
+	// darwin caches the loader only under a sticky directory, as /tmp is.
+	require.NoError(t, os.Chmod(dir, 0o700|os.ModeSticky))
 	bin := copyAPE(t)
 
 	// An empty directory proves nothing on its own: a host whose kernel starts

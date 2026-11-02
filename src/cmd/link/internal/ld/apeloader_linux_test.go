@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -24,13 +25,19 @@ func TestApeDarwinBootNamesTheLoaderAfterTheProgram(t *testing.T) {
 	dir := t.TempDir()
 	// A loader with no arguments exits 127, which the boot takes as proof it runs.
 	stand := []byte("#!/bin/sh\n[ $# -eq 0 ] && exit 127\nprintf '%s|' \"$0\" \"$@\"\n")
-	l := &apeLoader{name: "apeld-darwin-arm64", blob: apeGzip(stand, "apeld-darwin-arm64"), gzip: true, tag: "0123abcd", named: true}
+	hash := strings.Repeat("ab", 32)
+	l := &apeLoader{name: "apeld-darwin-arm64", blob: apeGzip(stand, "apeld-darwin-arm64"), gzip: true, tag: "abababab", hash: hash, named: true}
 	prog := filepath.Join(dir, "myprog.com")
 	if err := os.WriteFile(prog, l.blob, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// The cache lives only under a sticky directory, where no other user can
+	// rename an entry between the check and the exec.
 	cache := filepath.Join(dir, "cache")
 	if err := os.Mkdir(cache, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(cache, 0o755|os.ModeSticky); err != nil {
 		t.Fatal(err)
 	}
 
@@ -48,27 +55,41 @@ func TestApeDarwinBootNamesTheLoaderAfterTheProgram(t *testing.T) {
 		return strings.Split(strings.TrimSuffix(string(out), "|"), "|")
 	}
 
+	// The first launch runs the unpacked copy from a per-run directory, under
+	// the program's name, with -i. The real loader then checks its hash and
+	// moves itself into the cache. The stand-in does not.
 	got := boot()
-	if want := []string{prog, "one arg", "two"}; len(got) != 4 || strings.Join(got[1:], "|") != strings.Join(want, "|") {
-		t.Fatalf("the loader ran with %q, want its path, then %q", got, want)
+	if want := []string{"-i", prog, "one arg", "two"}; len(got) != 5 || strings.Join(got[1:], "|") != strings.Join(want, "|") {
+		t.Fatalf("the first launch ran %q, want its path, then %q", got, want)
 	}
-	if filepath.Base(got[0]) != "myprog.com" {
-		t.Errorf("the loader ran from %q, want a file named after the program", got[0])
+	entry := filepath.Join(cache, ".ape-apeld-darwin-arm64-"+hash+"-"+strconv.Itoa(os.Getuid()))
+	if filepath.Base(got[0]) != "myprog.com" || filepath.Dir(filepath.Dir(got[0])) != entry {
+		t.Errorf("the first launch ran %q, want <cache>/.<pid>/myprog.com under %s", got[0], entry)
 	}
-	held, err := filepath.Glob(filepath.Join(cache, ".ape-apeld-darwin-arm64-0123abcd-*", "*"))
-	if err != nil || len(held) != 1 || held[0] != got[0] {
-		t.Errorf("the cache holds %q, want only %s", held, got[0])
-	}
-	if fi, err := os.Stat(filepath.Dir(got[0])); err != nil || fi.Mode().Perm() != 0o700 {
-		t.Errorf("the cache directory is %v (%v), want mode 0700", fi.Mode(), err)
+	if fi, err := os.Stat(entry); err != nil || fi.Mode().Perm() != 0o700 {
+		t.Errorf("the cache directory is %v (%v), want mode 0700", fi, err)
 	}
 
-	// A launch after the first reads nothing out of the APE.
+	// Once the loader is in place, a launch reads nothing out of the APE.
+	if err := os.Rename(got[0], filepath.Join(entry, "myprog.com")); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(prog, nil, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if again := boot(); strings.Join(again, "|") != strings.Join(got, "|") {
-		t.Errorf("the second launch ran %q, want the cached %q", again, got)
+	again := boot()
+	if want := []string{filepath.Join(entry, "myprog.com"), prog, "one arg", "two"}; strings.Join(again, "|") != strings.Join(want, "|") {
+		t.Errorf("the cached launch ran %q, want %q", again, want)
+	}
+
+	// A cache under a directory that is not sticky is never used.
+	if err := os.Chmod(cache, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("/bin/sh", "-c", script.String(), prog)
+	cmd.Env = append(os.Environ(), "APE_LOADER=", "APE_LOADERDIR="+cache, "PATH=/usr/bin:/bin")
+	if out, err := cmd.CombinedOutput(); err == nil || strings.Contains(string(out), "myprog.com|") {
+		t.Errorf("a cache under a directory that is not sticky ran: %v\n%s", err, out)
 	}
 }
 

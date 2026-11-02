@@ -28,6 +28,7 @@
 #include <semaphore.h>
 #include <signal.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/random.h>
@@ -329,14 +330,69 @@ static void retitle(char **argv, int argc, int skip) {
 	if (dst <= last) memset(dst, 0, last + 1 - dst);
 }
 
+extern unsigned char *CC_SHA256(const void *data, uint32_t len, unsigned char *md);
+
+// The boot script caches this loader as .ape-apeld-darwin-arm64-<sha256>-<uid>/<program>.
+// A cached copy hashes its own file. A copy whose bytes do not match that
+// name is removed, and the run fails, so a corrupt entry never runs twice.
+static void check_cached(const char *self) {
+	static const char mark[] = "/.ape-apeld-darwin-arm64-";
+	const char *want = NULL;
+	for (const char *at = strstr(self, mark); at; at = strstr(at + 1, mark)) want = at + sizeof mark - 1;
+	if (!want || strlen(want) < 66 || want[64] != '-') return;
+
+	int fd = open(self, O_RDONLY | O_CLOEXEC);
+	off_t size = fd < 0 ? -1 : lseek(fd, 0, SEEK_END);
+	void *bytes = size > 0 ? mmap(NULL, size, PROT_READ, MAP_PRIVATE, fd, 0) : MAP_FAILED;
+	if (fd >= 0) close(fd);
+	unsigned char md[32];
+	int same = bytes != MAP_FAILED && CC_SHA256(bytes, (uint32_t)size, md);
+	if (bytes != MAP_FAILED) munmap(bytes, size);
+	static const char digits[] = "0123456789abcdef";
+	for (int idx = 0; same && idx < 32; idx++)
+		same = want[2 * idx] == digits[md[idx] >> 4] && want[2 * idx + 1] == digits[md[idx] & 15];
+	if (!same) {
+		unlink(self);
+		die("the cached loader does not match its hash, so it was removed. Run the program again");
+	}
+}
+
+// install moves a first-launch copy from <cache>/.<pid>/<program> to
+// <cache>/<program>, after check_cached proved its bytes. The rename is
+// atomic, so a concurrent launch sees the old entry or this one.
+static void install(const char *self) {
+	char dest[1024], tmp[1024];
+	const char *name = strrchr(self, '/');
+	if (!name) return;
+	size_t dirlen = name - self;
+	const char *pid = name;
+	while (pid > self && pid[-1] != '/') pid--;
+	if (pid == self || pid[0] != '.') return;
+	size_t keep = pid - 1 - self;
+	if (keep + strlen(name) >= sizeof dest || dirlen >= sizeof tmp) return;
+	memcpy(dest, self, keep);
+	strcpy(dest + keep, name);
+	memcpy(tmp, self, dirlen);
+	tmp[dirlen] = 0;
+	if (rename(self, dest)) die("cannot move the loader into the cache");
+	rmdir(tmp);
+}
+
 int main(int argc, char **argv, char **envp) {
-	if (argc < 2) die("usage: apeld PROG.com [args...]");
+	if (argc < 2) die("usage: apeld [-i] PROG.com [args...]");
+	check_cached(argv[0]);
 
 	// The boot script keeps this loader in a per-user cache, under the
-	// program's file name. XNU names the process after that file.
-	retitle(argv, argc, 1);
-	char **pargv = argv + 1;
-	int pargc = argc - 1;
+	// program's file name. XNU names the process after that file. -i marks
+	// the first launch, which runs from a per-run directory and installs.
+	int skip = 1;
+	if (argc > 2 && argv[1][0] == '-' && argv[1][1] == 'i' && argv[1][2] == 0) {
+		install(argv[0]);
+		skip = 2;
+	}
+	retitle(argv, argc, skip);
+	char **pargv = argv + skip;
+	int pargc = argc - skip;
 	const char *path = pargv[0];
 	int fd = open(path, O_RDONLY | O_CLOEXEC);
 	if (fd < 0) die("cannot open program");

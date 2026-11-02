@@ -241,6 +241,7 @@ func writeLoaderBoot(script *bytes.Buffer, l *apeLoader) {
 		Skip:  l.offset / apeLoaderBlock,
 		Count: len(l.blob) / apeLoaderBlock,
 		Gzip:  l.gzip,
+		Hash:  l.hash,
 	}
 	if l.named {
 		if err := apeDarwinBootTmpl.Execute(script, data); err != nil {
@@ -263,6 +264,7 @@ type apeBootData struct {
 	Skip  int
 	Count int
 	Gzip  bool
+	Hash  string
 }
 
 // writeLoaderSearch emits the search for a loader the host already has. It

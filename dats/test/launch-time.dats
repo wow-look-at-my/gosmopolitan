@@ -17,3 +17,17 @@ tests:
 	  outputs:
 		stdout:
 			- "200 cached launches: fizzbuzz"
+
+	- desc: 200 launches of the default boot, with the cache wiped before each one
+	  cmd: dats/test/launch-time.sh cold binaries/ape-binary-Linux/fizzbuzz.com 200
+	  exit: 0
+	  outputs:
+		stdout:
+			- "200 cold launches: fizzbuzz"
+
+	- desc: 200 launches that unpack and test-run the loader each time, as the boot before the cache did
+	  cmd: dats/test/launch-time.sh unpack binaries/ape-binary-Linux/fizzbuzz.com 200
+	  exit: 0
+	  outputs:
+		stdout:
+			- "200 unpack launches: fizzbuzz"
