@@ -1,6 +1,8 @@
 // Copyright The Go Authors. All rights reserved. Use of this source code is
 // governed by a BSD-style license that can be found in the LICENSE file.
 
+// An org module follows a branch head, so a new commit can require a new module in the middle of a run.
+
 package modload
 
 import (

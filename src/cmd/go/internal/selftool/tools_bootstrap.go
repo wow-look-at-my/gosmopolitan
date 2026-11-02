@@ -3,6 +3,8 @@
 
 //go:build compiler_bootstrap
 
+// tools are the tools the bootstrap toolchain carries.
+
 package selftool
 
 import (

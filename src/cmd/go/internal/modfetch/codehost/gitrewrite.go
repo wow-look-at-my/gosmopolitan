@@ -1,6 +1,8 @@
 // Copyright The Go Authors. All rights reserved. Use of this source code is
 // governed by a BSD-style license that can be found in the LICENSE file.
 
+// gitRule is a url.<base>.insteadOf rule: git sends a URL that starts with prefix to base instead.
+
 package codehost
 
 import (

@@ -3,6 +3,8 @@
 
 //go:build cosmo && arm64
 
+// Syscall numbers for arm64.
+
 package cosmo
 
 // Syscall numbers for arm64. Cosmopolitan uses Linux syscall numbers on all
