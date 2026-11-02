@@ -211,8 +211,10 @@ go tool compile -bench=out.txt file.go
 - **make.bash keeps its bootstrap phases cached.** toolchain1 and toolchain2 use `GOROOT/pkg/obj/go-build`, and dist caches go_bootstrap's packages there too (`cmd/dist/distcache.go`). CI keeps that directory between runs. toolchain3 and later use the user GOCACHE.
 - **A cached test result is keyed on the content of the files the test read, not their mtime.** Upstream hashes size and mtime, so every fresh CI checkout missed every test that reads testdata. `hashOpen` in `cmd/go/internal/test` hashes size, mode and content. `test_cache_inputs` pins it.
 - **An unset GOMEMLIMIT takes the cgroup's memory limit.** `readGOMEMLIMIT` reads `memory.max` (cgroup v2) or `memory.limit_in_bytes` (v1) of the process's own cgroup at `gcinit` and uses. An explicit `GOMEMLIMIT`, `off` included, still wins, and a host with no cgroups is unaffected. This holds for cosmo too: the APE asks `__hostos` first and only reads `/proc` on a Linux host. `internal/runtime/cgroup` builds for cosmo now, over `sys_cosmo.go`'s syscall shims.
+- **A signal on macOS does not trust the g register while C runs.** R28 is callee-saved in the C ABI, so a library holds its own value there for the length of a call. Without cgo no TLS slot backs it. `minit` keeps the thread's g0 at the bottom of its signal stack, and `cosmoSigG` reads it for a PC outside Go text. A thread the runtime did not start has no signal-stack span. It gets no g. `inotifyUnderPreemption` in runtimeprobe wedges without this.
 - **An arm64 APE on macOS needs AT_HWCAP. It takes fixes.** A reader without one reads the `ID_AA64ISAR*` registers - an `MRS` macOS answers. The APE loader does pass a pair. However, it sets `hwcap_CPUID`, claiming the kernel emulates those registers.`fixAuxv` clears that bit in `osinit` (and. Never set `hwcap_CPUID`: it means "the kernel emulates those registers".
 - **The APE off a Linux host serves `/proc/self/auxv`.** A library written for Linux reads the auxiliary vector out of that file rather. `syscall.Openat` answers the path from `runtime.getAuxv`, handing back the read end of a pipe holding the pairs plus the AT_NULL terminator: before the real. So AT_HWCAP now reaches x/sys/cpu too, which is what stops the arm64 MRS fallback and its SIGILL.
+- **inotify reports the same events on every host.** Each host supplies only hints, and a stat decides the record. So `IN_OPEN` never fires. A write is reported when its descriptor closes, and a move across an unwatched directory is a create or a delete. That holds on Linux too. Depth: docs/INOTIFY.md.
 - **The pclntab format diverged from upstream** (size pass 3b, 2026-07-19). The compact layout under magic `abi.CosmoPCLnTabMagic` (0xffffffc1) uses repacked 40-B `_func` records with presence-bitmap pcdata/funcdata arrays. It also has a prefix-split funcnametab, a dir-split filetab, packed pctab pairs, and 13-B InlTree records. Consequence: upstream debug/gosym-based tools cannot parse fork binaries. The fork's own debug/gosym, objdump, nm, and addr2line are updated. DWARF sidecars are unaffected, so gdb/delve work. Writer and readers must move in lockstep: `cmd/link/internal/ld/pcln.go` + `cmd/internal/obj/pcln.go` <-> `runtime/symtab.go`/`symtabinl.go` <-> `debug/gosym`.
 
 ## Local Verify Loop
@@ -223,7 +225,8 @@ export PATH="$PWD/../bin:$PATH"
 # after linker or go-command changes:
 GOOS=linux GOARCH=amd64 go install cmd/go/main   # refresh bin/go, which carries every HOST tool (see gotcha above)
 GOOS=cosmo go build -o /tmp/fizzbuzz.com ./testdata/fizzbuzz/fizzbuzz.go   # emits fat APE
-cd testdata/ape/apetest && FIZZBUZZ_BIN=/tmp/fizzbuzz.com go test -count=1 ./...   # upstream go
+(cd testdata/fsnotifyprobe && GOOS=cosmo go build -o /tmp/fsnotifyprobe.com .)
+cd testdata/ape/apetest && FIZZBUZZ_BIN=/tmp/fizzbuzz.com FSNOTIFYPROBE_BIN=/tmp/fsnotifyprobe.com go test -count=1 ./...   # upstream go
 ```
 
 ## Uprevving to a new upstream Go release
