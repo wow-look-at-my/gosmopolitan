@@ -9,6 +9,11 @@ on run argv
 	set kinds to {}
 	tell application "System Events"
 		tell process "Activity Monitor"
+			-- The search field keeps only the processes whose name holds the first word,
+			-- so the scan below reads a few rows rather than the whole table.
+			keystroke "f" using command down
+			keystroke (item 1 of argv)
+			delay 4
 			set elems to entire contents of front window
 			repeat with elem in elems
 				try
