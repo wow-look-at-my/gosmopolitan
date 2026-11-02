@@ -63,7 +63,7 @@ func netpollinitNT() {
 		throw("runtime: netpollinit failed")
 	}
 	// Build the lossless TCP wake pair (see ntWakeSock) with the shared ntLoopbackTCPPair recipe, which socketpair reuses too: blocking.
-	a, c, step, werr := ntLoopbackTCPPair()
+	a, c, step, werr := ntLoopbackTCPPair(0)
 	if werr != 0 {
 		println("runtime: netpollinit: wake pair", step, "failed with", werr)
 		throw("runtime: netpollinit failed")
