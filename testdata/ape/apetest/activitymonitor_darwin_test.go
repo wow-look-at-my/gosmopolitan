@@ -44,8 +44,8 @@ func TestActivityMonitorShowsTheProgram(t *testing.T) {
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "osascript", "testdata/activitymonitor.applescript", "runtimeprobe", "apeld").CombinedOutput()
 	require.NoError(t, err, "osascript: %s", out)
+	t.Logf("Activity Monitor: %s", strings.TrimSpace(string(out)))
 	shown := strings.Fields(string(out))
-	t.Logf("Activity Monitor shows: %q", shown)
 	assert.Contains(t, shown, name, "Activity Monitor must name the program")
 	for _, process := range shown {
 		assert.NotContains(t, process, "apeld", "Activity Monitor must not name the loader")
