@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// Apple itimerval mirror types and the Linux<->Apple translation the darwin setitimer dispatch needs.
+
 package runtime
 
 // Apple itimerval mirror types and the Linux<->Apple translation the darwin

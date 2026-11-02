@@ -3,6 +3,8 @@
 
 //go:build cosmo && amd64
 
+// Syscall numbers for amd64.
+
 package cosmo
 
 // Syscall numbers for amd64.

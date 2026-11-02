@@ -78,7 +78,9 @@ A caller holding an open file names that file. One holding anything else spills 
 
 The look-ahead pool has somewhere to put what it fetches, which is what turns it on. `OnBatchEntries` writes an object to disk before the build asks for it. The ask is then a local read.
 
-A hit served over the network reads exactly like one off local disk unless the cache says otherwise. That is the most useful thing a cache trace can say. So `Tiered` reports it. `DiskCache` answers `disk`. `storeTier` answers whichever tier served the body. `brokerCache` answers the tier the owner named in its reply. `cmd/go/internal/cache/trace.go` records it on the build's trace lane, one slice per lookup and per store.
+A hit served over the network reads exactly like one off local disk unless the cache says otherwise. That is the most useful thing a cache trace can say. So `Tiered` reports it. `DiskCache` answers `disk`. `storeTier` answers whichever tier served the body. `brokerCache` answers the tier the owner named in its reply.
+
+`cmd/go/internal/cache/trace.go` records it on the build's trace lane, one slice per lookup and per store.
 
 ## Configuration
 

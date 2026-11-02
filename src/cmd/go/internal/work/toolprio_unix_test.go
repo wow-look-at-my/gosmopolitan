@@ -12,10 +12,6 @@ import (
 )
 
 func TestLowerToolPriority(t *testing.T) {
-	own, err := niceOf(0)
-	if err != nil {
-		t.Fatal(err)
-	}
 	cmd := exec.Command("sleep", "30")
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
@@ -23,6 +19,13 @@ func TestLowerToolPriority(t *testing.T) {
 	defer cmd.Wait()
 	defer cmd.Process.Kill()
 
+	// From the child's own nice: a nice value is per thread, so the value
+	// this test's goroutine reads for itself is not necessarily the one the
+	// child inherited from the thread that forked it.
+	before, err := niceOf(cmd.Process.Pid)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := lowerToolPriority(cmd.Process.Pid); err != nil {
 		t.Fatal(err)
 	}
@@ -30,8 +33,8 @@ func TestLowerToolPriority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := min(own+toolNiceIncrement, maxNice); got != want {
-		t.Errorf("child nice = %d, want %d (own %d)", got, want, own)
+	if want := min(before+toolNiceIncrement, maxNice); got != want {
+		t.Errorf("child nice = %d, want %d (before %d)", got, want, before)
 	}
 }
 

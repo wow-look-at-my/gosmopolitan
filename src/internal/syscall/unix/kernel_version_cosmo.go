@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// KernelVersion returns the major and minor version of the kernel.
+
 package unix
 
 // KernelVersion returns the major and minor version of the kernel.

@@ -57,4 +57,4 @@ staticcheck is a third-party module and is not forked here. Closing this needs t
 
 ## Delve, and other tools that read a binary
 
-A tool that consumes a fork BINARY is a separate question from one that reads fork SOURCE. The pclntab format has diverged from upstream, so a tool that parses it needs the fork's own `debug/gosym`. The DWARF sidecars are untouched, which is why gdb and delve work. See the pclntab bullet in CLAUDE.md.
+A tool that consumes a fork BINARY is a separate question from one that reads fork SOURCE. The pclntab format diverged from upstream, so a tool that parses it needs the fork's own `debug/gosym`. The DWARF sidecars are untouched, which is why gdb and delve work. See the pclntab bullet in CLAUDE.md.

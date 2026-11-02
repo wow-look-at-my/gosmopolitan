@@ -1,6 +1,8 @@
 // Copyright The Go Authors. All rights reserved. Use of this source code is
 // governed by a BSD-style license that can be found in the LICENSE file.
 
+// withTestUnit hands a child the package whose tests this process runs, when this is a test binary holding several packages' tests.
+
 package os
 
 import "internal/testlog"

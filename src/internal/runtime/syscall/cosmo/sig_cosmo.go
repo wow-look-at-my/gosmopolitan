@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// Linux <-> Apple signal number translation for the darwin syscall emulation.
+
 package cosmo
 
 // Linux <-> Apple signal number translation for the darwin syscall emulation.

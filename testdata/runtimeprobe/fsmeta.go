@@ -9,27 +9,7 @@ import (
 	"time"
 )
 
-// File-metadata and system-information syscalls. Every one of these was
-// ENOSYS on macOS until the darwin emulation grew it, and none of them
-// is reached by the rest of the probe - os.File.Sync, os.Truncate,
-// os.Chmod, os.Chtimes, os.Link, os.Symlink, statfs, uname, getrlimit
-// and the credential getters all bottom out in a syscall the fast path
-// does not carry. So this is the check that keeps them working.
-//
-// The split across three checks is by HOST SUPPORT, so that each one
-// can be a hard assertion everywhere it runs:
-//
-//   - fsmeta covers what every host serves, Windows included.
-//   - fslinks covers symlinks and the owner's write bit, which every
-//     host serves too.
-//   - fsmetaunix covers what NT has no counterpart for (unix ownership,
-//     the other permission bits, FIFOs).
-//   - sysinfo covers statfs/uname/rlimit/priority/credentials, which
-//     upstream's own windows port does not expose either.
-//
-// The last two follow checkDupFile on a Windows host: they report what
-// each step answered instead of failing, so the log records the gap and
-// the day NT grows one the line is already there.
+// File-metadata and system-information syscalls.
 
 // softStep runs one step of a check. On a host where the surface is
 // expected to work, an error fails the check; elsewhere it is recorded.
@@ -53,7 +33,7 @@ func (s *softStep) do(what string, err error) bool {
 	return false
 }
 
-// finish prints the single verdict line the output contract requires.
+// finish prints the verdict line the output contract requires.
 func (s *softStep) finish(detail string) {
 	if s.bad {
 		return // do() already printed the FAIL
@@ -65,10 +45,9 @@ func (s *softStep) finish(detail string) {
 	ok(s.name, detail)
 }
 
-// checkFsMeta covers the metadata syscalls every host serves. It is a
-// hard assertion everywhere, Windows included: the NT emulation grew
-// truncate, utimensat, fchdir and linkat in the same wave that closed
-// the macOS gap.
+// checkFsMeta covers the metadata syscalls every host serves. It is a hard
+// assertion everywhere, Windows included. The NT emulation grew truncate,
+// utimensat, fchdir and linkat in the same wave that closed the macOS gap.
 func checkFsMeta() {
 	s := &softStep{name: "fsmeta"}
 
@@ -93,7 +72,7 @@ func checkFsMeta() {
 
 	s.do("Sync", f.Sync())
 
-	// ftruncate then truncate: two different syscalls, so both sizes are
+	// ftruncate then truncate: different syscalls, so both sizes are
 	// checked rather than only the last one.
 	if s.do("File.Truncate", f.Truncate(5)) {
 		if fi, err := f.Stat(); err == nil && fi.Size() != 5 {
@@ -106,9 +85,7 @@ func checkFsMeta() {
 		}
 	}
 
-	// utimensat, twice: once with both stamps, once with a zero atime,
-	// which os.Chtimes turns into the UTIME_OMIT sentinel the emulation
-	// has to rewrite for Apple.
+	// utimensat, twice.
 	want := time.Now().Add(-2 * time.Hour).Truncate(time.Second)
 	if s.do("Chtimes", os.Chtimes(path, want, want)) {
 		if fi, err := os.Stat(path); err == nil && !fi.ModTime().Equal(want) {
@@ -122,9 +99,7 @@ func checkFsMeta() {
 		}
 	}
 
-	// linkat. A hard link is one inode under two names. SameFile compares
-	// the identity (inode, or the NT file index), which a copy of the same
-	// size cannot fake.
+	// linkat. A hard link is one inode under names.
 	link := filepath.Join(dir, "hard")
 	if s.do("Link", os.Link(path, link)) {
 		a, errA := os.Stat(path)
@@ -141,8 +116,7 @@ func checkFsMeta() {
 
 	// fchdir. The working directory is process-wide and checkWd asserts
 	// against it, so the original is restored before returning. Stat of
-	// "." proves the directory changed; a stub that returns 0 does not
-	// pass. Identity, not the path string: on NT the temp directory is
+	// "." Identity, not the path string: on NT the temp directory is
 	// reached through the /tmp alias and reads back under its real path.
 	if wd, err := os.Getwd(); err == nil {
 		if d, err := os.Open(dir); err == nil {
@@ -169,11 +143,11 @@ func checkFsMeta() {
 	s.finish("sync/truncate/chtimes/link/fchdir")
 }
 
-// checkFsLinks covers what the NT port serves of symlinks and the
-// permission bits, as a hard assertion on every host: a symlink to a
-// file and to a directory reads back, lstat and ReadDir name it as a
-// link while stat follows it, removing it leaves the target, and a
-// file without its owner's write bit reads that way and still deletes.
+// checkFsLinks covers what the NT port serves of symlinks and the permission
+// bits, as a hard assertion on every host. A symlink to a file and to a
+// directory reads back, lstat and ReadDir name it as a link while stat
+// follows it. That symlink is removing it leaves the target. A file without
+// its owner's write bit reads that way and still deletes.
 func checkFsLinks() {
 	s := &softStep{name: "fslinks"}
 
@@ -275,7 +249,20 @@ func checkFsLinks() {
 	}
 	s.do("Remove read-only", os.Remove(path))
 
-	s.finish("symlink/readlink/lstat/readdir/chmod/remove")
+	// File.Chmod finds the path from the handle. Past MAX_PATH on NT, that path names the file only with the \\?\ prefix.
+	long := filepath.Join(dir, strings.Repeat("l", 150), strings.Repeat("m", 150)+".txt")
+	if s.do("MkdirAll long", os.MkdirAll(filepath.Dir(long), 0o755)) {
+		if lf, err := os.Create(long); s.do("Create long", err) {
+			s.do("File.Chmod long", lf.Chmod(0o444))
+			s.do("Close long", lf.Close())
+			if fi, err := os.Stat(long); s.do("Stat long", err) && fi.Mode().Perm()&0o200 != 0 {
+				s.do("File.Chmod long mode", fmt.Errorf("mode %v still has the owner's write bit", fi.Mode().Perm()))
+			}
+			s.do("Remove long", os.Remove(long))
+		}
+	}
+
+	s.finish("symlink/readlink/lstat/readdir/chmod/remove/long-path chmod")
 }
 
 // checkFsMetaUnix covers the metadata syscalls NT has no counterpart
@@ -312,13 +299,10 @@ func checkFsMetaUnix() {
 		}
 	}
 
-	// fchownat with both ids -1 changes nothing, so it needs no
-	// privilege and still proves the call reaches the kernel.
+	// fchownat with both ids -changes nothing, so it needs no privilege and still proves the call reaches the kernel.
 	s.do("Chown", os.Chown(path, -1, -1))
 
-	// mknodat. Apple has no directory-relative mknod, so the darwin
-	// emulation serves this only for AT_FDCWD - which is what Mkfifo
-	// passes.
+	// mknodat.
 	fifo := filepath.Join(dir, "fifo")
 	if s.do("Mkfifo", syscall.Mkfifo(fifo, 0o600)) {
 		if fi, err := os.Lstat(fifo); err == nil && fi.Mode()&os.ModeNamedPipe == 0 {
@@ -330,14 +314,13 @@ func checkFsMetaUnix() {
 }
 
 // checkVolume covers statfs, fstatfs and uname. Every host serves all
-// three, so this is a hard assertion everywhere. It is separate from
-// checkSysInfo because the rest of that step is still ENOSYS on NT.
+// of them, so this is a hard assertion everywhere. It is separate
+// from checkSysInfo because the rest of that step is still ENOSYS on NT.
 func checkVolume() {
 	s := &softStep{name: "volume"}
 	var detail []string
 
-	// statfs and fstatfs. Both fill the same struct, so the block size
-	// they report for one file must agree.
+	// statfs and fstatfs. Both fill the same struct, so the block size they report for one file must agree.
 	var sfs syscall.Statfs_t
 	if s.do("Statfs", syscall.Statfs(os.TempDir(), &sfs)) {
 		if sfs.Bsize <= 0 || sfs.Blocks == 0 {
@@ -345,9 +328,7 @@ func checkVolume() {
 		} else {
 			detail = append(detail, fmt.Sprintf("bsize=%d", sfs.Bsize))
 		}
-		// A volume cannot have more free blocks than it has blocks. This
-		// catches a conversion that divided by the wrong unit, which a
-		// positive-value check alone lets through.
+		// A volume cannot have more free blocks than it has blocks.
 		if sfs.Blocks != 0 && sfs.Bfree > sfs.Blocks {
 			s.do("Statfs free", fmt.Errorf("bfree %d > blocks %d", sfs.Bfree, sfs.Blocks))
 		}
@@ -360,8 +341,7 @@ func checkVolume() {
 		f.Close()
 	}
 
-	// uname. Sysname is the field every host fills, and the emulation
-	// has to copy it out of a 256-byte Apple field into a 65-byte one.
+	// uname.
 	var un syscall.Utsname
 	if s.do("Uname", syscall.Uname(&un)) {
 		sys := cstr(un.Sysname[:])
@@ -379,8 +359,7 @@ func checkSysInfo() {
 	s := &softStep{name: "sysinfo", soft: cosmoHostOS() == "windows"}
 	var detail []string
 
-	// prlimit64. RLIMIT_NOFILE is the one the runtime itself raises at
-	// startup, so a wrong resource number here would be visible.
+	// prlimit64.
 	var rl syscall.Rlimit
 	if s.do("Getrlimit", syscall.Getrlimit(syscall.RLIMIT_NOFILE, &rl)) {
 		if rl.Cur == 0 || rl.Cur > rl.Max {
@@ -390,9 +369,7 @@ func checkSysInfo() {
 		}
 	}
 
-	// getpriority. The syscall reports 20-nice, so a default-priority
-	// process reads 20 and the legal range is 1..40. A raw Apple nice
-	// value would fall outside it.
+	// getpriority. A raw Apple nice value would fall outside it.
 	if prio, err := syscall.Getpriority(syscall.PRIO_PROCESS, 0); s.do("Getpriority", err) {
 		if prio < 1 || prio > 40 {
 			s.do("Getpriority value", fmt.Errorf("%d, want the 1..40 the Linux syscall reports", prio))
@@ -405,7 +382,7 @@ func checkSysInfo() {
 	if _, err := syscall.Getgroups(); s.do("Getgroups", err) {
 	}
 
-	// getpgid. Getpgrp is the same syscall with pid 0, so the two must
+	// getpgid. Getpgrp is the same syscall with pid 0, so both must
 	// agree - and a silently discarded error would show up as a zero.
 	if pgid, err := syscall.Getpgid(0); s.do("Getpgid", err) {
 		if pgid <= 0 {
@@ -431,19 +408,13 @@ func cstr(b []byte) string {
 
 // checkNanosleep exercises the nanosleep syscall directly. Nothing else
 // in the probe reaches it: time.Sleep goes through the runtime's timers
-// and its own usleep, so syscall.Nanosleep is a path only a caller of
-// that function takes.
-//
-// It is a syscall that CAN return success while doing nothing, and on
-// macOS-Intel it did exactly that for a long time - XNU has no nanosleep
-// and the emulation returned 0 without sleeping. So the assertion is on
-// the clock, not on the error: a check that only looked at err would
-// have passed against a stub that never slept.
-//
-// The floor is deliberately well under the request. Sleeps overshoot,
-// never undershoot, and a scheduler hiccup must not turn this into a
-// flake; anything that returns early enough to trip 30ms is a stub, not
-// a timing artifact.
+// and its own usleep, so syscall.Nanosleep is a path only. A caller of
+// that function takes. So the assertion is on the clock, not on the
+// error. A check that only looked at err would have passed against a
+// stub that never slept. The floor is deliberately well under the
+// request. Sleeps overshoot, never undershoot, and a scheduler hiccup
+// must not turn this into a flake. Anything that returns early enough to
+// trip 30ms is a stub, not a timing artifact.
 func checkNanosleep() {
 	s := &softStep{name: "nanosleep", soft: cosmoHostOS() == "windows"}
 
@@ -463,9 +434,8 @@ func checkNanosleep() {
 	if elapsed < floor {
 		s.do("Nanosleep duration", fmt.Errorf("returned after %v, want at least %v - the call did not sleep", elapsed, floor))
 	}
-	// An uninterrupted sleep leaves nothing remaining. A signal during
-	// this window is possible in principle, so a nonzero remainder is
-	// only wrong if it exceeds what was asked for.
+	// An uninterrupted sleep leaves nothing remaining. A signal during this window is possible in principle, so a nonzero remainder is only wrong if it
+	// exceeds what was asked for.
 	if left := time.Duration(syscall.TimespecToNsec(rem)); left > request {
 		s.do("Nanosleep remainder", fmt.Errorf("rem = %v, longer than the %v requested", left, request))
 	}
@@ -473,12 +443,12 @@ func checkNanosleep() {
 }
 
 // checkSendfile exercises the sendfile syscall directly. Nothing in the
-// standard library reaches it on cosmo - internal/poll's sendfile file
-// carries no cosmo build tag - so a caller that uses syscall.Sendfile is
-// the only thing that would ever find it broken.
+// standard library reaches it on cosmo, internal/poll's sendfile file
+// carries no cosmo build tag. A caller that uses syscall.Sendfile is the
+// only thing that would ever find it broken.
 //
 // The destination is a socketpair end because Apple's sendfile refuses
-// anything else, and the payload is small enough to fit in the socket
+// anything else. The payload is small enough to fit in the socket
 // buffer so the write cannot block.
 func checkSendfile() {
 	s := &softStep{name: "sendfile"}
@@ -511,8 +481,7 @@ func checkSendfile() {
 	defer syscall.Close(fds[0])
 	defer syscall.Close(fds[1])
 
-	// With an explicit offset the file's own offset must not move, and
-	// the offset variable must advance by what was sent.
+	// With an explicit offset the file's own offset must not move, and the offset variable must advance by what was sent.
 	off := int64(0)
 	n, err := syscall.Sendfile(fds[0], int(src.Fd()), &off, len(payload))
 	if !s.do("Sendfile", err) {
@@ -530,8 +499,7 @@ func checkSendfile() {
 		s.do("file offset", fmt.Errorf("offset moved to %d; an explicit offset must leave it alone", cur))
 	}
 
-	// With no offset the file's own offset is the starting point and it
-	// must advance instead.
+	// With no offset the file's own offset is the starting point and it must advance instead.
 	n, err = syscall.Sendfile(fds[0], int(src.Fd()), nil, len(payload))
 	if s.do("Sendfile nil-offset", err) {
 		if n != len(payload) {

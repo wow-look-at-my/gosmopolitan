@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// System administration calls.
+
 package syscall
 
 import "unsafe"

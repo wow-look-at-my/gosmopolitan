@@ -108,11 +108,31 @@ func RefuseBannedURL(target *url.URL) error {
 // RefuseBannedRemote is RefuseBannedURL for a repository URL in text form.
 // A remote with no readable host is refused, because its host is unknown.
 func RefuseBannedRemote(remote string) error {
+	if host, ok := scpRemoteHost(remote); ok {
+		return RefuseBannedURL(&url.URL{Scheme: "ssh", Host: host})
+	}
 	target, err := url.Parse(remote)
 	if err != nil {
 		return fmt.Errorf("refusing %q: cannot read its host: %v", remote, err)
 	}
 	return RefuseBannedURL(target)
+}
+
+// scpRemoteHost answers the host of an scp-style remote, "[user@]host:path".
+// Git reads a remote with no "://" and a colon before its first slash this way.
+func scpRemoteHost(remote string) (string, bool) {
+	if strings.Contains(remote, "://") {
+		return "", false
+	}
+	colon := strings.Index(remote, ":")
+	if colon <= 0 || strings.Contains(remote[:colon], "/") {
+		return "", false
+	}
+	host := remote[:colon]
+	if at := strings.LastIndex(host, "@"); at >= 0 {
+		host = host[at+1:]
+	}
+	return host, host != ""
 }
 
 // GetBytes returns the body of the requested resource, or an error if the

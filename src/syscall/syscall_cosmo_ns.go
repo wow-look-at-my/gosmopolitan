@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// The clone flags.
+
 package syscall
 
 // The clone flags. GOOS=cosmo presents the Linux ABI, so a program written

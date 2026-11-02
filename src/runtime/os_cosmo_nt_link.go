@@ -3,6 +3,8 @@
 
 //go:build cosmo && amd64
 
+// Symbolic links, descriptor duplication and the read-only attribute on an NT host.
+
 package runtime
 
 import (

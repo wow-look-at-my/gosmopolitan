@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// Linux <-> Apple (XNU) signal number translation.
+
 package runtime
 
 // Linux <-> Apple (XNU) signal number translation. A cosmo binary thinks in

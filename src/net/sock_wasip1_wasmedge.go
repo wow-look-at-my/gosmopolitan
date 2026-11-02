@@ -3,6 +3,8 @@
 
 //go:build wasip1 && wasip1.wasmedgesock
 
+// With GOWASI=wasmedgesock, TCP and UDP sockets on wasip1 are real.
+
 package net
 
 import (

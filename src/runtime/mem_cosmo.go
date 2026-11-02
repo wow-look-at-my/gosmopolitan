@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// Don't split the stack as this method may be invoked without a valid G, which prevents us from allocating more stack.
+
 package runtime
 
 import (

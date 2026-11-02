@@ -49,7 +49,9 @@ Measured: an entry registered with `F` still boots the payload after its interpr
 
 Measured on a writable host with no loader installed. The first run leaves nothing at all under `/tmp`. The entry it registered names a path that the same run then deleted. An unprivileged run of the same program keeps its unpacked loader and registers no entry.
 
-`dats/test/readonly-boot.dats` holds the standing read-only claim for linux and darwin. `dats/test/readonly-boot-container.dats` adds the `docker run --read-only` shape, which needs mount namespaces and so runs on linux alone. `dats/test/nt.dats` holds the claim for NT. The test job runs all three on every push. Each case makes the program's directory, the unpack directory and the loader's directory read-only. Then it writes a canary file there and requires that write to fail. A case that finds a writable directory fails rather than reporting a pass it did not earn.
+`dats/test/readonly-boot.dats` holds the standing read-only claim for linux and darwin. `dats/test/readonly-boot-container.dats` adds the `docker run --read-only` shape, which needs mount namespaces and so runs on linux alone. `dats/test/nt.dats` holds the claim for NT. The test job runs all three on every push. Each case makes the program's directory, the unpack directory and the loader's directory read-only. Then it writes a canary file there and requires that write to fail.
+
+A case that finds a writable directory fails rather than reporting a pass it did not earn.
 
 The register file lives in procfs, not on the disk, so a read-only disk does not stop it. Root does. The registration is best effort: a run that cannot take it says nothing and goes through the search instead.
 
@@ -81,7 +83,7 @@ Unlinking the file first and exec'ing it through `/dev/fd` works on linux and is
 
 The loader is many bytes on linux/amd64, against the program's megabytes. `dd` reads it out of the APE. The darwin loader is gzipped. It goes through `gzip -dc` as well.
 
-Root also hands the loader to `binfmt_misc` on the way past, before the unlink. Every later run on that machine then skips this path entirely. `APE_NOBINFMT` marks a pass that took it, so a kernel that hands the file back to a shell cannot make a loop.
+Root also hands the loader to `binfmt_misc` on the way past, before the unlink. Every later run on that machine then skips this path fully. `APE_NOBINFMT` marks a pass that took it, so a kernel that hands the file back to a shell cannot make a loop.
 
 A **noexec** directory takes the loader fine, and execve then refuses it. The loop treats that like any other failure and tries the next directory.
 

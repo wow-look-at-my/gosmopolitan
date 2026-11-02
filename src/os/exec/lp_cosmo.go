@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// A GOOS=cosmo binary is one image that runs on Linux, macOS, and Windows hosts.
+
 package exec
 
 import (

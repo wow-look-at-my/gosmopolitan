@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// Possible certificate files; stop after finding one.
+
 package x509
 
 // Possible certificate files; stop after finding one. Cosmopolitan runs on
