@@ -587,7 +587,6 @@ func TestHTTPStoreRetriesOnlyUnansweredRequests(t *testing.T) {
 		t.Fatal(err)
 	}
 	lock.store.(*httpStore).retryDelay = func(int) time.Duration { return 0 }
-	key := RunLockKey{lock.run, alphaPath, "main"}
 	var calls int
 
 	set := func(d, h, s int) {
@@ -596,20 +595,21 @@ func TestHTTPStoreRetriesOnlyUnansweredRequests(t *testing.T) {
 		mu.Unlock()
 	}
 
+	// Each round asks about its own branch: this machine keeps the version a store answered for a key.
 	set(2, 0, 0)
-	got, err := LockedVersion(context.Background(), lock.store, key, resolveTo(headB, &calls))
+	got, err := LockedVersion(context.Background(), lock.store, RunLockKey{lock.run, alphaPath, "dropped"}, resolveTo(headB, &calls))
 	if err != nil || got != headA {
 		t.Errorf("LockedVersion after two dropped connections = %q, %v; want %q", got, err, headA)
 	}
 
 	set(1<<30, 0, 0)
-	_, err = LockedVersion(context.Background(), lock.store, key, resolveTo(headB, &calls))
+	_, err = LockedVersion(context.Background(), lock.store, RunLockKey{lock.run, alphaPath, "unanswered"}, resolveTo(headB, &calls))
 	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("no answer in %d attempts", httpStoreAttempts)) || !strings.Contains(err.Error(), srv.URL) {
 		t.Errorf("LockedVersion against a store that never answers = %v; want an error that names the store and the attempts", err)
 	}
 
 	set(0, 0, http.StatusForbidden)
-	_, err = LockedVersion(context.Background(), lock.store, key, resolveTo(headB, &calls))
+	_, err = LockedVersion(context.Background(), lock.store, RunLockKey{lock.run, alphaPath, "refused"}, resolveTo(headB, &calls))
 	mu.Lock()
 	sent := hits
 	mu.Unlock()
