@@ -3,6 +3,8 @@
 
 //go:build cosmo && arm64
 
+// _SYSLIB_MIN_VERSION is the oldest Syslib this runtime accepts.
+
 package runtime
 
 import (
@@ -549,6 +551,8 @@ func cosmoDarwinKqueueSupported() bool {
 }
 
 // cosmoDarwinKqueue calls Apple libc kqueue(2).
+//
+//go:linkname cosmoDarwinKqueue
 func cosmoDarwinKqueue() (int32, int32) {
 	if cosmoDarwinKqueueFn == 0 {
 		return -1, 38 // ENOSYS
@@ -560,7 +564,11 @@ func cosmoDarwinKqueue() (int32, int32) {
 	return r, 0
 }
 
-// cosmoDarwinKevent calls Apple libc kevent(2).
+// cosmoDarwinKevent calls Apple libc kevent(2). It is nosplit because the
+// syscall package blocks in it between entersyscall and exitsyscall.
+//
+//go:linkname cosmoDarwinKevent
+//go:nosplit
 func cosmoDarwinKevent(kq int32, ch *keventt, nch int32, ev *keventt, nev int32, ts *timespec) (int32, int32) {
 	if cosmoDarwinKeventFn == 0 {
 		return -1, 38 // ENOSYS

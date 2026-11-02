@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// forkExecStatusBudget bounds the wait for a child's exec, in nanoseconds.
+
 package syscall
 
 import (

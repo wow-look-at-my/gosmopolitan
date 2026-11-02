@@ -330,7 +330,9 @@ One build has one owner. The first go command opens the directory and serves it 
 | `src/cmd/vendor/github.com/pierrec/lz4/v4` | the cache's wire framing |
 | `src/cmd/vendor/golang.org/x/tools` | gosmopolitan_tools, the org's x/tools |
 
-Consequences to know. **Clone with `--recurse-submodules`**, or `cmd/go` will not build. CI checks out without them and runs `src/submodulefetch.bash`, which fetches every gitlink commit at once. Nobody moves the client by hand. `src/submodulebranch.bash` puts each org submodule on its branch head through `git submodule update --init --remote`. No build stamps a version: the committed version is the placeholder `vN.0.0`, and `dats/checks/org-unpinned.sh` keeps it that way.
+Consequences to know. **Clone with `--recurse-submodules`**, or `cmd/go` will not build. CI checks out with `wow-look-at-my/actions@parallel-checkout#latest`. This fetches every submodule at once and puts each org submodule on its branch head at the commit the run locked. Nobody moves the client by hand. `src/submodulebranch.bash` puts each org submodule on its branch head through `git submodule update --init --remote`.
+
+No build stamps a version: the committed version is the placeholder `vN.0.0`, and `dats/checks/org-unpinned.sh` keeps it that way.
 
 **Never run `go mod vendor` here** —. Read `src/README.vendor` before adding any other `src/cmd` dependency: what looks like one import is a whole subtree of somebody else's repository.
 

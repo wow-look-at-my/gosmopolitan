@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// pprof_mainModuleText reports the address range of the main module's text.
+
 package runtime
 
 import _ "unsafe" // for go:linkname

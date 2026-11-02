@@ -3,6 +3,8 @@
 
 //go:build cosmo || darwin || linux
 
+// execAPEFallback retries an execve that answered ENOEXEC by handing the target to /bin/sh.
+
 package syscall
 
 import "unsafe"

@@ -3,6 +3,8 @@
 
 //go:build !windows && !cosmo
 
+// Every host this file builds for publishes its resolvers in /etc/resolv.conf, which dnsReadConfig reads directly.
+
 package net
 
 // Every host this file builds for publishes its resolvers in /etc/resolv.conf, which dnsReadConfig reads directly.

@@ -3,6 +3,8 @@
 
 //go:build !cmd_go_bootstrap
 
+// openCache opens the directory, puts the store under it when one is configured, and serves the result to the go commands this starts.
+
 package cache
 
 import (
@@ -244,6 +246,7 @@ func MissNotice(format string, args ...any) {
 	if !MissNotices() {
 		return
 	}
+
 	cacheNotice(format, args...)
 }
 

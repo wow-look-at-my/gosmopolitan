@@ -9,6 +9,7 @@
 #include <pthread.h>
 #include <signal.h>
 #include <string.h>
+#include <sys/mman.h>
 #include "libcgo.h"
 
 extern const int __hostos;
@@ -107,40 +108,181 @@ cosmo_host_slots(void **slots)
 // The FS base of the host libc's thread. Host code reads its TLS through %fs.
 static uintptr_t cosmo_host_fs;
 
-// x_cgo_cosmo_host_fs gives this thread the host FS base before a call into
-// host code. Go and libcosmo leave FS at `GO_HOST_LINUX` on Linux. A
-// nonzero FS is the host's, so the first one seen is recorded.
-__attribute__((visibility("hidden"))) void
-x_cgo_cosmo_host_fs(void)
+static uintptr_t
+cosmo_get_fs(void)
 {
 	uintptr_t fs = 0;
-	uintptr_t host;
 	long ret;
 
-	if (!(__hostos & COSMO_HOST_LINUX)) {
-		return;
-	}
 	// arch_prctl(ARCH_GET_FS, &fs)
 	__asm__ volatile("syscall" : "=a"(ret) : "0"(158L), "D"(0x1003L), "S"(&fs) : "rcx", "r11", "memory", "cc");
 	if (ret != 0) {
 		fprintf(stderr, "runtime/cgo: arch_prctl(ARCH_GET_FS) failed: %ld\n", ret);
 		abort();
 	}
-	if (fs != 0) {
-		host = 0;
-		__atomic_compare_exchange_n(&cosmo_host_fs, &host, fs, 0, __ATOMIC_RELEASE, __ATOMIC_RELAXED);
-		return;
-	}
-	host = __atomic_load_n(&cosmo_host_fs, __ATOMIC_ACQUIRE);
-	if (host == 0) {
-		return;
-	}
-	// arch_prctl(ARCH_SET_FS, host)
-	__asm__ volatile("syscall" : "=a"(ret) : "0"(158L), "D"(0x1002L), "S"(host) : "rcx", "r11", "memory", "cc");
+	return fs;
+}
+
+static void
+cosmo_set_fs(uintptr_t fs)
+{
+	long ret;
+
+	// arch_prctl(ARCH_SET_FS, fs)
+	__asm__ volatile("syscall" : "=a"(ret) : "0"(158L), "D"(0x1002L), "S"(fs) : "rcx", "r11", "memory", "cc");
 	if (ret != 0) {
 		fprintf(stderr, "runtime/cgo: arch_prctl(ARCH_SET_FS) failed: %ld\n", ret);
 		abort();
 	}
+}
+
+// x_cgo_cosmo_host_fs gives this thread the host FS base before a call into
+// host code. It returns the FS base the thread had. A thread libcosmo starts
+// has its own FS, a thread block with no host TLS in it. A new glibc faults on
+// that block in malloc.
+__attribute__((visibility("hidden"))) uintptr_t
+x_cgo_cosmo_host_fs(void)
+{
+	uintptr_t fs;
+	uintptr_t host;
+
+	if (!(__hostos & COSMO_HOST_LINUX)) {
+		return 0;
+	}
+	fs = cosmo_get_fs();
+	host = __atomic_load_n(&cosmo_host_fs, __ATOMIC_ACQUIRE);
+	if (host != 0 && fs != host) {
+		cosmo_set_fs(host);
+	}
+	return fs;
+}
+
+// x_cgo_cosmo_thread_fs gives this thread back its own FS base, which
+// x_cgo_cosmo_host_fs returned.
+__attribute__((visibility("hidden"))) void
+x_cgo_cosmo_thread_fs(uintptr_t fs)
+{
+	if (!(__hostos & COSMO_HOST_LINUX)) {
+		return;
+	}
+	if (cosmo_get_fs() != fs) {
+		cosmo_set_fs(fs);
+	}
+}
+
+// libcosmo's dl functions call the host's directly, on the FS the thread has.
+static uintptr_t
+cosmo_host_fs_enter(void)
+{
+	return x_cgo_cosmo_host_fs();
+}
+
+// cosmo_host_fs_leave records the host FS and gives the thread its own back.
+// The first dlopen runs the host's ld.so on its thread, and ld.so points FS
+// there at the host thread block.
+static void
+cosmo_host_fs_leave(uintptr_t fs)
+{
+	uintptr_t none = 0;
+	uintptr_t now;
+
+	if (!(__hostos & COSMO_HOST_LINUX)) {
+		return;
+	}
+	now = cosmo_get_fs();
+	if (now != 0 && now != fs) {
+		__atomic_compare_exchange_n(&cosmo_host_fs, &none, now, 0, __ATOMIC_RELEASE, __ATOMIC_RELAXED);
+	}
+	x_cgo_cosmo_thread_fs(fs);
+}
+
+extern char __wrap_foreign_tramp[];
+
+// A thunk is movabs $fn,%rax; movabs $__wrap_foreign_tramp,%r10; jmp *%r10.
+#define COSMO_THUNK_SIZE 32
+#define COSMO_THUNK_SPACE (1 << 20)
+
+static pthread_mutex_t cosmo_thunk_lock = PTHREAD_MUTEX_INITIALIZER;
+static unsigned char *cosmo_thunks;
+static size_t cosmo_thunk_count;
+
+// cosmo_is_code reports whether addr is in an executable mapping. dlsym also
+// names variables, and a variable's address must come back as it is.
+static int
+cosmo_is_code(void *addr)
+{
+	char line[512];
+	unsigned long start;
+	unsigned long end;
+	char perms[5];
+	FILE *maps;
+	int code = 0;
+
+	maps = fopen("/proc/self/maps", "r");
+	if (maps == NULL) {
+		fprintf(stderr, "runtime/cgo: open /proc/self/maps: %s\n", strerror(errno));
+		abort();
+	}
+	while (fgets(line, sizeof line, maps) != NULL) {
+		if (sscanf(line, "%lx-%lx %4s", &start, &end, perms) != 3) {
+			continue;
+		}
+		if ((unsigned long)addr >= start && (unsigned long)addr < end) {
+			code = perms[2] == 'x';
+			break;
+		}
+	}
+	fclose(maps);
+	return code;
+}
+
+// cosmo_host_thunk returns code that calls the host function fn through
+// __wrap_foreign_tramp, which gives the calling thread the host FS. A Linux
+// host function that dlsym names gets one. Every other address comes back as
+// it is.
+static void *
+cosmo_host_thunk(void *fn)
+{
+	unsigned char *thunk;
+	uintptr_t target = (uintptr_t)fn;
+	uintptr_t tramp = (uintptr_t)__wrap_foreign_tramp;
+	size_t idx;
+
+	if (fn == NULL || !(__hostos & COSMO_HOST_LINUX) || !cosmo_is_code(fn)) {
+		return fn;
+	}
+	pthread_mutex_lock(&cosmo_thunk_lock);
+	for (idx = 0; idx < cosmo_thunk_count; idx++) {
+		thunk = cosmo_thunks + idx * COSMO_THUNK_SIZE;
+		if (memcmp(thunk + 2, &target, sizeof target) == 0) {
+			pthread_mutex_unlock(&cosmo_thunk_lock);
+			return thunk;
+		}
+	}
+	if (cosmo_thunks == NULL) {
+		cosmo_thunks = mmap(NULL, COSMO_THUNK_SPACE, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+		if (cosmo_thunks == MAP_FAILED) {
+			fprintf(stderr, "runtime/cgo: mmap of the dlsym thunks failed: %s\n", strerror(errno));
+			abort();
+		}
+	}
+	if ((cosmo_thunk_count + 1) * COSMO_THUNK_SIZE > COSMO_THUNK_SPACE) {
+		fprintf(stderr, "runtime/cgo: dlsym named more than %d host functions\n", COSMO_THUNK_SPACE / COSMO_THUNK_SIZE);
+		abort();
+	}
+	thunk = cosmo_thunks + cosmo_thunk_count * COSMO_THUNK_SIZE;
+	thunk[0] = 0x48;
+	thunk[1] = 0xb8;
+	memcpy(thunk + 2, &target, sizeof target);
+	thunk[10] = 0x49;
+	thunk[11] = 0xba;
+	memcpy(thunk + 12, &tramp, sizeof tramp);
+	thunk[20] = 0x41;
+	thunk[21] = 0xff;
+	thunk[22] = 0xe2;
+	cosmo_thunk_count++;
+	pthread_mutex_unlock(&cosmo_thunk_lock);
+	return thunk;
 }
 
 // __wrap_foreign_tramp replaces libcosmo's foreign_tramp, the call that every
@@ -175,6 +317,7 @@ __asm__(
 	"	call	__sig_block\n"
 	"	mov	%rax,-0xc0(%rbp)\n"
 	"	call	x_cgo_cosmo_host_fs\n"
+	"	mov	%rax,-0xc8(%rbp)\n"
 	// Copy the caller's stack arguments to the bottom of this frame.
 	"	xor	%eax,%eax\n"
 	"1:	movdqu	0x10(%rbp,%rax),%xmm0\n"
@@ -202,6 +345,8 @@ __asm__(
 	"	movdqu	%xmm1,-0x20(%rbp)\n"
 	"	mov	%rax,-0x28(%rbp)\n"
 	"	mov	%rdx,-0x30(%rbp)\n"
+	"	mov	-0xc8(%rbp),%rdi\n"
+	"	call	x_cgo_cosmo_thread_fs\n"
 	"	mov	-0xc0(%rbp),%rdi\n"
 	"	call	__sig_unblock\n"
 	"	mov	-0x28(%rbp),%rax\n"
@@ -294,6 +439,24 @@ static uintptr_t
 cosmo_foreign_enter(void)
 {
 	return 0;
+}
+
+static uintptr_t
+cosmo_host_fs_enter(void)
+{
+	return 0;
+}
+
+static void
+cosmo_host_fs_leave(uintptr_t fs)
+{
+	(void)fs;
+}
+
+static void *
+cosmo_host_thunk(void *fn)
+{
+	return fn;
 }
 
 static void
@@ -455,6 +618,7 @@ cosmo_find_progname(void)
 struct cosmo_foreign {
 	sigset_t mask;
 	uintptr_t base;
+	uintptr_t fs;
 };
 
 // cosmo_foreign_begin blocks every signal on this thread and saves Go's GS
@@ -468,11 +632,13 @@ cosmo_foreign_begin(struct cosmo_foreign *call)
 	sigfillset(&all);
 	pthread_sigmask(SIG_BLOCK, &all, &call->mask);
 	call->base = cosmo_foreign_enter();
+	call->fs = cosmo_host_fs_enter();
 }
 
 static void
 cosmo_foreign_end(struct cosmo_foreign *call)
 {
+	cosmo_host_fs_leave(call->fs);
 	cosmo_foreign_leave(call->base);
 	pthread_sigmask(SIG_SETMASK, &call->mask, NULL);
 }
@@ -499,7 +665,7 @@ __wrap_dlsym(void *handle, const char *name)
 	cosmo_foreign_begin(&call);
 	sym = cosmo_dlsym(handle, name);
 	cosmo_foreign_end(&call);
-	return sym;
+	return cosmo_host_thunk(sym);
 }
 
 int
