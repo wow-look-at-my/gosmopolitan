@@ -173,6 +173,85 @@ TEXT runtime·cosmoLibcCall6(SB),NOSPLIT,$0-64
 	MOVD	R0, ret+56(FP)
 	RET
 
+// cosmo_ccall_trampoline calls the function a cosmoCCall names, with asmcgocall
+// having moved to the g0 stack and passed the cosmoCCall in R0.
+TEXT runtime·cosmo_ccall_trampoline(SB),NOSPLIT,$0
+	MOVD	R0, R19
+	MOVD	0(R19), R12
+	FMOVD	56(R19), F0
+	MOVD	8(R19), R0
+	MOVD	16(R19), R1
+	MOVD	24(R19), R2
+	MOVD	32(R19), R3
+	MOVD	40(R19), R4
+	MOVD	48(R19), R5
+	BL	(R12)
+	MOVD	R0, 64(R19)
+	RET
+
+// cosmo_fsevents_noop is what dispatch_sync_f runs to wait for a queue.
+TEXT runtime·cosmo_fsevents_noop(SB),NOSPLIT|NOFRAME,$0
+	RET
+
+// void cosmo_fsevents_callback(stream, info, count, paths, flags, ids)
+//
+// FSEventStreamCallback, on a libdispatch thread with no g and a C stack. It
+// keeps the C ABI's callee-saved registers. Each event goes to the descriptor in
+// info as an id, flags, a path length and the path. The write can only wait for
+// the goroutine reading the pipe, which takes no lock the streams' owner holds.
+TEXT runtime·cosmo_fsevents_callback(SB),NOSPLIT|NOFRAME,$0
+	SUB	$96, RSP
+	MOVD	R19, 24(RSP)
+	MOVD	R20, 32(RSP)
+	MOVD	R21, 40(RSP)
+	MOVD	R22, 48(RSP)
+	MOVD	R23, 56(RSP)
+	MOVD	R24, 64(RSP)
+	MOVD	R27, 72(RSP)
+	MOVD	R30, 80(RSP)
+	MOVD	R1, R19
+	MOVD	R2, R20
+	MOVD	R3, R21
+	MOVD	R4, R22
+	MOVD	R5, R23
+fsevent_next:
+	CBZ	R20, fsevent_done
+	MOVD	(R21), R0
+	MOVD	runtime·cosmoFSEventStrlen(SB), R12
+	BL	(R12)
+	MOVD	R0, R24
+	MOVD	(R23), R1
+	MOVD	R1, 0(RSP)
+	MOVWU	(R22), R1
+	MOVW	R1, 8(RSP)
+	MOVW	R24, 12(RSP)
+	MOVD	R19, R0
+	MOVD	RSP, R1
+	MOVD	$16, R2
+	MOVD	runtime·cosmoFSEventWrite(SB), R12
+	BL	(R12)
+	MOVD	R19, R0
+	MOVD	(R21), R1
+	MOVD	R24, R2
+	MOVD	runtime·cosmoFSEventWrite(SB), R12
+	BL	(R12)
+	ADD	$8, R21
+	ADD	$4, R22
+	ADD	$8, R23
+	SUB	$1, R20
+	B	fsevent_next
+fsevent_done:
+	MOVD	24(RSP), R19
+	MOVD	32(RSP), R20
+	MOVD	40(RSP), R21
+	MOVD	48(RSP), R22
+	MOVD	56(RSP), R23
+	MOVD	64(RSP), R24
+	MOVD	72(RSP), R27
+	MOVD	80(RSP), R30
+	ADD	$96, RSP
+	RET
+
 // Trampolines for the dlsym'd Apple pthread functions that back M
 // parking on XNU hosts (os_cosmo_arm64_sema.go). They follow upstream
 // sys_darwin_arm64.s exactly: asmcgocall has already switched to the

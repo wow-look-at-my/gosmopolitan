@@ -72,6 +72,8 @@ runs:
         probe=$!
         (cd testdata/sqliteprobe && GOOS=cosmo go build -x -trimpath -o "$GITHUB_WORKSPACE/sqliteprobe.com" .) 2>"$logs/sqliteprobe" &
         sqlite=$!
+        (cd testdata/fsnotifyprobe && GOOS=cosmo go build -x -trimpath -o "$GITHUB_WORKSPACE/fsnotifyprobe.com" .) 2>"$logs/fsnotifyprobe" &
+        fsnotify=$!
         # The platform subsets, tri and amd -- see docs/CI.md "build job" for what each drops.
         GOCOSMOPLATFORMS=linux/amd64,darwin/arm64,windows/amd64 GOOS=cosmo go build -x -trimpath -o fizzbuzz-tri.com testdata/fizzbuzz/fizzbuzz.go 2>"$logs/fizzbuzz-tri" &
         fizztri=$!
@@ -84,6 +86,7 @@ runs:
         wait "$fizz"
         wait "$probe"
         wait "$sqlite"
+        wait "$fsnotify"
         wait "$fizztri"
         wait "$probetri"
         wait "$fizzamd"
@@ -106,7 +109,7 @@ runs:
     - name: Stage the APE binaries for the test job
       shell: bash
       # The APE loaders ride along: the test job builds no toolchain, and git does not track them.
-      run: mkdir -p "${{ runner.temp }}/handoff/apeld" && cp fizzbuzz.com runtimeprobe.com sqliteprobe.com fizzbuzz-tri.com runtimeprobe-tri.com fizzbuzz-amd.com runtimeprobe-amd.com "${{ runner.temp }}/handoff/" && cp src/cmd/link/internal/ld/apeld/bin/apeld-* "${{ runner.temp }}/handoff/apeld/"
+      run: mkdir -p "${{ runner.temp }}/handoff/apeld" && cp fizzbuzz.com runtimeprobe.com sqliteprobe.com fsnotifyprobe.com fizzbuzz-tri.com runtimeprobe-tri.com fizzbuzz-amd.com runtimeprobe-amd.com "${{ runner.temp }}/handoff/" && cp src/cmd/link/internal/ld/apeld/bin/apeld-* "${{ runner.temp }}/handoff/apeld/"
 
     # The cgo probe carries C for both architectures, which cosmocc compiles here. Every test host runs it.
     - if: runner.os == 'Linux'
