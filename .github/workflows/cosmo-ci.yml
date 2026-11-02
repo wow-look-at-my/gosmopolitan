@@ -25,6 +25,17 @@ jobs:
       - uses: wow-look-at-my/actions@parallel-checkout#latest
         with:
           submodules: false
+      - name: Print the concurrency group
+        shell: bash
+        run: |
+          echo "repo: ${{ github.repository }}"
+          echo "workflow: ${{ github.workflow }}"
+          echo "ref: ${{ github.ref }}"
+          echo "run_id: ${{ github.run_id }}"
+          echo "group: gha_${{ github.repository }}_${{ github.workflow }}_${{ github.ref != 'refs/heads/master' && github.ref || github.run_id }}"
+          echo "cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}"
+          echo "::notice::concurrency group=gha_${{ github.repository }}_${{ github.workflow }}_${{ github.ref != 'refs/heads/master' && github.ref || github.run_id }}"
+          echo "::notice::cancel-in-progress=${{ github.ref != 'refs/heads/master' }}"
       - uses: wow-look-at-my/actions@no-all-builds-job#latest
       - uses: wow-look-at-my/slopfix@lkgb
       - uses: wow-look-at-my/actions@no-tests-in-yaml#latest
@@ -465,6 +476,20 @@ jobs:
             const coverageAt = logLines.indexOf('##### Test coverage');
             if (coverageAt < 0) {
               core.error('suite.log has no "##### Test coverage" block; dist test stopped before it measured coverage');
+              // A suite that stopped early names the test that stopped it, and the step's log is the only other place
+              // those lines exist. Copy them, and the end of the log, into the summary so a red leg explains itself.
+              const report = [`### Suite failures (${required('RUNNER_OS')})`, ''];
+              for (const line of logLines) {
+                if (/^(--- FAIL|FAIL\s|panic: |fatal error: )/.test(line)) report.push('    ' + line);
+                if (report.length >= 60) {
+                  report.push('    (stopped at 60 failure lines)');
+                  break;
+                }
+              }
+              if (report.length === 2) report.push('    no failing test line in the log; the end of it follows');
+              const tail = logLines.filter((line) => line.trim() !== '').slice(-40);
+              report.push('', 'The last 40 lines of the suite log:', '', ...tail.map((line) => '    ' + line));
+              fs.appendFileSync(summaryPath, report.join('\n').trimEnd() + '\n\n');
             } else {
               const block = [`### Test coverage (${required('RUNNER_OS')})`];
               for (const line of logLines.slice(coverageAt + 1)) {
@@ -594,6 +619,11 @@ jobs:
         with:
           go-version: '1.24'
           cache: false
+
+      # The hand-off unpacks an archive into the target directory and expects it to exist. The test job makes the directories here instead of relying on the unpack to make them.
+      - name: Make the directories the APE binaries land in
+        shell: bash
+        run: mkdir -p binaries/ape-binary-Linux binaries/ape-binary-macOS binaries/ape-binary-Windows
 
       - name: Download the ubuntu-origin APE binaries
         uses: wow-look-at-my/buildhost/.github/actions/buildhost-handoff@lkgb
