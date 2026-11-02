@@ -117,7 +117,7 @@ The cache stays after the program exits. macOS clears `/tmp` of files nobody use
 
 `APE_LOADER` still wins, and the script execs it where it lies. A darwin host where no unpack directory can be written execs an installed loader where it lies too. Such a process carries the loader's name.
 
-`dats/test/launch-time.dats` reports the launch cost on each test host, through an installed loader and through the default boot.
+`TestDarwinLaunchIsNoSlowerThanTheOldBoot` in apetest times the darwin boot against the boot before the cache. It alternates the boots in each round. It fails when the warm cache or a cache wiped before each launch is more than five percent slower.
 
 On Linux the loader maps the payload itself, so `/proc/self/exe` names the loader. The loader passes the APE's open descriptor as `AT_EXECFD`, and `os.Executable` reads the path from `/proc/self/fd/<n>`. A program that re-execs itself, or reads its own file, gets an openable path. `/proc/self/maps` names the APE.
 

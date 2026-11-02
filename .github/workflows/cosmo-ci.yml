@@ -648,7 +648,7 @@ jobs:
         timeout-minutes: ${{ github.ref == 'refs/heads/master' && 90 || 45 }}
         uses: wow-look-at-my/dats@lkgb
         with:
-          tests: dats/test/apetest.dats dats/test/readonly-boot.dats dats/test/launch-time.dats
+          tests: dats/test/apetest.dats dats/test/readonly-boot.dats
 
       # The container suite runs the boot script under busybox as well as dash.
       - if: runner.os == 'Linux'
