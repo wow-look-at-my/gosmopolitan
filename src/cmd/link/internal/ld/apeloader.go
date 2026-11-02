@@ -35,6 +35,9 @@ type apeLoader struct {
 	gzip   bool   // blob is gzipped, so the script pipes it through gzip -dc
 	offset int    // where in the header those bytes go
 	tag    string
+	hash   string // the loader's full SHA-256, which keys the darwin cache
+	// named boots through apeDarwinBootTmpl, which runs the loader from a cached copy with the program's file name.
+	named bool
 }
 
 // apeLoaderBlock is the dd block size the script copies a loader with.
@@ -57,7 +60,9 @@ func apeLoaderFor(p cosmoape.Platform) *apeLoader {
 	case cosmoape.LinuxARM64:
 		return newApeLoader("apeld-linux-arm64", apeldLinuxARM64, false, apeLdLinuxARM64Offset)
 	case cosmoape.DarwinARM64:
-		return newApeLoader("apeld-darwin-arm64", apeldDarwinARM64, true, apeLdDarwinARM64Offset)
+		l := newApeLoader("apeld-darwin-arm64", apeldDarwinARM64, true, apeLdDarwinARM64Offset)
+		l.named = true
+		return l
 	}
 	return nil
 }
@@ -73,7 +78,7 @@ func newApeLoader(name string, bin []byte, compress bool, offset int) *apeLoader
 		Exitf("APE: the %s loader region at %#x is not %d-aligned", name, offset, apeLoaderBlock)
 	}
 	sum := sha256.Sum256(bin)
-	l := &apeLoader{name: name, gzip: compress, offset: offset, tag: hex.EncodeToString(sum[:4])}
+	l := &apeLoader{name: name, gzip: compress, offset: offset, tag: hex.EncodeToString(sum[:4]), hash: hex.EncodeToString(sum[:])}
 	if compress {
 		l.blob = apeGzip(bin, name)
 	} else {

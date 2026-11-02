@@ -134,6 +134,16 @@ if [ "$case" = ram ]; then
 		echo "the run left a loader behind in /dev/shm: $before before, $after after" >&2
 		exit 1
 	fi
+	if [ "$(uname -s)" = Darwin ]; then
+		# darwin keeps the loader in a per-user cache under the program's name.
+		cached=$(find /tmp/ -maxdepth 2 -path "/tmp/.ape-apeld-darwin-arm64-*-$(id -u)/prog.com" -perm -u+x 2>/dev/null | wc -l)
+		if [ "$cached" -ne 1 ]; then
+			echo "the run must cache the loader once, under the program's name: found $cached" >&2
+			exit 1
+		fi
+		echo "read-only program directory, loader cached under the program's name: fizzbuzz"
+		exit 0
+	fi
 	echo "read-only program directory, loader from RAM: fizzbuzz, and nothing left"
 	exit 0
 fi

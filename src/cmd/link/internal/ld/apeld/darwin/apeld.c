@@ -7,6 +7,12 @@
 // ape-m1.c does after the shell compiles it with cc. Here it is compiled
 // once, ahead of time.
 //
+// ps reads argv out of this process's own memory, and that argv names the
+// loader first. So the loader moves the program's argv strings over its own
+// before anything else. A second exec would give an exact copy, at a cost
+// to every launch. The kernel keeps its own argc, so ps sees one empty
+// string after the program's argv.
+//
 // Contract with the payload (rt0_cosmo_arm64.s): sp = argc block, x2 =
 // program path, x3 = 8 (XNU), x15 = Syslib with magic "slib", x16 = entry.
 // Wrapped Syslib entries return -errno on failure, as Linux syscalls do.
@@ -16,7 +22,6 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <libkern/OSCacheControl.h>
-#include <limits.h>
 #include <mach/mach.h>
 #include <mach/vm_region.h>
 #include <pthread.h>
@@ -24,12 +29,12 @@
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/random.h>
 #include <sys/resource.h>
 #include <sys/select.h>
+#include <sys/stat.h>
 #include <sys/sysctl.h>
 #include <sys/time.h>
 #include <time.h>
@@ -39,7 +44,6 @@
 extern kern_return_t mach_vm_region(vm_map_t, mach_vm_address_t *, mach_vm_size_t *,
                                     vm_region_flavor_t, vm_region_info_t,
                                     mach_msg_type_number_t *, mach_port_t *);
-extern int _NSGetExecutablePath(char *, uint32_t *);
 
 #define PAGESZ 16384
 #define PAYLOAD_ALIGN 0x10000
@@ -312,80 +316,110 @@ __attribute__((noreturn)) static void enter(long *sp, const char *path, uint64_t
 	__builtin_unreachable();
 }
 
-// XNU names a process after the last component of the path given to exec, and
-// offers no call to change it later. The payload runs inside this process, so
-// the name has to be right before it loads. This execs the loader again through
-// a symlink called PROG.com. That loader is in a directory of its own so that
-// concurrent runs of one program cannot collide, and -n removes both on
-// arrival. A host with nowhere to write still runs the program, so every
-// failure here returns and the process keeps the loader's name.
-static void take_name(int argc, char **argv, char **envp, const char *self, int drop) {
-	const char *slash = strrchr(argv[1], '/');
-	const char *name = slash ? slash + 1 : argv[1];
-	const char *own = strrchr(self, '/');
-	own = own ? own + 1 : self;
-	if (!*name || !strcmp(name, own)) return;
-
-	char exe[PATH_MAX], target[PATH_MAX], dir[PATH_MAX], alias[PATH_MAX];
-	uint32_t size = sizeof exe;
-	if (_NSGetExecutablePath(exe, &size) || !realpath(exe, target)) return;
-	const char *tmp = getenv("TMPDIR");
-	if (!tmp) tmp = "/tmp";
-	if (snprintf(dir, sizeof dir, "%s/apeld.XXXXXX", tmp) >= (int)sizeof dir) return;
-	if (!mkdtemp(dir)) return;
-	if (snprintf(alias, sizeof alias, "%s/%s", dir, name) < (int)sizeof alias && !symlink(target, alias)) {
-		char **av = __builtin_alloca((argc + 3) * sizeof *av);
-		int n = 0;
-		av[n++] = alias;
-		av[n++] = "-n";
-		if (drop) av[n++] = "-u";
-		for (int i = 1; i < argc; i++) av[n++] = argv[i];
-		av[n] = 0;
-		execve(alias, av, envp);
-		unlink(alias);
+// retitle moves the program's argv strings over this loader's, where the
+// kernel shows them. Each string stays in the order it had. The bytes the
+// loader's strings left over become nulls.
+static void retitle(char **argv, int argc, int skip) {
+	char *dst = argv[0];
+	char *last = argv[argc - 1] + strlen(argv[argc - 1]);
+	for (int idx = skip; idx < argc; idx++) {
+		size_t len = strlen(argv[idx]) + 1;
+		memmove(dst, argv[idx], len);
+		argv[idx] = dst;
+		dst += len;
 	}
-	rmdir(dir);
+	if (dst <= last) memset(dst, 0, last + 1 - dst);
+}
+
+extern unsigned char *CC_SHA256(const void *data, uint32_t len, unsigned char *md);
+
+// The boot script caches this loader as .ape-apeld-darwin-arm64-<sha256>-<uid>/<program>.
+// cache_key returns the <sha256> in path, or NULL when path names no cache.
+static const char *cache_key(const char *path) {
+	static const char mark[] = "/.ape-apeld-darwin-arm64-";
+	const char *want = NULL;
+	for (const char *at = strstr(path, mark); at; at = strstr(at + 1, mark)) want = at + sizeof mark - 1;
+	if (!want || strlen(want) < 66 || want[64] != '-') return NULL;
+	return want;
+}
+
+// hash_matches reports whether the SHA-256 of the file at self is want.
+static int hash_matches(const char *self, const char *want) {
+	int fd = open(self, O_RDONLY | O_CLOEXEC);
+	off_t size = fd < 0 ? -1 : lseek(fd, 0, SEEK_END);
+	void *bytes = size > 0 ? mmap(NULL, size, PROT_READ, MAP_PRIVATE, fd, 0) : MAP_FAILED;
+	if (fd >= 0) close(fd);
+	unsigned char md[32];
+	int same = bytes != MAP_FAILED && CC_SHA256(bytes, (uint32_t)size, md);
+	if (bytes != MAP_FAILED) munmap(bytes, size);
+	static const char digits[] = "0123456789abcdef";
+	for (int idx = 0; same && idx < 32; idx++)
+		same = want[2 * idx] == digits[md[idx] >> 4] && want[2 * idx + 1] == digits[md[idx] & 15];
+	return same;
+}
+
+// A cached copy hashes its own file. A copy whose bytes do not match the
+// cache's name is removed, and the run fails, so a corrupt entry never runs twice.
+static void check_cached(const char *self) {
+	const char *want = cache_key(self);
+	if (want && !hash_matches(self, want)) {
+		unlink(self);
+		die("the cached loader does not match its hash, so it was removed. Run the program again");
+	}
+}
+
+// install moves a first-launch copy into the cache directory, under its own
+// file name. The copy runs from <dir>/<program>, or from <cache>/.<pid>/<program>
+// when that name was taken. Its bytes must match the hash in the cache's
+// name. The rename is atomic, so a concurrent launch sees the old entry or
+// this one. A cache this user cannot own only costs the next launch an
+// unpack, so the copy is then removed and the program still starts.
+static void install(const char *self, const char *cache) {
+	const char *want = cache_key(cache);
+	if (!want || strchr(want, '/') || !hash_matches(self, want)) {
+		unlink(self);
+		die("the unpacked loader does not match its hash, so it was removed. Run the program again");
+	}
+	const char *name = strrchr(self, '/');
+	char dest[1024];
+	if (!name || strlen(cache) + strlen(name) >= sizeof dest) {
+		unlink(self);
+		return;
+	}
+	strcpy(dest, cache);
+	strcat(dest, name);
+	struct stat st;
+	if ((mkdir(cache, 0700) && errno != EEXIST) || lstat(cache, &st) || !S_ISDIR(st.st_mode) ||
+	    st.st_uid != getuid() || (st.st_mode & 077) || rename(self, dest)) {
+		unlink(self);
+		return;
+	}
+	// A copy from a per-run directory leaves that directory empty.
+	size_t len = strlen(cache);
+	if (strncmp(self, cache, len) == 0 && self[len] == '/' && self[len + 1] == '.' && name > self + len) {
+		char run[1024];
+		memcpy(run, self, name - self);
+		run[name - self] = 0;
+		rmdir(run);
+	}
 }
 
 int main(int argc, char **argv, char **envp) {
-	if (argc < 2) die("usage: apeld [-u] PROG.com [args...]");
+	if (argc < 2) die("usage: apeld [-i CACHE] PROG.com [args...]");
+	check_cached(argv[0]);
 
-	// -n marks a run that came through take_name's symlink. The symlink and
-	// its directory go first, and the loader's real path survives for -u.
-	char target[PATH_MAX];
-	const char *self = argv[0];
-	int named = argc > 2 && argv[1][0] == '-' && argv[1][1] == 'n' && argv[1][2] == 0;
-	if (named) {
-		if (!realpath(argv[0], target)) die("cannot resolve the loader's path");
-		unlink(argv[0]);
-		// ps and pkill read argv[0] from this memory, so the slash goes back.
-		char *slash = strrchr(argv[0], '/');
-		*slash = 0;
-		rmdir(argv[0]);
-		*slash = '/';
-		self = target;
-		argv++;
-		argc--;
+	// The boot script keeps this loader in a per-user cache, under the
+	// program's file name. XNU names the process after that file. -i marks
+	// the first launch, which runs from an unpacked copy and installs it.
+	int skip = 1;
+	if (argc > 3 && argv[1][0] == '-' && argv[1][1] == 'i' && argv[1][2] == 0) {
+		install(argv[0], argv[2]);
+		skip = 3;
 	}
-
-	// -u removes this loader's own file before anything else. A caller that
-	// unpacked a throwaway copy passes it, so an APE leaves no second file on
-	// the host. It is argv and not an environment variable on purpose. An
-	// environment variable reaches the payload, and a nested run could then
-	// delete a loader somebody installed.
-	//
-	// This host has no tmpfs, so that copy is on a disk. Removing it here is
-	// what keeps the disk as it was. A caller cannot instead unlink the file
-	// and exec it through /dev/fd: XNU answers that with EACCES, where linux
-	// allows it.
-	int drop = argc > 2 && argv[1][0] == '-' && argv[1][1] == 'u' && argv[1][2] == 0;
-	if (drop) {
-		argv++;
-		argc--;
-	}
-	if (!named) take_name(argc, argv, envp, self, drop);
-	if (drop) unlink(self);
-	const char *path = argv[1];
+	retitle(argv, argc, skip);
+	char **pargv = argv + skip;
+	int pargc = argc - skip;
+	const char *path = pargv[0];
 	int fd = open(path, O_RDONLY | O_CLOEXEC);
 	if (fd < 0) die("cannot open program");
 
@@ -426,12 +460,12 @@ int main(int argc, char **argv, char **envp) {
 
 	int envc = 0;
 	while (envp[envc]) envc++;
-	long words = 1 + (argc - 1) + 1 + envc + 1 + AUXV_WORDS;
+	long words = 1 + pargc + 1 + envc + 1 + AUXV_WORDS;
 	long *sp = __builtin_alloca(words * 8 + 16);
 	sp = (long *)((uintptr_t)sp & -16);
 	long *w = sp;
-	*w++ = argc - 1;
-	for (int i = 1; i < argc; i++) *w++ = (long)argv[i];
+	*w++ = pargc;
+	for (int i = 0; i < pargc; i++) *w++ = (long)pargv[i];
 	*w++ = 0;
 	for (int i = 0; i < envc; i++) *w++ = (long)envp[i];
 	*w++ = 0;
