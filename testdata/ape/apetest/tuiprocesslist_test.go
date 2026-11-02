@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -98,11 +99,14 @@ func captureScreen(t *testing.T, command string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 	var cmd *exec.Cmd
+	// -F on macOS and -f on Linux flush each write, so a stopped script still holds the screen.
 	if runtime.GOOS == "darwin" {
-		cmd = exec.CommandContext(ctx, "script", "-q", out, "/bin/sh", "-c", shell)
+		cmd = exec.CommandContext(ctx, "script", "-q", "-F", out, "/bin/sh", "-c", shell)
 	} else {
 		cmd = exec.CommandContext(ctx, "script", "-qfc", shell, out)
 	}
+	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+	cmd.WaitDelay = 2 * time.Second
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
 	// script stops at the end of its input, so the input stays open until the context ends.
 	input, hold, err := os.Pipe()

@@ -118,7 +118,8 @@ func TestDarwinLaunchIsNoSlowerThanTheOldBoot(t *testing.T) {
 		}},
 	}
 
-	const rounds = 60
+	// One runner's launches vary by more than the limit, so the median needs many rounds.
+	const rounds = 150
 	times := make([][]time.Duration, len(modes))
 	for round := range rounds {
 		for step := range modes {
