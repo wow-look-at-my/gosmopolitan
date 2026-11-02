@@ -152,20 +152,27 @@ func TestSlimLoaders(t *testing.T) {
 	sel := slimPlatforms(t)
 	bin := slimBinary(t)
 
-	// Every loader sits raw, at the offset the linker gives it.
+	// Every loader sits raw, where the script's dd reads it.
+	regions := loaderRegionsIn(t, slimHead(t))
 	for _, tc := range []struct {
 		platform string
-		offset   int
 		magic    []byte
 	}{
-		{"linux/amd64", 0x2800, []byte("\x7fELF")},
-		{"linux/arm64", 0x3800, []byte("\x7fELF")},
-		{"darwin/arm64", 0x4800, []byte{0xcf, 0xfa, 0xed, 0xfe}},
+		{"linux/amd64", []byte("\x7fELF")},
+		{"linux/arm64", []byte("\x7fELF")},
+		{"darwin/arm64", []byte{0xcf, 0xfa, 0xed, 0xfe}},
 	} {
-		want := sel[tc.platform]
-		got := len(bin) > tc.offset+len(tc.magic) &&
-			bytes.Equal(bin[tc.offset:tc.offset+len(tc.magic)], tc.magic)
-		assert.Equal(t, want, got, "%s loader at %#x", tc.platform, tc.offset)
+		name := "apeld-" + strings.ReplaceAll(tc.platform, "/", "-")
+		got := false
+		for _, region := range regions {
+			if region.name != name {
+				continue
+			}
+			require.LessOrEqual(t, region.offset+len(tc.magic), len(bin), "the %s region must be inside the file", name)
+			assert.Equal(t, tc.magic, bin[region.offset:region.offset+len(tc.magic)], "%s at %#x", name, region.offset)
+			got = true
+		}
+		assert.Equal(t, sel[tc.platform], got, "the script copies %s", name)
 	}
 }
 

@@ -64,8 +64,13 @@ var loaderDD = regexp.MustCompile(`dd if="\$o" bs=(\d+) skip=(\d+) count=(\d+) 2
 // loaderRegions reads every loader copy out of the script, with dd's block counts turned into bytes.
 func loaderRegions(t *testing.T) []loaderRegion {
 	t.Helper()
+	return loaderRegionsIn(t, first8K(t))
+}
+
+// loaderRegionsIn reads the loader copies out of the script at the start of head.
+func loaderRegionsIn(t *testing.T, head []byte) []loaderRegion {
+	t.Helper()
 	var out []loaderRegion
-	head := first8K(t)
 	for _, at := range loaderDD.FindAllSubmatchIndex(head, -1) {
 		var nums [3]int
 		for idx := range nums {
