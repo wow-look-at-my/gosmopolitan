@@ -22,7 +22,9 @@ jobs:
       id-token: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: wow-look-at-my/actions@parallel-checkout#latest
+        with:
+          submodules: false
       - uses: wow-look-at-my/actions@no-all-builds-job#latest
       - uses: wow-look-at-my/slopfix@lkgb
       - uses: wow-look-at-my/actions@no-tests-in-yaml#latest
@@ -33,9 +35,6 @@ jobs:
         uses: wow-look-at-my/dats@lkgb
         with:
           tests: dats/source
-
-      - if: failure()
-        uses: wow-look-at-my/actions@fail-fast#latest
 
   # Build Go toolchain and APE test binary on each build platform -- see docs/CI.md "build job".
   build:
@@ -54,14 +53,14 @@ jobs:
     runs-on: ${{ matrix.build-os }}
 
     steps:
-      # The track-submodules step checks out the submodules. Without the ones under src/cmd/vendor, cmd/go cannot build.
-      - uses: actions/checkout@v4
+      # Every org submodule lands on its branch head at the commit this run locked. Without the ones under src/cmd/vendor, cmd/go cannot build.
+      - uses: wow-look-at-my/actions@parallel-checkout#latest
         with:
-          submodules: false
           lfs: true
+          submodule-branch: ${{ github.ref_name }}
+          submodule-branch-lock: https://pazer.build
       - uses: wow-look-at-my/actions@disable-windows-defender#latest
       - uses: wow-look-at-my/actions@secret-server#latest
-      - uses: ./.github/actions/track-submodules
 
       # Linux confines a dependency's generate directive with it; macOS uses seatbelt and needs nothing.
       - uses: wow-look-at-my/actions@bubblewrap#latest
@@ -77,7 +76,7 @@ jobs:
 
       # toolchain1 and toolchain2 build with no shared cache. Kept, they take 2.4s instead of 88s.
       - name: Restore the bootstrap build cache
-        uses: actions/cache/restore@v4
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-cache-restore@lkgb
         with:
           path: pkg/obj/go-build
           key: dist-bootstrap-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
@@ -96,7 +95,7 @@ jobs:
           windows: cd src && .\make.bat -v
         env:
           GOROOT_BOOTSTRAP: ${{ env.GOROOT }}
-          # The track-submodules step put every org submodule on its branch head. dist runs the same script again otherwise, 35s on NT.
+          # The checkout put every org submodule on its branch head. dist runs submodulebranch.bash again otherwise, 35s on NT.
           GOSUBMODULEBRANCH: 'off'
 
       # A read refreshes an entry's mtime once it is an hour old, so an entry older than 90 minutes is one this build never read.
@@ -112,15 +111,12 @@ jobs:
       # The upload takes up to a minute. A build that added no entry and trimmed none has nothing new to keep.
       - name: Keep the bootstrap build cache between runs
         if: steps.bootstrap-before.outputs.files != steps.bootstrap-after.outputs.files
-        uses: actions/cache/save@v4
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-cache-save@lkgb
         with:
           path: pkg/obj/go-build
           key: dist-bootstrap-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
 
       - uses: ./.github/actions/build-leg
-
-      - if: failure()
-        uses: wow-look-at-my/actions@fail-fast#latest
 
   # The ubuntu build leg, its own job so cosmo-checks, wasm and wasm-suite take its toolchain the moment it exists: needs waits. On a whole matrix.
   build-linux:
@@ -131,13 +127,13 @@ jobs:
       actions: write
     runs-on: ${{ github.event.repository.visibility == 'public' && 'ubuntu-latest' || vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: wow-look-at-my/actions@parallel-checkout#latest
         with:
-          submodules: false
           lfs: true
+          submodule-branch: ${{ github.ref_name }}
+          submodule-branch-lock: https://pazer.build
       - uses: wow-look-at-my/actions@disable-windows-defender#latest
       - uses: wow-look-at-my/actions@secret-server#latest
-      - uses: ./.github/actions/track-submodules
 
       # cmd/go confines a dependency's generate directive with it, and fails the build when it is absent.
       - uses: wow-look-at-my/actions@bubblewrap#latest
@@ -153,7 +149,7 @@ jobs:
 
       # toolchain1 and toolchain2 build with no shared cache. Kept, they take 2.4s instead of 88s.
       - name: Restore the bootstrap build cache
-        uses: actions/cache/restore@v4
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-cache-restore@lkgb
         with:
           path: pkg/obj/go-build
           key: dist-bootstrap-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
@@ -169,7 +165,7 @@ jobs:
         run: cd src && ./make.bash -v
         env:
           GOROOT_BOOTSTRAP: ${{ env.GOROOT }}
-          # The track-submodules step put every org submodule on its branch head. dist runs the same script again otherwise, 35s on NT.
+          # The checkout put every org submodule on its branch head. dist runs submodulebranch.bash again otherwise, 35s on NT.
           GOSUBMODULEBRANCH: 'off'
 
       # A read refreshes an entry's mtime once it is an hour old, so an entry older than 90 minutes is one this build never read.
@@ -185,15 +181,12 @@ jobs:
       # The upload takes up to a minute. A build that added no entry and trimmed none has nothing new to keep.
       - name: Keep the bootstrap build cache between runs
         if: steps.bootstrap-before.outputs.files != steps.bootstrap-after.outputs.files
-        uses: actions/cache/save@v4
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-cache-save@lkgb
         with:
           path: pkg/obj/go-build
           key: dist-bootstrap-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
 
       - uses: ./.github/actions/build-leg
-
-      - if: failure()
-        uses: wow-look-at-my/actions@fail-fast#latest
 
   # The whole suite per host, one leg each; nothing downstream of a build waits on it.
   suite:
@@ -228,22 +221,23 @@ jobs:
           }
           Get-PSDrive C, D | ForEach-Object { Write-Host ("{0}: {1:N1} GB free" -f $_.Name, ($_.Free/1GB)) }
 
-      - uses: actions/checkout@v4
+      # run.bash rebuilds the cmd packages from this tree, so the suite tests the client source the build leg linked in.
+      - uses: wow-look-at-my/actions@parallel-checkout#latest
         with:
-          submodules: false
           lfs: true
+          submodule-branch: ${{ github.ref_name }}
+          submodule-branch-lock: https://pazer.build
       - uses: wow-look-at-my/actions@disable-windows-defender#latest
       - uses: wow-look-at-my/actions@secret-server#latest
-      # run.bash rebuilds the cmd packages from this tree, so the suite tests the client source the build leg linked in.
-      - uses: ./.github/actions/track-submodules
       # run.bash reaches the same sandboxed generate directives the build leg does.
       - uses: wow-look-at-my/actions@bubblewrap#latest
       # TestRepeatBootstrap runs make.bash again, which compiles the APE loaders with these.
       - uses: ./.github/actions/apeld-tools
 
       - name: Take the toolchain its build leg built
-        uses: wow-look-at-my/actions@cache-download#latest
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-handoff@lkgb
         with:
+          mode: receive
           name: toolchain-${{ runner.os }}
           path: .
 
@@ -470,9 +464,6 @@ jobs:
             fs.appendFileSync(summaryPath, lines.join('\n') + '\n');
             core.info(`recorded ${rows.length} package timings`);
 
-      - if: failure()
-        uses: wow-look-at-my/actions@fail-fast#latest
-
   # Checks whose answer does not depend on the host. Each runs once, here, on the linux toolchain.
   cosmo-checks:
     timeout-minutes: ${{ github.ref == 'refs/heads/master' && 120 || 60 }}
@@ -484,17 +475,18 @@ jobs:
     runs-on: ${{ github.event.repository.visibility == 'public' && 'ubuntu-latest' || vars.CI_RUNNER || 'ubuntu-latest' }}
 
     steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: false
-          lfs: true
-      - uses: wow-look-at-my/actions@secret-server#latest
       # embedded-std.dats rebuilds the go command from this tree, so the submodules carry their branch heads here too.
-      - uses: ./.github/actions/track-submodules
+      - uses: wow-look-at-my/actions@parallel-checkout#latest
+        with:
+          lfs: true
+          submodule-branch: ${{ github.ref_name }}
+          submodule-branch-lock: https://pazer.build
+      - uses: wow-look-at-my/actions@secret-server#latest
 
       - name: Take the toolchain build-linux built
-        uses: wow-look-at-my/actions@cache-download#latest
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-handoff@lkgb
         with:
+          mode: receive
           name: toolchain-Linux
           path: .
 
@@ -526,8 +518,9 @@ jobs:
       # cosmo-cgo.dats compiles C for both cosmo architectures and runs the arm64 payload under qemu.
       - uses: ./.github/actions/cosmocc
       - name: Install qemu-user
-        shell: bash
-        run: sudo apt-get install -y -qq qemu-user
+        uses: wow-look-at-my/actions@cached-apt#latest
+        with:
+          packages: qemu-user
 
       # Every host-independent suite. Which tests each covers is the suite's decision, not this file's.
       - name: The dats suites
@@ -535,9 +528,6 @@ jobs:
         uses: wow-look-at-my/dats@lkgb
         with:
           tests: dats/checks
-
-      - if: failure()
-        uses: wow-look-at-my/actions@fail-fast#latest
 
   # Test all APE binaries on each platform using Go tests -- see docs/CI.md "test job".
   test:
@@ -557,12 +547,9 @@ jobs:
 
     steps:
       - name: Checkout code (for Go tests)
-        uses: actions/checkout@v4
+        uses: wow-look-at-my/actions@parallel-checkout#latest
         with:
-          submodules: false
           lfs: true
-      - run: bash ./src/submodulefetch.bash
-        shell: bash
 
       - uses: wow-look-at-my/actions@disable-windows-defender#latest
 
@@ -573,22 +560,25 @@ jobs:
           cache: false
 
       - name: Download the ubuntu-origin APE binaries
-        uses: wow-look-at-my/actions@cache-download#latest
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-handoff@lkgb
         with:
+          mode: receive
           name: ape-binary-Linux
           path: binaries/ape-binary-Linux
 
       - name: Download the macOS-origin APE binaries
-        uses: wow-look-at-my/actions@cache-download#latest
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-handoff@lkgb
         with:
+          mode: receive
           name: ape-binary-macOS
           path: binaries/ape-binary-macOS
 
       # Only an NT leg produces this origin, and only NT's own apetest case reads it.
       - name: Download the windows-origin APE binaries
         if: matrix.test-os == 'windows-latest'
-        uses: wow-look-at-my/actions@cache-download#latest
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-handoff@lkgb
         with:
+          mode: receive
           name: ape-binary-Windows
           path: binaries/ape-binary-Windows
 
@@ -633,6 +623,30 @@ jobs:
       # The container suite runs the boot script under busybox as well as dash.
       - if: runner.os == 'Linux'
         run: sudo apt-get install -y busybox-static
+      # The container shape makes a user namespace inside the dats bwrap sandbox. Ubuntu 26.04 enforces AppArmor profiles that refuse it.
+      - name: Let unshare make a user namespace inside bwrap (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The unpriv_bwrap profile strips every capability from what bwrap starts, so a nested unshare -m fails.
+          for file in /etc/apparmor.d/bwrap-userns-restrict /etc/apparmor.d/unshare-userns-restrict; do
+            [ -e "$file" ] || continue
+            for profile in $(sudo apparmor_parser -N "$file"); do
+              if sudo grep -q "^${profile} " /sys/kernel/security/apparmor/profiles; then
+                sudo apparmor_parser -R "$file"
+                echo "unloaded the AppArmor profiles of ${file}"
+                break
+              fi
+            done
+          done
+          for knob in apparmor_restrict_unprivileged_userns apparmor_restrict_unprivileged_unconfined; do
+            if [ -e "/proc/sys/kernel/${knob}" ]; then
+              sudo sysctl -w "kernel.${knob}=0"
+            fi
+          done
+          bwrap --ro-bind / / --dev /dev --proc /proc --unshare-user unshare -rm true
+
       # The container shape is built from mount namespaces, so it is linux only.
       - name: An APE runs in a read-only container (dats)
         if: runner.os == 'Linux'
@@ -660,9 +674,6 @@ jobs:
           & "$env:RUNNER_TEMP\dats.exe" -v --no-sandbox test dats/test/apetest.dats dats/test/nt.dats
           exit $LASTEXITCODE
 
-      - if: failure()
-        uses: wow-look-at-my/actions@fail-fast#latest
-
   # Regression-gate the WebAssembly ports (GOOS=js and GOOS=wasip1) -- see docs/WASM.md and docs/CI.md "wasm job".
   wasm:
     timeout-minutes: ${{ github.ref == 'refs/heads/master' && 90 || 45 }}
@@ -675,13 +686,13 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: wow-look-at-my/actions@parallel-checkout#latest
         with:
-          submodules: false
           lfs: true
+          submodule-branch: ${{ github.ref_name }}
+          submodule-branch-lock: https://pazer.build
 
       - uses: wow-look-at-my/actions@secret-server#latest
-      - uses: ./.github/actions/track-submodules
 
       - name: Setup Go bootstrap toolchain
         uses: actions/setup-go@v5
@@ -702,8 +713,9 @@ jobs:
         run: GOOS=linux GOARCH=amd64 GOBIN="${{ runner.temp }}/wasibin" go install github.com/tetratelabs/wazero/cmd/wazero@v1.12.0 && sudo install -m 0755 "${{ runner.temp }}/wasibin/wazero" /usr/local/bin/wazero
 
       - name: Take the toolchain build-linux built
-        uses: wow-look-at-my/actions@cache-download#latest
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-handoff@lkgb
         with:
+          mode: receive
           name: toolchain-Linux
           path: .
 
@@ -723,9 +735,6 @@ jobs:
         with:
           tests: dats/wasm
 
-      - if: failure()
-        uses: wow-look-at-my/actions@fail-fast#latest
-
   # The whole test suite for each wasm port, the gate the other ports get -- see docs/CI.md "wasm-suite job".
   wasm-suite:
     timeout-minutes: ${{ github.ref == 'refs/heads/master' && 240 || 120 }}
@@ -742,13 +751,13 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: wow-look-at-my/actions@parallel-checkout#latest
         with:
-          submodules: false
           lfs: true
+          submodule-branch: ${{ github.ref_name }}
+          submodule-branch-lock: https://pazer.build
 
       - uses: wow-look-at-my/actions@secret-server#latest
-      - uses: ./.github/actions/track-submodules
 
       - name: Setup Go bootstrap toolchain
         uses: actions/setup-go@v5
@@ -769,10 +778,10 @@ jobs:
         shell: bash
         run: curl -sSfL https://wasmtime.dev/install.sh | bash -s -- --version v14.0.4
 
-      # wasmtime compiles each test binary's module before running it. That compile is most of a cheap package: sort.test costs 2.53s cold against 1.05s warm. Every branch reads the cache. Only master writes it, and it keeps one copy: an entry is 4.6 GiB against the repository's 10 GiB.
+      # wasmtime compiles each test binary's module before running it. That compile is most of a cheap package: sort.test costs 2.53s cold against 1.05s warm. Every branch reads the cache. Only master writes it, because an entry is 4.6 GiB.
       - name: Keep the compiled wasm modules between runs
         if: matrix.port == 'wasip1'
-        uses: actions/cache/restore@v4
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-cache-restore@lkgb
         with:
           path: ~/.cache/wasmtime
           key: wasmtime-modules-${{ matrix.port }}-${{ github.sha }}
@@ -780,8 +789,9 @@ jobs:
 
 
       - name: Take the toolchain build-linux built
-        uses: wow-look-at-my/actions@cache-download#latest
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-handoff@lkgb
         with:
+          mode: receive
           name: toolchain-Linux
           path: .
 
@@ -806,7 +816,7 @@ jobs:
 
       - name: Download the log-streamer client
         id: lsclient
-        uses: wow-look-at-my/buildhost/.github/actions/buildhost-download@master
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-download@lkgb
         with:
           project: log-streamer/ls-client
           token: ${{ steps.lstoken.outputs.token }}
@@ -889,7 +899,7 @@ jobs:
         run: |
           size=$(du -sm ~/.cache/wasmtime 2>/dev/null | cut -f1)
           echo "wasm module cache: ${size:-0} MiB"
-          if [ "${size:-0}" -gt 2048 ]; then rm -rf ~/.cache/wasmtime; fi
+          if [ "${size:-0}" -gt 2048 ]; then rm -rf ~/.cache/wasmtime && mkdir -p ~/.cache/wasmtime; fi
 
       - name: Delete the older wasm module caches
         if: matrix.port == 'wasip1' && github.ref == 'refs/heads/master'
@@ -907,13 +917,10 @@ jobs:
 
       - name: Save the compiled wasm modules
         if: matrix.port == 'wasip1' && github.ref == 'refs/heads/master'
-        uses: actions/cache/save@v4
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-cache-save@lkgb
         with:
           path: ~/.cache/wasmtime
           key: wasmtime-modules-${{ matrix.port }}-${{ github.sha }}
-
-      - if: failure()
-        uses: wow-look-at-my/actions@fail-fast#latest
 
 
   # Publishes an installable toolchain distribution to buildhost on every green push -- see docs/CI.md "publish jobs".
@@ -931,7 +938,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: wow-look-at-my/actions@parallel-checkout#latest
         with:
           submodules: false
           lfs: true
@@ -965,8 +972,9 @@ jobs:
 
     steps:
       - name: Take the archive its build leg packaged
-        uses: wow-look-at-my/actions@cache-download#latest
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-handoff@lkgb
         with:
+          mode: receive
           name: distpack-${{ matrix.goos }}-${{ matrix.goarch }}
           path: distpack
 
@@ -1018,7 +1026,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: wow-look-at-my/actions@parallel-checkout#latest
         with:
           submodules: false
           lfs: true
@@ -1037,19 +1045,3 @@ jobs:
           echo "::notice::published gosmopolitan v$v for linux/amd64 and darwin/arm64"
           echo "::notice::linux:  https://dl.pazer.build/gosmopolitan?branch=$b&os=linux&arch=amd64"
           echo "::notice::darwin: https://dl.pazer.build/gosmopolitan?branch=$b&os=darwin&arch=arm64"
-
-  # A run hands off about 1.5GB, and the repository's cache holds 10GB. Concurrent runs evict each other's hand-offs unless each run drops its own when its readers finish.
-  cleanup:
-    needs: [suite, cosmo-checks, test, wasm, wasm-suite, publish-upload, publish-finish]
-    # A cancelled or failed run still has hand-offs to drop; without this the job is skipped and they are orphaned.
-    if: always()
-    timeout-minutes: ${{ github.ref == 'refs/heads/master' && 20 || 10 }}
-    runs-on: ${{ github.event.repository.visibility == 'public' && 'ubuntu-latest' || vars.CI_RUNNER || 'ubuntu-latest' }}
-    permissions:
-      id-token: write
-      contents: read
-      actions: write
-      id-token: write
-    steps:
-      - uses: wow-look-at-my/actions@cache-cleanup#latest
-        if: always()

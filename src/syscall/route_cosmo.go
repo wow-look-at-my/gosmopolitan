@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// The routing MIB, as every BSD numbers it.
+
 package syscall
 
 import _ "unsafe" // for linkname

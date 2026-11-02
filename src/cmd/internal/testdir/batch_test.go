@@ -3,6 +3,8 @@
 
 package testdir_test
 
+import _ "embed"
+
 import (
 	"bytes"
 	"crypto/rand"
@@ -123,6 +125,8 @@ func runWatched(argv []string, mark []byte, wait time.Duration) []byte {
 	cmd.Stdout, cmd.Stderr = out, out
 	cmd.WaitDelay = 10 * time.Second
 	if err := cmd.Start(); err != nil {
+		// Nothing ran, so the caller has no output to go by.
+		fmt.Fprintf(os.Stderr, "testdir batch: cannot start %s: %v\n", argv[0], err)
 		return nil
 	}
 	done := make(chan struct{})
@@ -321,7 +325,7 @@ func eligible(src string) (string, bool) {
 func rewrite(src, pkgname string) string {
 	src = strings.Replace(src, "\npackage main\n", "\npackage "+pkgname+"\n", 1)
 	// The dispatcher does not inline Main, as no caller inlines a main.
-	return strings.Replace(src, "\nfunc main() {", "\n// Main is this test program's own main.\n//\n//go:noinline\nfunc Main() {", 1)
+	return strings.Replace(src, "\nfunc main() {", rewriteCpp, 1)
 }
 
 func (bat *batch) build(corpus string) {
@@ -472,6 +476,12 @@ func (bat *batch) build(corpus string) {
 		}
 		drop := slices.IndexFunc(joined, func(prog program) bool { return prog.ID == last })
 		if drop < 0 {
+			if len(inits) == 0 && last == "" {
+				// Not one mark came back, so no program is to blame: the dispatcher does not start on this port.
+				fmt.Fprintf(os.Stderr, "testdir batch: the dispatcher printed nothing, and each program runs alone\n%s", out)
+				bat.exe, bat.ids = "", nil
+				return
+			}
 			bat.err = fmt.Errorf("testdir batch: the dispatcher ended before main, and no program's initialization was under way\n%s", out)
 			return
 		}
@@ -550,3 +560,6 @@ func splitInits(out []byte, nonce string) (inits map[string][]byte, last string,
 		}
 	}
 }
+
+//go:embed testdata/rewrite.cpp
+var rewriteCpp string

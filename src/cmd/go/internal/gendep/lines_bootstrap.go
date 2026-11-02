@@ -3,6 +3,8 @@
 
 //go:build cmd_go_bootstrap || js || wasip1
 
+// fileLines reads the file whole.
+
 package gendep
 
 // fileLines reads the file whole. go_bootstrap builds without go-mmap and its

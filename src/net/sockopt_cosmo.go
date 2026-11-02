@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// Allow both IP versions even if the OS default is otherwise. some operating systems never admit this option.
+
 package net
 
 import (

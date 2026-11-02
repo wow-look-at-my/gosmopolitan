@@ -50,3 +50,7 @@ tests:
 		printf '  deploy:\n    if: ${{ github.event_name == %s }}\n' "'push'" > "$TMPDIR/plain.yml"
 		dats/source/waiver-expiry.sh "$TMPDIR/plain.yml"
 	  exit: 0
+
+	- desc: the guard parses with the sh named by its own shebang
+	  cmd: sh -n dats/source/waiver-expiry.sh
+	  exit: 0

@@ -1,8 +1,5 @@
 #!/usr/bin/env bash
 # profile-suite.bash OUTDIR -- runs src/run.bash under process accounting and perf.
-# It writes OUTDIR/report.md: the CPU of each program, and the hottest functions.
-# Linux only. A non-root caller needs sudo, for accton and perf alone.
-# The suite runs as the caller, because some tests behave differently as root.
 
 set -euo pipefail
 
@@ -31,8 +28,8 @@ fi
 "${asroot[@]}" rm -f "$out/pacct"
 "${asroot[@]}" touch "$out/pacct"
 "${asroot[@]}" accton "$out/pacct"
-# perf closes a data file every interval, so each one is a finished slice of
-# the run that can be reported while the suite goes on.
+# perf closes a data file every interval, so each is a finished slice of the
+# run that can be reported while the suite goes on.
 interval=300
 "${asroot[@]}" perf record -a -g -F 19 --switch-output="${interval}s" -o "$out/perf.data" >"$out/perf-record.log" 2>&1 &
 perfpid=$!
@@ -40,7 +37,8 @@ perfpid=$!
 # programs prints the CPU each program used so far, from process accounting.
 programs() {
 	echo '```'
-	"${asroot[@]}" sa -a "$out/pacct" | head -"$1"
+	"${asroot[@]}" sa -a "$out/pacct" >"$out/sa.txt"
+	head -"$1" "$out/sa.txt"
 	echo '```'
 }
 
@@ -51,7 +49,9 @@ hottest() {
 	echo '```'
 	for data in "$@"; do
 		"${asroot[@]}" perf report -i "$data" --stdio --no-children -g none \
-			--sort comm,sym --percent-limit 0.5 2>/dev/null | grep -v -e '^#' -e '^$' | head -"$limit"
+			--sort comm,sym --percent-limit 0.5 2>/dev/null >"$out/perf-report.txt"
+		grep -v -e '^#' -e '^$' "$out/perf-report.txt" >"$out/perf-hot.txt" || [ "$?" -eq 1 ]
+		head -"$limit" "$out/perf-hot.txt"
 	done
 	echo '```'
 }
@@ -63,7 +63,6 @@ start=$SECONDS
 (
 	reported=""
 	# The sleep holds this script's stdout, and the step waits for that pipe to close.
-	# So the kill that stops this loop stops the sleep too.
 	sleeper=""
 	trap 'kill "$sleeper" 2>/dev/null; exit 0' TERM
 	while :; do

@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// Darwin (XNU) network poller for GOOS=cosmo, built on kqueue.
+
 package runtime
 
 // Darwin (XNU) network poller for GOOS=cosmo, built on kqueue.

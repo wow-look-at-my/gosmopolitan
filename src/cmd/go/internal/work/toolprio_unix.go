@@ -15,30 +15,26 @@ import (
 const maxNice = 19
 
 // lowerToolPriority sets the nice value of process pid to
-// toolNiceIncrement above the go command's own, at most maxNice.
-// A process that has already exited has nothing to lower.
-//
-// On Linux a nice value belongs to one thread. The tool takes the value of
-// the thread that started it, and niceOf(0) can read a different thread, so
-// the tool can already sit below the target. Raising it back needs privilege.
+// toolNiceIncrement above that process's own, at most maxNice.
+// A process that has already exited has nothing to lower, and one this
+// go command may not lower keeps the priority it has.
 func lowerToolPriority(pid int) error {
-	own, err := niceOf(0)
+	// The tool's own nice, not the caller's: a nice value is per thread,
+	// so the thread that forked the tool need not share the nice of the
+	// thread that reads it here. Raising the tool from where it already
+	// is makes the call an increase in nice, which no privilege gates.
+	own, err := niceOf(pid)
 	if err != nil {
+		if errors.Is(err, syscall.ESRCH) {
+			return nil
+		}
 		return err
 	}
-	target := min(own+toolNiceIncrement, maxNice)
-	current, err := niceOf(pid)
+	err = syscall.Setpriority(syscall.PRIO_PROCESS, pid, min(own+toolNiceIncrement, maxNice))
 	if errors.Is(err, syscall.ESRCH) {
 		return nil
 	}
-	if err != nil {
-		return err
-	}
-	if current >= target {
-		return nil
-	}
-	err = syscall.Setpriority(syscall.PRIO_PROCESS, pid, target)
-	if errors.Is(err, syscall.ESRCH) {
+	if errors.Is(err, syscall.EACCES) || errors.Is(err, syscall.EPERM) {
 		return nil
 	}
 	return err

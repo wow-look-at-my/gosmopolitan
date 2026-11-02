@@ -53,7 +53,7 @@ Omit values where nothing outside the program reads them. `Phase` above names no
 
 ## Tags
 
-A tag is the text `String` returns for that member. It is a raw string literal, backquoted, which is how Go spells a trailing string literal that is metadata rather than value. A reader who knows `json:"name"` reads this the same way. An interpreted string sits where the value goes, so `Idle "idle"` on an integer enum reads as an assignment of the wrong type.
+A tag is the text `String` returns for that member. It is a raw string literal, backquoted, which is how Go spells a trailing string literal that is metadata rather than value. A reader who knows `json:"name"` reads this the same way. An interpreted string sits where the value goes, so `Idle "idle"` on an integer enum reads as an assignment of the incorrect type.
 
 Write a tag where the identifier cannot be the text. `ENXIO` needs one. POSIX pins that identifier and keeps it terse on purpose. Nothing derives `no such device or address` from it.
 
@@ -95,4 +95,4 @@ A conversion of a runtime value answers with the comma-ok form:
 phase, ok := Phase(n)
 ```
 
-A value reaching an enum type has therefore passed through a check. The `Phase(7)` that `String` prints is a diagnostic for memory that went wrong, rather than an ordinary result.
+A value reaching an enum type has therefore passed through a check. The `Phase(7)` that `String` prints is a diagnostic for memory that went incorrect, rather than an ordinary result.

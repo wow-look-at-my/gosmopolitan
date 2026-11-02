@@ -93,7 +93,9 @@ A contribution can execute as a real append, or the compiler can lift it into da
 
 **Real append.** The statement executes in `init`, as written. The init-only rule already fixes the list once `init` ends. The order is the same package-path order. The cost is problem 5: code that reads the list in another package's `init` can see part of it.
 
-**Lift.** The compiler turns the statement into data in a link-time section. It does not execute when `init` runs. So `image.Loaders` is complete when any `init` reads it, the declaring package's own `init` included. Go already does this for `var x = T{...}`: the spec says package initialization sets it. The compiler emits data. An `init` that holds only contributions becomes empty, and the compiler already removes an empty `init`.
+**Lift.** The compiler turns the statement into data in a link-time section. It does not execute when `init` runs. So `image.Loaders` is complete when any `init` reads it, the declaring package's own `init` included. Go already does this for `var x = T{...}`: the spec says package initialization sets it. The compiler emits data.
+
+An `init` that holds only contributions becomes empty, and the compiler already removes an empty `init`.
 
 Both ways, the compiler sees every contribution, so the build-time checks under "What go-toolchain does" work either way.
 
@@ -115,7 +117,7 @@ Both ways, the compiler sees every contribution, so the build-time checks under 
 - Each contribution becomes a symbol `go:collect.<pkgpath>.<name>.<n>`. The compiler records it in the object file and in export data (a `pkgbits` bump, as `readonly` needed).
 - The linker sorts the contributions for each collection and concatenates them into one read-only array. This is the same pattern as itablinks.
 - Plugin and shared build modes: each module carries its own section. The runtime merges them across `moduledata`, as it does for typelinks. Cosmo has no plugin mode. As a result, this is only for upstream parity.
-- Fat APE: each payload links separately. Both payloads get identical collections.
+- Fat APE: each payload links separately. Both payloads get same collections.
 
 ## What go-toolchain does
 
@@ -138,7 +140,7 @@ The idiom for "every format" is an umbrella package, such as `image/all`, that i
 
 ## Rejected: reflection over every implementation
 
-The alternative is a reflection call that returns every linked type that implements an interface, such as `reflect.Implementations[Loader]()`. It is rejected. Go interfaces are satisfied by method shape, not by declaration, so "implements" does not mean "meant to be registered".
+The alternative is a reflection call that returns every linked type that implements an interface, such as `reflect.Implementations[Loader]()`. It is rejected. By declaration, by method shape, go interfaces are satisfied, not, so "implements" does not mean "meant to be registered".
 
 1. **It returns types nobody meant to register.** Test mocks, decorators such as `loggingLoader{inner Loader}`, caching wrappers, and adapters in unrelated libraries all match. A wrapper's zero value is useless (a nil `inner`), and it sorts into the list by name. A small interface is worse: every `io.Reader` is hundreds of types. Filtering them needs an explicit opt-in, which is a collection again, harder to see.
 2. **It returns types, not values.** `reflect.New(t).Elem().Interface()` works only if the zero value is a working loader. A loader with configuration has no way to receive it. A collection holds values, or `func() Loader` constructors, so the author decides how it is built.
