@@ -3,6 +3,8 @@
 
 //go:build (unix || (js && wasm) || wasip1) && !cosmo
 
+// runtime_cancelIO has nothing to end: every descriptor a close can race here is either in the poller, which evict wakes.
+
 package poll
 
 // runtime_cancelIO has nothing to end: every descriptor a close can race here is either in the poller, which evict wakes.

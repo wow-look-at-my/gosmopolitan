@@ -140,7 +140,7 @@ The idiom for "every format" is an umbrella package, such as `image/all`, that i
 
 ## Rejected: reflection over every implementation
 
-The alternative is a reflection call that returns every linked type that implements an interface, such as `reflect.Implementations[Loader]()`. It is rejected. Go interfaces are satisfied by method shape, not by declaration, so "implements" does not mean "meant to be registered".
+The alternative is a reflection call that returns every linked type that implements an interface, such as `reflect.Implementations[Loader]()`. It is rejected. By declaration, by method shape, go interfaces are satisfied, not, so "implements" does not mean "meant to be registered".
 
 1. **It returns types nobody meant to register.** Test mocks, decorators such as `loggingLoader{inner Loader}`, caching wrappers, and adapters in unrelated libraries all match. A wrapper's zero value is useless (a nil `inner`), and it sorts into the list by name. A small interface is worse: every `io.Reader` is hundreds of types. Filtering them needs an explicit opt-in, which is a collection again, harder to see.
 2. **It returns types, not values.** `reflect.New(t).Elem().Interface()` works only if the zero value is a working loader. A loader with configuration has no way to receive it. A collection holds values, or `func() Loader` constructors, so the author decides how it is built.

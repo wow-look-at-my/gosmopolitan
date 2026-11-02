@@ -3,6 +3,8 @@
 
 //go:build cosmo && arm64
 
+// Real signal-handler installation on macOS hosts (hostos == XNU).
+
 package runtime
 
 import "unsafe"

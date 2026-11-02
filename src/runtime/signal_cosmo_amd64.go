@@ -3,6 +3,8 @@
 
 //go:build cosmo && amd64
 
+// sigctxt is HOST-AWARE.
+
 package runtime
 
 import (

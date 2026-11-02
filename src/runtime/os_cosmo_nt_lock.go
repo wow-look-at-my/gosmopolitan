@@ -3,6 +3,8 @@
 
 //go:build cosmo && amd64
 
+// The Linux syscalls that name a path relative to the working directory.
+
 package runtime
 
 import "unsafe"
