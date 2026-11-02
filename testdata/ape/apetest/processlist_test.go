@@ -2,6 +2,7 @@ package apetest
 
 import (
 	"bufio"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -9,6 +10,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -42,9 +44,10 @@ func TestProcessListShowsTheProgram(t *testing.T) {
 	pid := strconv.Itoa(cmd.Process.Pid)
 	require.Equal(t, "proccontrol-child "+pid, strings.TrimSpace(first))
 
+	psTool := hostTool(t, "ps")
 	ps := func(args ...string) string {
 		t.Helper()
-		out, err := exec.Command("ps", append(args, "-p", pid)...).Output()
+		out, err := exec.Command(psTool, append(args, "-p", pid)...).Output()
 		require.NoError(t, err, "ps %v", args)
 		return strings.TrimSpace(string(out))
 	}
@@ -61,12 +64,13 @@ func TestProcessListShowsTheProgram(t *testing.T) {
 	}
 	assert.Equal(t, want, filepath.Base(comm), "ps must name the program")
 
+	topTool := hostTool(t, "top")
 	var top []byte
 	if runtime.GOOS == "darwin" {
-		top, err = exec.Command("top", "-l", "1", "-pid", pid, "-stats", "pid,command").Output()
+		top, err = exec.Command(topTool, "-l", "1", "-pid", pid, "-stats", "pid,command").Output()
 	} else {
 		// -w widens the batch output, so top does not cut the name to fit.
-		top, err = exec.Command("top", "-b", "-n", "1", "-w", "512", "-p", pid).Output()
+		top, err = exec.Command(topTool, "-b", "-n", "1", "-w", "512", "-p", pid).Output()
 	}
 	require.NoError(t, err, "top")
 	rows := strings.Split(strings.TrimSpace(string(top)), "\n")
@@ -75,4 +79,23 @@ func TestProcessListShowsTheProgram(t *testing.T) {
 	require.NotEmpty(t, row)
 	assert.Equal(t, pid, row[0], "top must list the program's pid last")
 	assert.Equal(t, want, row[len(row)-1], "top must name the program")
+}
+
+// hostTool returns the path of the host's own tool. macOS installs ps and top
+// setuid root, and a sandbox refuses to exec a setuid file. A copy of the
+// tool loses the setuid bit, and it still reads this user's own processes.
+// The copy runs only when the host refuses the tool itself.
+func hostTool(t *testing.T, name string) string {
+	t.Helper()
+	path, err := exec.LookPath(name)
+	require.NoError(t, err)
+	if err := exec.Command(path, "-h").Run(); !errors.Is(err, syscall.EPERM) {
+		return path
+	}
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	tool := filepath.Join(t.TempDir(), name)
+	require.NoError(t, os.WriteFile(tool, data, 0o755))
+	t.Logf("this host refuses to exec %s, which is setuid, so the test runs a copy without the setuid bit", path)
+	return tool
 }
