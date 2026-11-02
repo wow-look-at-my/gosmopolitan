@@ -115,6 +115,14 @@ type unwinder struct {
 	// flags are the flags to this unwind. Some of these are updated as we
 	// unwind (see the flags documentation).
 	flags unwindFlags
+
+	// The last findfunc and funcspdelta results. A deep recursion returns
+	// to the same PC many times, and each lookup gives the same answer.
+	lrPC    uintptr
+	lrFunc  funcInfo
+	spFn    *_func
+	spPC    uintptr
+	spDelta int32
 }
 
 // init initializes u to start unwinding gp's stack and positions the
@@ -325,7 +333,10 @@ func (u *unwinder) resolveInternal(innermost, isSyscall bool) {
 				flag &^= abi.FuncFlagSPWrite
 			}
 		}
-		frame.fp = frame.sp + uintptr(funcspdelta(f, frame.pc))
+		if f._func != u.spFn || frame.pc != u.spPC {
+			u.spFn, u.spPC, u.spDelta = f._func, frame.pc, funcspdelta(f, frame.pc)
+		}
+		frame.fp = frame.sp + uintptr(u.spDelta)
 		if !usesLR {
 			// On x86, call instruction pushes return PC before entering new function.
 			frame.fp += goarch.PtrSize
@@ -454,7 +465,11 @@ func (u *unwinder) next() {
 		u.finishInternal()
 		return
 	}
-	flr := findfunc(frame.lr)
+	flr := u.lrFunc
+	if frame.lr != u.lrPC {
+		flr = findfunc(frame.lr)
+		u.lrPC, u.lrFunc = frame.lr, flr
+	}
 	if !flr.valid() {
 		// This happens if you get a profiling interrupt at just the wrong time.
 		// In that context it is okay to stop early.

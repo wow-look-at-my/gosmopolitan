@@ -611,6 +611,22 @@ type adjustinfo struct {
 
 	// sghi is the highest sudog.elem on the stack.
 	sghi uintptr
+
+	// The stack maps of the last frame that adjustframe read. A deep
+	// recursion repeats one frame many times, and each copy has the same
+	// maps. A frame with a reflect argument map is never kept here,
+	// because that map depends on the frame's contents. Every other map is
+	// in the module's read-only data, so the pointers are kept as uintptr:
+	// newstack permits no write barrier.
+	mapFn         uintptr
+	mapPC         uintptr
+	mapSize       uintptr
+	mapLocalsN    int32
+	mapArgsN      int32
+	mapLocalsData uintptr
+	mapArgsData   uintptr
+	mapObjs       uintptr
+	mapObjsLen    int
 }
 
 // adjustpointer checks whether *vpp is in the old stack described by adjinfo.
@@ -770,7 +786,21 @@ func adjustframe(frame *stkframe, adjinfo *adjustinfo) {
 		print("    adjusting ", fpfx, fname, " frame=[", hex(frame.sp), ",", hex(frame.fp), "] pc=", hex(frame.pc), " continpc=", hex(frame.continpc), "\n")
 	}
 
-	locals, args, objs := frame.getStackMap(true)
+	var locals, args bitvector
+	var objs []stackObjectRecord
+	if size := frame.varp - frame.sp; uintptr(unsafe.Pointer(f._func)) == adjinfo.mapFn && frame.continpc == adjinfo.mapPC && size == adjinfo.mapSize {
+		locals = bitvector{adjinfo.mapLocalsN, (*uint8)(unsafe.Pointer(adjinfo.mapLocalsData))}
+		args = bitvector{adjinfo.mapArgsN, (*uint8)(unsafe.Pointer(adjinfo.mapArgsData))}
+		objs = unsafe.Slice((*stackObjectRecord)(unsafe.Pointer(adjinfo.mapObjs)), adjinfo.mapObjsLen)
+	} else {
+		locals, args, objs = frame.getStackMap(true)
+		if f.args != abi.ArgsSizeUnknown {
+			adjinfo.mapFn, adjinfo.mapPC, adjinfo.mapSize = uintptr(unsafe.Pointer(f._func)), frame.continpc, size
+			adjinfo.mapLocalsN, adjinfo.mapLocalsData = locals.n, uintptr(unsafe.Pointer(locals.bytedata))
+			adjinfo.mapArgsN, adjinfo.mapArgsData = args.n, uintptr(unsafe.Pointer(args.bytedata))
+			adjinfo.mapObjs, adjinfo.mapObjsLen = uintptr(unsafe.Pointer(unsafe.SliceData(objs))), len(objs)
+		}
+	}
 
 	// Adjust local variables if stack frame has been allocated.
 	if locals.n > 0 {
