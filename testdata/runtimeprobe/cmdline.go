@@ -14,8 +14,8 @@ import (
 
 // checkCmdline asserts that the host shows this process with the argv a
 // native program has. The kernel's copy is what ps, top and htop read. A
-// loader that boots an APE gets its own path as argv[0] from the kernel, so
-// the loader execs itself again with the program's argv.
+// loader that boots an APE gets its own path as argv[0] from the kernel.
+// The loader puts the program's argv in its place.
 func checkCmdline() {
 	for _, entry := range os.Environ() {
 		if strings.HasPrefix(entry, "APE_REEXEC=") {
@@ -41,6 +41,11 @@ func checkCmdline() {
 		if got, err = parseProcArgs(raw); err != nil {
 			fail("cmdline", "KERN_PROCARGS2: %v", err)
 			return
+		}
+		// The loader's argc stays with the kernel. Its arguments read back
+		// as empty strings after the program's own argv.
+		for len(got) > len(os.Args) && got[len(got)-1] == "" {
+			got = got[:len(got)-1]
 		}
 	case "windows":
 		// No loader runs here. The runtime parses os.Args out of the PE command line, which is the copy the host shows.

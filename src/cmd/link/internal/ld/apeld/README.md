@@ -2,7 +2,7 @@
 
 One loader per platform, each a single C file. A loader takes the APE's path, boots the payload from memory, and writes nothing to disk. `docs/APE-BOOT.md` describes how an APE finds one.
 
-Each loader first execs itself again with the program's own argv, which `APE_REEXEC` marks. Without that exec, ps and htop name the loader instead of the program.
+Each loader puts the program's argv where ps and htop read it, in place of the loader's own: `docs/APE-BOOT.md`, "What it costs the program".
 
 Upstream is [wow-look-at-my/ape-research](https://github.com/wow-look-at-my/ape-research). Its `LOG.txt` records the measurements behind each link pipeline.
 
