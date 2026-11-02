@@ -783,6 +783,9 @@ jobs:
       contents: read
       actions: write
     runs-on: ${{ github.event.repository.visibility == 'public' && 'ubuntu-latest' || vars.CI_RUNNER || 'ubuntu-latest' }}
+    env:
+      # A wasm test binary runs under node or wasmtime. A package takes about twice as long as the same package on a host. The hook variants run runtime, reflect and sync again with every stack move checked. maymorestack=mayMoreStackMove needs 408s of runtime on js and just over the 10-minute package deadline on wasip1. This port gets the doubled deadline the host suite already uses.
+      GO_TEST_TIMEOUT_SCALE: 2
     strategy:
       fail-fast: true
       matrix:
