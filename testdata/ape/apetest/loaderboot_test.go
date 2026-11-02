@@ -18,8 +18,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// skipWhereNoLoaderBoots skips a test on the one host that boots an APE
-// some other way: Windows maps the payload through the PE header.
+// skipWhereNoLoaderBoots skips a test on the host that boots an APE some
+// other way: Windows maps the payload through the PE header.
 func skipWhereNoLoaderBoots(t *testing.T) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -84,8 +84,7 @@ func residentLoader(t *testing.T) string {
 	return ""
 }
 
-// apeRunBaseDir is the directory a staged copy of the program would land
-// in. Nothing writes there, and TestNoCopyOfTheProgramIsMade says so.
+// apeRunBaseDir is the directory a staged copy of the program would land in.
 func apeRunBaseDir(t *testing.T) string {
 	t.Helper()
 	return fmt.Sprintf("/tmp/.ape-run-1-%d", os.Getuid())
@@ -120,8 +119,8 @@ func runAPEErr(t *testing.T, bin string, env []string, args ...string) (string, 
 }
 
 // entrySet snapshots the paths directly under dir. Callers diff a
-// before/after pair rather than trust an absolute count, because these
-// directories are shared with every other test and run on the host.
+// before/after pair rather than trust an absolute count. This is because
+// these directories are shared with every other test and run on the host.
 func entrySet(t *testing.T, dir string) map[string]bool {
 	t.Helper()
 	entries, err := filepath.Glob(filepath.Join(dir, "*"))
@@ -155,7 +154,7 @@ func copyAPE(t *testing.T) string {
 	return bin
 }
 
-// The APE itself is never written, on any host. That is the whole point: it
+// The APE itself is never written, on any host. That is the whole point. It
 // is often on a read-only path, its checksum is what a consumer verified,
 // and one platform's header would cost it every other platform.
 func TestRunningLeavesTheAPEAlone(t *testing.T) {
@@ -183,9 +182,11 @@ func TestNoCopyOfTheProgramIsMade(t *testing.T) {
 		"a loader boot must stage nothing under the run directory")
 }
 
-// The unpacked loader does not survive its own run. The script passes -u, so
-// the loader unlinks its own file before the payload starts. An APE is one
-// file, and running it must not leave a second one on the host.
+// On linux the unpacked loader does not survive its own run. The script
+// passes -u, so the loader unlinks its own file before the payload starts.
+// On darwin the loader stays in a per-user cache under the program's file
+// name. XNU names the process after that file, and a later launch reuses
+// it. The cache holds that one file and nothing else.
 func TestTheUnpackedLoaderDoesNotSurvive(t *testing.T) {
 	skipWhereNoLoaderBoots(t)
 	if p := residentLoader(t); p != "" {
@@ -196,8 +197,7 @@ func TestTheUnpackedLoaderDoesNotSurvive(t *testing.T) {
 
 	// An empty directory proves nothing on its own: a host whose kernel starts
 	// the APE by itself never reaches the unpack at all. So first require that
-	// taking the unpack away breaks the run. That is what says this host needs
-	// it, and that the check below is about the loader deleting itself.
+	// taking the unpack away breaks the run.
 	if _, err := runAPEErr(t, bin, []string{"APE_LOADERDIR=/proc/ape-loaderdir-that-cannot-exist"}, "10", "5"); err == nil {
 		t.Skip("this host starts the APE without the unpack path")
 	}
@@ -206,8 +206,21 @@ func TestTheUnpackedLoaderDoesNotSurvive(t *testing.T) {
 	// by never unpacking again.
 	for i := range 2 {
 		runAPE(t, bin, []string{"APE_LOADERDIR=" + dir}, "10", "5")
-		assert.Empty(t, newEntries(nil, entrySet(t, dir)),
-			"run %d left a loader behind in the unpack directory", i+1)
+		if runtime.GOOS != "darwin" {
+			assert.Empty(t, newEntries(nil, entrySet(t, dir)),
+				"run %d left a loader behind in the unpack directory", i+1)
+			continue
+		}
+		cache, err := filepath.Glob(filepath.Join(dir, ".ape-apeld-darwin-arm64-*"))
+		require.NoError(t, err)
+		require.Len(t, cache, 1, "run %d must keep one cache directory", i+1)
+		held, err := filepath.Glob(filepath.Join(cache[0], "*"))
+		require.NoError(t, err)
+		assert.Equal(t, []string{filepath.Join(cache[0], filepath.Base(bin))}, held,
+			"run %d must leave only the loader, under the program's name", i+1)
+		fi, err := os.Stat(cache[0])
+		require.NoError(t, err)
+		assert.Equal(t, os.FileMode(0o700), fi.Mode().Perm(), "the cache is this user's alone")
 	}
 }
 
@@ -224,8 +237,8 @@ func TestAResidentLoaderNeedsNothingWritable(t *testing.T) {
 		loader = embeddedLoader(t)
 	}
 
-	// mkdir under /proc fails on every Linux and every macOS this runs on,
-	// so a run that reached the unpack path would fail rather than write.
+	// mkdir under /proc fails on every Linux and every macOS. This runs on, so a
+	// run that reached the unpack path would fail rather than write.
 	env := []string{
 		"APE_LOADER=" + loader,
 		"APE_LOADERDIR=/proc/ape-loaderdir-that-cannot-exist",
@@ -235,7 +248,7 @@ func TestAResidentLoaderNeedsNothingWritable(t *testing.T) {
 }
 
 // A rebuilt binary runs its own bytes. Staging keyed a copy by the file's
-// identity to get this right, and got it wrong whenever a build loop
+// identity to get this right. Staging got it wrong whenever a build loop
 // rewrote in place inside one second. A loader reads the file every time,
 // so the question does not arise.
 func TestARebuiltBinaryRunsItsOwnBytes(t *testing.T) {
@@ -245,8 +258,7 @@ func TestARebuiltBinaryRunsItsOwnBytes(t *testing.T) {
 	first := runAPE(t, bin, nil, "10", "5")
 	require.Equal(t, "fizzbuzz", first)
 
-	// Rewritten in place, at the same size, inside the same second: the
-	// case a staged copy keyed wrong.
+	// Rewritten in place, at the same size, inside the same second: the case a staged copy keyed wrong.
 	data, err := os.ReadFile(binPath(t))
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(bin, data, 0o755))

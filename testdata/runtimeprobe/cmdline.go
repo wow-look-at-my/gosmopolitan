@@ -19,12 +19,6 @@ import (
 // APE gets its own path in both. The loader and the boot script put the
 // program in their place.
 func checkCmdline() {
-	for _, entry := range os.Environ() {
-		if strings.HasPrefix(entry, "APE_REEXEC=") {
-			fail("cmdline", "the loader's marker reached the program: %q", entry)
-			return
-		}
-	}
 	exe, err := os.Executable()
 	if err != nil {
 		fail("cmdline", "os.Executable(): %v", err)
@@ -39,7 +33,8 @@ func checkCmdline() {
 			fail("cmdline", "read /proc/self/cmdline: %v", err)
 			return
 		}
-		got = strings.Split(strings.TrimSuffix(string(raw), "\x00"), "\x00")
+		// The loader's argument bytes read back as nulls after the program's argv.
+		got = strings.Split(strings.TrimRight(string(raw), "\x00"), "\x00")
 		// The kernel keeps a name of up to TASK_COMM_LEN-1 bytes.
 		comm, err := os.ReadFile("/proc/self/comm")
 		if err != nil {

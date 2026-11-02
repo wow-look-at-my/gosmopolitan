@@ -241,7 +241,12 @@ func writeLoaderBoot(script *bytes.Buffer, l *apeLoader) {
 		Skip:  l.offset / apeLoaderBlock,
 		Count: len(l.blob) / apeLoaderBlock,
 		Gzip:  l.gzip,
-		Named: l.named,
+	}
+	if l.named {
+		if err := apeDarwinBootTmpl.Execute(script, data); err != nil {
+			Exitf("APE: rendering the darwin boot script: %v", err)
+		}
+		return
 	}
 	writeLoaderSearch(script, data)
 	if err := apeLoaderTmpl.Execute(script, data); err != nil {
@@ -249,7 +254,7 @@ func writeLoaderBoot(script *bytes.Buffer, l *apeLoader) {
 	}
 }
 
-// apeBootData fills the loader search and the loader unpack templates.
+// apeBootData fills the boot script templates.
 type apeBootData struct {
 	Name  string
 	Dirs  string
@@ -258,8 +263,6 @@ type apeBootData struct {
 	Skip  int
 	Count int
 	Gzip  bool
-	// Named runs the loader from a file with the program's name, in a directory of its own.
-	Named bool
 }
 
 // writeLoaderSearch emits the search for a loader the host already has. It
@@ -1006,6 +1009,12 @@ var apeSearchTmplSh string
 
 //go:embed ape-loader-tmpl.sh
 var apeLoaderTmplSh string
+
+// apeDarwinBootTmpl boots a darwin APE through a loader that carries the program's file name.
+var apeDarwinBootTmpl = template.Must(template.New("apedarwin").Parse(apeDarwinBootTmplSh))
+
+//go:embed ape-boot-darwin-tmpl.sh
+var apeDarwinBootTmplSh string
 
 //go:embed make-ape-header-for-payloads.sh
 var makeAPEHeaderForPayloadsSh string

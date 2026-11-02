@@ -2,7 +2,7 @@
 
 One loader per platform, each a single C file. A loader takes the APE's path, boots the payload from memory, and writes nothing to disk. `docs/APE-BOOT.md` describes how an APE finds one.
 
-Each loader puts the program's argv where ps and htop read it, in place of the loader's own: `docs/APE-BOOT.md`, "What it costs the program".
+Each loader puts the program's argv where ps and htop read it, in place of the loader's own. On darwin the boot script execs the loader from a per-user cache under the program's name. Top, Activity Monitor and btop show the program: `docs/APE-BOOT.md`, "What it costs the program".
 
 Upstream is [wow-look-at-my/ape-research](https://github.com/wow-look-at-my/ape-research). Its `LOG.txt` records the measurements behind each link pipeline.
 

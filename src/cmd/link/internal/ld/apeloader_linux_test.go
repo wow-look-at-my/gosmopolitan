@@ -16,44 +16,59 @@ import (
 )
 
 // XNU names a process after the file it execs, and top, Activity Monitor
-// and btop show that name. So the darwin search runs an installed loader
-// from a copy with the program's file name, in a directory of its own, with
-// -u. The darwin loader cannot run here. A stand-in loader shows the path
-// and the argv the search execs it with.
-func TestApeDarwinSearchNamesTheLoaderAfterTheProgram(t *testing.T) {
+// and btop show that name. So the darwin boot runs the loader from a cached
+// copy with the program's file name. The darwin loader cannot run here. A
+// stand-in, packed the way the APE packs the loader, shows the path and
+// the argv the boot execs it with.
+func TestApeDarwinBootNamesTheLoaderAfterTheProgram(t *testing.T) {
 	dir := t.TempDir()
-	stand := filepath.Join(dir, "apeld-darwin-arm64")
-	// A loader with no arguments exits 127, which the search takes as proof it runs.
-	if err := os.WriteFile(stand, []byte("#!/bin/sh\n[ $# -eq 0 ] && exit 127\nprintf '%s|' \"$0\" \"$@\"\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	unpack := filepath.Join(dir, "unpack")
-	if err := os.Mkdir(unpack, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	// A loader with no arguments exits 127, which the boot takes as proof it runs.
+	stand := []byte("#!/bin/sh\n[ $# -eq 0 ] && exit 127\nprintf '%s|' \"$0\" \"$@\"\n")
+	l := &apeLoader{name: "apeld-darwin-arm64", blob: apeGzip(stand, "apeld-darwin-arm64"), gzip: true, tag: "0123abcd", named: true}
 	prog := filepath.Join(dir, "myprog.com")
+	if err := os.WriteFile(prog, l.blob, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cache := filepath.Join(dir, "cache")
+	if err := os.Mkdir(cache, 0o755); err != nil {
+		t.Fatal(err)
+	}
 
 	var script bytes.Buffer
-	script.WriteString("apereg() { return 1; }\napepath() { :; }\n")
-	writeLoaderSearch(&script, apeBootData{Name: "apeld-darwin-arm64", Dirs: apeLoaderDirs, Tag: "0123abcd", Named: true})
-	cmd := exec.Command("/bin/sh", "-c", "o=$0\n"+script.String(), prog, "one arg", "two")
-	cmd.Env = append(os.Environ(), "APE_LOADER="+stand, "APE_LOADERDIR="+unpack)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("the search failed: %v\n%s", err, out)
+	script.WriteString("apepath() { :; }\no=$0\n")
+	writeLoaderBoot(&script, l)
+	boot := func() []string {
+		t.Helper()
+		cmd := exec.Command("/bin/sh", "-c", script.String(), prog, "one arg", "two")
+		cmd.Env = append(os.Environ(), "APE_LOADER=", "APE_LOADERDIR="+cache)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("the boot failed: %v\n%s", err, out)
+		}
+		return strings.Split(strings.TrimSuffix(string(out), "|"), "|")
 	}
-	got := strings.Split(strings.TrimSuffix(string(out), "|"), "|")
-	if len(got) != 5 {
-		t.Fatalf("the loader ran with %q, want its path, -u, the program and two arguments", got)
+
+	got := boot()
+	if want := []string{prog, "one arg", "two"}; len(got) != 4 || strings.Join(got[1:], "|") != strings.Join(want, "|") {
+		t.Fatalf("the loader ran with %q, want its path, then %q", got, want)
 	}
 	if filepath.Base(got[0]) != "myprog.com" {
 		t.Errorf("the loader ran from %q, want a file named after the program", got[0])
 	}
-	if want := unpack + "/.ape-apeld-darwin-arm64-0123abcd."; !strings.HasPrefix(filepath.Dir(got[0])+".", want) {
-		t.Errorf("the loader ran from %q, want a directory of its own under %s", got[0], want)
+	held, err := filepath.Glob(filepath.Join(cache, ".ape-apeld-darwin-arm64-0123abcd-*", "*"))
+	if err != nil || len(held) != 1 || held[0] != got[0] {
+		t.Errorf("the cache holds %q, want only %s", held, got[0])
 	}
-	if want := []string{"-u", prog, "one arg", "two"}; strings.Join(got[1:], "|") != strings.Join(want, "|") {
-		t.Errorf("the loader ran with arguments %q, want %q", got[1:], want)
+	if fi, err := os.Stat(filepath.Dir(got[0])); err != nil || fi.Mode().Perm() != 0o700 {
+		t.Errorf("the cache directory is %v (%v), want mode 0700", fi.Mode(), err)
+	}
+
+	// A launch after the first reads nothing out of the APE.
+	if err := os.WriteFile(prog, nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if again := boot(); strings.Join(again, "|") != strings.Join(got, "|") {
+		t.Errorf("the second launch ran %q, want the cached %q", again, got)
 	}
 }
 

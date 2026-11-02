@@ -79,9 +79,9 @@ func apeGunzip(t *testing.T, name string, blob []byte) []byte {
 // reaches the host verbatim, and nothing on the host checks it, so this is
 // the only place that can.
 var apeLoaderSums = map[string]string{
-	"apeld-linux-amd64":  "42d35c5eab9922c054bf1d5b962fdc122d0da27e95a5795300d837c54b9f6b4a",
-	"apeld-linux-arm64":  "04f9c2169a80dc6a5a371cc1241c3bcaaf985fb613eee591221ab541046d0750",
-	"apeld-darwin-arm64": "05c97917e0bffa24db96ec7aa6122401ffc93b604b28d2a29ebbab7761cc913d",
+	"apeld-linux-amd64":  "08bba69bfc5d4716d9c2034f7f270dec56fd4b1c484349cbb4a6482353d10b83",
+	"apeld-linux-arm64":  "e7787f7d572fe267d19a5a2306a19eb54b5fbe446f74671fc98f90aa93cc1c2e",
+	"apeld-darwin-arm64": "ca03ff9fe025d8f0fcbe48bbe5c82433b171b88088c48d7c4be44bd0992b5f95",
 }
 
 // apeLoaderBins is the embedded loader for each platform that has one.

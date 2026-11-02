@@ -10,8 +10,8 @@
 // ps reads argv out of this process's own memory, and that argv names the
 // loader first. So the loader moves the program's argv strings over its own
 // before anything else. A second exec would give an exact copy, at a cost
-// to every launch. The kernel keeps its own argc. So after the program's
-// argv, ps sees an empty string for each loader argument.
+// to every launch. The kernel keeps its own argc, so ps sees one empty
+// string after the program's argv.
 //
 // Contract with the payload (rt0_cosmo_arm64.s): sp = argc block, x2 =
 // program path, x3 = 8 (XNU), x15 = Syslib with magic "slib", x16 = entry.
@@ -330,35 +330,13 @@ static void retitle(char **argv, int argc, int skip) {
 }
 
 int main(int argc, char **argv, char **envp) {
-	if (argc < 2) die("usage: apeld [-u] PROG.com [args...]");
+	if (argc < 2) die("usage: apeld PROG.com [args...]");
 
-	// -u removes this loader's own file before anything else. A caller that
-	// unpacked a throwaway copy passes it, so an APE leaves no second file on
-	// the host. It is argv and not an environment variable on purpose. An
-	// environment variable reaches the payload, and a nested run could then
-	// delete a loader somebody installed.
-	//
-	// This host has no tmpfs, so that copy is on a disk. Removing it here is
-	// what keeps the disk as it was. A caller cannot instead unlink the file
-	// and exec it through /dev/fd: XNU answers that with EACCES, where linux
-	// allows it.
-	//
-	// The copy has the program's file name, so the kernel names this process
-	// after the program. The script puts the copy in a directory of its own
-	// for that, and -u removes that directory too.
-	int skip = 1;
-	if (argc > 2 && argv[1][0] == '-' && argv[1][1] == 'u' && argv[1][2] == 0) {
-		unlink(argv[0]);
-		char *slash = strrchr(argv[0], '/');
-		if (slash) {
-			*slash = 0;
-			rmdir(argv[0]);
-		}
-		skip = 2;
-	}
-	retitle(argv, argc, skip);
-	char **pargv = argv + skip;
-	int pargc = argc - skip;
+	// The boot script keeps this loader in a per-user cache, under the
+	// program's file name. XNU names the process after that file.
+	retitle(argv, argc, 1);
+	char **pargv = argv + 1;
+	int pargc = argc - 1;
 	const char *path = pargv[0];
 	int fd = open(path, O_RDONLY | O_CLOEXEC);
 	if (fd < 0) die("cannot open program");

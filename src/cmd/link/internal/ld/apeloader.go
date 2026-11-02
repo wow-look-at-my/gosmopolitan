@@ -35,7 +35,7 @@ type apeLoader struct {
 	gzip   bool   // blob is gzipped, so the script pipes it through gzip -dc
 	offset int    // where in the header those bytes go
 	tag    string
-	// named runs the loader from a file with the program's name.
+	// named boots through apeDarwinBootTmpl, which runs the loader from a cached copy with the program's file name.
 	named bool
 }
 
