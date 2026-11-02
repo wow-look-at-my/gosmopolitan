@@ -3,12 +3,13 @@ package apetest
 import _ "embed"
 
 import (
+	"bytes"
+	"compress/gzip"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -39,21 +40,19 @@ func oldDarwinBoot(t *testing.T, ape string) string {
 	require.NotEqual(t, -1, end, "the darwin section has no end")
 	end += start + len(endMark)
 
-	var gzipped *loaderRegion
-	for _, region := range loaderRegions(t) {
-		if region.gzipped {
-			gzipped = &region
-		}
-	}
-	require.NotNil(t, gzipped, "the script carries no darwin loader")
-	section := strings.NewReplacer(
-		"@APE@", ape,
-		"@BLOCK@", strconv.Itoa(gzipped.block),
-		"@SKIP@", strconv.Itoa(gzipped.offset/gzipped.block),
-		"@COUNT@", strconv.Itoa(gzipped.size/gzipped.block),
-	).Replace(oldDarwinSection)
+	// The APE carried the loader gzipped, so the boot unpacks a gzipped copy.
+	var packed bytes.Buffer
+	zw, err := gzip.NewWriterLevel(&packed, gzip.BestCompression)
+	require.NoError(t, err)
+	_, err = zw.Write(darwinLoader(t))
+	require.NoError(t, err)
+	require.NoError(t, zw.Close())
+	tmp := t.TempDir()
+	gz := filepath.Join(tmp, "apeld-darwin-arm64.gz")
+	require.NoError(t, os.WriteFile(gz, packed.Bytes(), 0o644))
+	section := strings.NewReplacer("@APE@", ape, "@GZ@", gz).Replace(oldDarwinSection)
 
-	script := filepath.Join(t.TempDir(), "oldboot.sh")
+	script := filepath.Join(tmp, "oldboot.sh")
 	require.NoError(t, os.WriteFile(script, []byte(head[:start]+section+string(data[end:])), 0o755))
 	return script
 }

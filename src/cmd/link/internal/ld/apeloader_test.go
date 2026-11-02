@@ -23,9 +23,16 @@ import (
 // the region's end, because gzip on macOS fails on bytes past it.
 func TestApeLoaderRegionsAreWholeBlocks(t *testing.T) {
 	for _, l := range apeLoadersFor(apeAllLoaderPlatforms()) {
-		if l.offset%apeLoaderBlock != 0 || len(l.blob)%apeLoaderBlock != 0 {
-			t.Errorf("%s spans %d bytes at %#x, not whole %d-byte blocks", l.name, len(l.blob), l.offset, apeLoaderBlock)
+		if l.offset%l.block() != 0 || len(l.blob)%l.block() != 0 {
+			t.Errorf("%s spans %d bytes at %#x, not whole %d-byte blocks", l.name, len(l.blob), l.offset, l.block())
 			continue
+		}
+		if l.named && !bytes.Equal(l.blob, apeLoaderBins()[l.name]) {
+			t.Errorf("%s is hashed against its cache key, so its region must hold exactly its bytes", l.name)
+		}
+		// dd does a read and a write per block, on every launch that unpacks the loader.
+		if l.block() < apeLoaderBlock {
+			t.Errorf("the script copies %s in %d-byte blocks, under %d", l.name, l.block(), apeLoaderBlock)
 		}
 		bin := apeLoaderBins()[l.name]
 		got := l.blob

@@ -1,6 +1,7 @@
 package apetest
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"os/exec"
@@ -55,6 +56,7 @@ func first8K(t *testing.T) []byte {
 type loaderRegion struct {
 	block, offset, size int
 	gzipped             bool
+	name                string // the loader's file name, such as apeld-darwin-arm64
 }
 
 var loaderDD = regexp.MustCompile(`dd if="\$o" bs=(\d+) skip=(\d+) count=(\d+) 2>/dev/null (\| gzip -dc )?>`)
@@ -63,18 +65,25 @@ var loaderDD = regexp.MustCompile(`dd if="\$o" bs=(\d+) skip=(\d+) count=(\d+) 2
 func loaderRegions(t *testing.T) []loaderRegion {
 	t.Helper()
 	var out []loaderRegion
-	for _, match := range loaderDD.FindAllSubmatch(first8K(t), -1) {
+	head := first8K(t)
+	for _, at := range loaderDD.FindAllSubmatchIndex(head, -1) {
 		var nums [3]int
 		for idx := range nums {
-			num, err := strconv.Atoi(string(match[idx+1]))
+			num, err := strconv.Atoi(string(head[at[2*idx+2]:at[2*idx+3]]))
 			require.NoError(t, err)
 			nums[idx] = num
 		}
+		// The section that copies a loader first sets l to the loader's name.
+		name := ""
+		if mark := bytes.LastIndex(head[:at[0]], []byte("l=apeld-")); mark >= 0 {
+			name = string(head[mark+2 : mark+bytes.IndexByte(head[mark:], '\n')])
+		}
 		out = append(out, loaderRegion{
+			name:    name,
 			block:   nums[0],
 			offset:  nums[0] * nums[1],
 			size:    nums[0] * nums[2],
-			gzipped: len(match[4]) != 0,
+			gzipped: at[8] >= 0,
 		})
 	}
 	return out

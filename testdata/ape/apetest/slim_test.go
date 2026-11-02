@@ -152,16 +152,15 @@ func TestSlimLoaders(t *testing.T) {
 	sel := slimPlatforms(t)
 	bin := slimBinary(t)
 
-	// The Linux loaders sit raw; the darwin one is gzipped, because it does
-	// not fit the header at its own size.
+	// Every loader sits raw, at the offset the linker gives it.
 	for _, tc := range []struct {
 		platform string
 		offset   int
 		magic    []byte
 	}{
 		{"linux/amd64", 0x2800, []byte("\x7fELF")},
-		{"linux/arm64", 0x2c00, []byte("\x7fELF")},
-		{"darwin/arm64", 0x8000, []byte{0x1f, 0x8b}},
+		{"linux/arm64", 0x3800, []byte("\x7fELF")},
+		{"darwin/arm64", 0x4800, []byte{0xcf, 0xfa, 0xed, 0xfe}},
 	} {
 		want := sel[tc.platform]
 		got := len(bin) > tc.offset+len(tc.magic) &&
