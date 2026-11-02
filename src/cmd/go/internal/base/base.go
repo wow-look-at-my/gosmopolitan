@@ -121,14 +121,26 @@ func (c *Command) Runnable() bool {
 	return c.Run != nil
 }
 
-var atExitFuncs []func()
+// Module loading registers exit functions from parallel goroutines. An
+// unlocked append can then leave a nil entry, which Exit calls.
+var (
+	atExitMu    sync.Mutex
+	atExitFuncs []func()
+)
 
 func AtExit(f func()) {
+	atExitMu.Lock()
 	atExitFuncs = append(atExitFuncs, f)
+	atExitMu.Unlock()
 }
 
+// Exit runs a copy of the list without the lock, because an exit function
+// can call AtExit or Fatalf.
 func Exit() {
-	for _, f := range atExitFuncs {
+	atExitMu.Lock()
+	funcs := slices.Clone(atExitFuncs)
+	atExitMu.Unlock()
+	for _, f := range funcs {
 		f()
 	}
 	os.Exit(exitStatus)
