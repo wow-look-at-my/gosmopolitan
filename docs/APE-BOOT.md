@@ -97,7 +97,7 @@ APE: no apeld-linux-amd64 on this host, and nowhere to unpack the embedded one: 
 
 ## What it costs the program
 
-**ps, top and htop show the program's argv, not the loader's.** The kernel starts the loader with the loader's own path as `argv[0]`. The kernel shows that argv. runtimeprobe's `cmdline` check compares the host's copy with `os.Args`, and requires `argv[0]` to name the program file.
+**ps, top and htop show the program's argv, not the loader's.** The kernel starts the loader with the loader's own path as `argv[0]`. The kernel shows that argv. runtimeprobe's `cmdline` check compares the host's copy with `os.Args`. It requires `argv[0]` to name the program file. apetest's `TestProcessListShowsTheProgram` asks the host's own `ps` and `top` about a running APE.
 
 Each loader moves the program's argv strings over its own, in the memory ps reads, before anything else. A second exec of the loader will give an exact copy. It costs every launch, and on darwin it costs a second load of libSystem. Linux reads back the loader's leftover bytes as nulls after the program's argv. XNU keeps the loader's argc, so one empty string follows the program's argv there. ps and htop show neither.
 

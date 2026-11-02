@@ -650,14 +650,15 @@ jobs:
         with:
           tests: dats/test/apetest.dats dats/test/readonly-boot.dats
 
-      # dats shows a test's log only on a failure. This step prints the launch medians, and the test fails it past the limit.
-      - name: Launch time against the old boot (macOS)
+      # dats shows a test's log only on a failure. This step prints the launch medians and what ps and top show, and the tests fail it.
+      - name: Launch time and process names (macOS)
         if: runner.os == 'macOS'
         timeout-minutes: 10
         shell: bash
         run: |
           cd testdata/ape/apetest
-          FIZZBUZZ_BIN="$PWD/../../../binaries/ape-binary-macOS/fizzbuzz.com" sh ./with-deadline.sh 300 go test -v -run '^TestDarwinLaunchIsNoSlowerThanTheOldBoot$' .
+          bins="$PWD/../../../binaries/ape-binary-macOS"
+          FIZZBUZZ_BIN="$bins/fizzbuzz.com" RUNTIMEPROBE_BIN="$bins/runtimeprobe.com" sh ./with-deadline.sh 300 go test -v -run '^(TestDarwinLaunchIsNoSlowerThanTheOldBoot|TestProcessListShowsTheProgram)$' .
 
       # The container suite runs the boot script under busybox as well as dash.
       - if: runner.os == 'Linux'
