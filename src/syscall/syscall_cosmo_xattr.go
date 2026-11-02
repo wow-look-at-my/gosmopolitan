@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// Extended-attribute, file-preallocation and memory-control wrappers that the linux port declares in files cosmo does not build.
+
 package syscall
 
 import "unsafe"

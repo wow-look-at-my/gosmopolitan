@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// Darwin sendmsg/recvmsg emulation: the layout-translation core.
+
 package cosmo
 
 import "unsafe"

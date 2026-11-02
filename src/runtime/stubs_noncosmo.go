@@ -3,6 +3,8 @@
 
 //go:build !cosmo
 
+// cosmoStacksAreSystemAllocated is a stub for non-cosmo systems.
+
 package runtime
 
 // cosmoStacksAreSystemAllocated is a stub for non-cosmo systems.

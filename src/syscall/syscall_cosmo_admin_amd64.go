@@ -3,6 +3,8 @@
 
 //go:build cosmo && amd64
 
+// x86 port I/O.
+
 package syscall
 
 // x86 port I/O. The linux port declares Ioperm and Iopl in

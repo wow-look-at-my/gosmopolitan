@@ -3,6 +3,8 @@
 
 //go:build cosmo && arm64
 
+// The HWCAP bits an arm64 program reads out of the auxiliary vector to learn what the CPU can do.
+
 package runtime
 
 // The HWCAP bits an arm64 program reads out of the auxiliary vector to learn

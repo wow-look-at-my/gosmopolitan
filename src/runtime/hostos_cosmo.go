@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// CosmoHostOS returns the operating system the process is running on: "linux", "darwin", "windows", or "unknown" for a host this runtime has no port for.
+
 package runtime
 
 import "unsafe"

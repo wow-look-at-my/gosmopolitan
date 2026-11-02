@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// statfs, fstatfs and uname each fill a struct whose shape belongs to the host.
+
 package syscall
 
 import (

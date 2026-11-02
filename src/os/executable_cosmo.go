@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// Cosmopolitan binaries run on several host operating systems.
+
 package os
 
 import (

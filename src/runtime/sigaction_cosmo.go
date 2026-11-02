@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// This version is used on Cosmopolitan systems.
+
 package runtime
 
 // This version is used on Cosmopolitan systems.
