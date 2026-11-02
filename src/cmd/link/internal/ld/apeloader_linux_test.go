@@ -55,19 +55,37 @@ func TestApeDarwinBootNamesTheLoaderAfterTheProgram(t *testing.T) {
 		return strings.Split(strings.TrimSuffix(string(out), "|"), "|")
 	}
 
-	// The first launch runs the unpacked copy from a per-run directory, under
-	// the program's name, with -i. The real loader then checks its hash and
-	// moves itself into the cache. The stand-in does not.
-	got := boot()
-	if want := []string{"-i", prog, "one arg", "two"}; len(got) != 5 || strings.Join(got[1:], "|") != strings.Join(want, "|") {
-		t.Fatalf("the first launch ran %q, want its path, then %q", got, want)
-	}
+	// The first launch runs the unpacked copy from the unpack directory, under
+	// the program's name, with -i and the cache directory. The real loader
+	// then checks its hash, makes the cache and moves itself in. The
+	// stand-in does not. No mkdir runs on this path.
 	entry := filepath.Join(cache, ".ape-apeld-darwin-arm64-"+hash+"-"+strconv.Itoa(os.Getuid()))
+	got := boot()
+	if want := []string{filepath.Join(cache, "myprog.com"), "-i", entry, prog, "one arg", "two"}; strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("the first launch ran %q, want %q", got, want)
+	}
+	if _, err := os.Stat(entry); err == nil {
+		t.Errorf("the first launch made %s, which the loader makes", entry)
+	}
+
+	// When the program's name is taken in the unpack directory, the copy goes
+	// to a per-run directory of the cache, and the name stays untouched.
+	taken := got[0]
+	if err := os.WriteFile(taken, []byte("taken"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got = boot()
+	if want := []string{"-i", entry, prog, "one arg", "two"}; len(got) != 6 || strings.Join(got[1:], "|") != strings.Join(want, "|") {
+		t.Fatalf("the launch with the name taken ran %q, want its path, then %q", got, want)
+	}
 	if filepath.Base(got[0]) != "myprog.com" || filepath.Dir(filepath.Dir(got[0])) != entry {
-		t.Errorf("the first launch ran %q, want <cache>/.<pid>/myprog.com under %s", got[0], entry)
+		t.Errorf("the launch with the name taken ran %q, want <cache>/.<pid>/myprog.com under %s", got[0], entry)
 	}
 	if fi, err := os.Stat(entry); err != nil || fi.Mode().Perm() != 0o700 {
 		t.Errorf("the cache directory is %v (%v), want mode 0700", fi, err)
+	}
+	if data, err := os.ReadFile(taken); err != nil || string(data) != "taken" {
+		t.Errorf("the launch changed %s: %q, %v", taken, data, err)
 	}
 
 	// Once the loader is in place, a launch reads nothing out of the APE.

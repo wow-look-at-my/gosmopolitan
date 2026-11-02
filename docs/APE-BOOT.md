@@ -105,7 +105,9 @@ Each loader moves the program's argv strings over its own, in the memory ps read
 
 The key is the full SHA-256 of the loader the APE carries. A new loader gets a new entry.
 
-The first launch of a program name unpacks the loader into a per-run directory of that entry, `.<pid>`, under the program's name. The first launch execs it with `-i`. The loader hashes its own file, moves itself into the entry, and boots the program. Every later launch execs the entry at once, with no unpack and no test run.
+The first launch of a program name unpacks the loader into the unpack directory under the program's name, such as `/tmp/fizzbuzz.com`. The shell creates that file with `set -C`, so the launch never writes over a file that is already there. When the name is taken, the copy goes to a per-run directory of the entry, `.<pid>`. The first launch execs the copy with `-i` and the entry's path. The loader hashes its own file against the entry's name, makes the entry, moves itself in, and boots the program. No `mkdir` runs on that path.
+
+Every later launch execs the entry at once, with no unpack and no test run.
 
 The cache is safe against another user and against corrupt bytes:
 
