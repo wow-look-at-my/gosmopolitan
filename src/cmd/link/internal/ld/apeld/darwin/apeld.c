@@ -7,10 +7,11 @@
 // ape-m1.c does after the shell compiles it with cc. Here it is compiled
 // once, ahead of time.
 //
-// The kernel shows ps the argv it started this loader with. That argv names
-// the loader first. So the loader first execs itself again with the
-// program's own argv. The REEXEC marker in the environment tells the second
-// run that argv[0] is the program. The second run removes the marker.
+// ps reads argv out of this process's own memory, and that argv names the
+// loader first. So the loader moves the program's argv strings over its own
+// before anything else. A second exec would give an exact copy, at a cost
+// to every launch. The kernel keeps its own argc. So after the program's
+// argv, ps sees an empty string for each loader argument.
 //
 // Contract with the payload (rt0_cosmo_arm64.s): sp = argc block, x2 =
 // program path, x3 = 8 (XNU), x15 = Syslib with magic "slib", x16 = entry.
@@ -314,33 +315,6 @@ __attribute__((noreturn)) static void enter(long *sp, const char *path, uint64_t
 	__builtin_unreachable();
 }
 
-// REEXEC marks the second run of this loader. Its value is the loader file
-// that run removes, or empty.
-#define REEXEC "APE_REEXEC="
-
-// takemark removes every marker from envp, so the payload never sees one.
-// It returns the value of the first marker, or NULL when there is none.
-static const char *takemark(char **envp) {
-	const char *value = NULL;
-	for (char **entry = envp; *entry;) {
-		if (strncmp(*entry, REEXEC, strlen(REEXEC))) {
-			entry++;
-			continue;
-		}
-		if (!value) value = *entry + strlen(REEXEC);
-		for (char **next = entry; *next; next++) next[0] = next[1];
-	}
-	return value;
-}
-
-// selfpath is the path the kernel started this loader from.
-static const char *selfpath(char **apple) {
-	static const char key[] = "executable_path=";
-	for (; *apple; apple++)
-		if (!strncmp(*apple, key, strlen(key))) return *apple + strlen(key);
-	return NULL;
-}
-
 // retitle moves the program's argv strings over this loader's, where the
 // kernel shows them. Each string stays in the order it had. The bytes the
 // loader's strings left over become nulls.
@@ -356,60 +330,27 @@ static void retitle(char **argv, int argc, int skip) {
 	if (dst <= last) memset(dst, 0, last + 1 - dst);
 }
 
-// reexec starts this loader again with the program's own argv. A drop run
-// hands its own file to the second run to remove, because the second run
-// execs from that file. It returns only when the exec fails.
-static void reexec(char **argv, int skip, char **envp, char **apple, int drop) {
-	const char *self = selfpath(apple);
-	if (!self) return;
-	int envc = 0;
-	while (envp[envc]) envc++;
-	char **env = malloc((envc + 2) * sizeof *env);
-	char *mark = malloc(strlen(REEXEC) + strlen(self) + 1);
-	if (!env || !mark) return;
-	strcpy(mark, REEXEC);
-	if (drop) strcat(mark, self);
-	memcpy(env, envp, envc * sizeof *env);
-	env[envc] = mark;
-	env[envc + 1] = NULL;
-	execve(self, argv + skip, env);
-	free(env);
-	free(mark);
-}
+int main(int argc, char **argv, char **envp) {
+	if (argc < 2) die("usage: apeld [-u] PROG.com [args...]");
 
-int main(int argc, char **argv, char **envp, char **apple) {
-	char **pargv = argv;
-	int pargc = argc;
-	const char *drop = takemark(envp);
-	if (drop) {
-		// The second run. Its file is the throwaway copy only when the
-		// marker names it.
-		const char *self = selfpath(apple);
-		if (*drop && self && !strcmp(drop, self)) unlink(drop);
-	} else {
-		if (argc < 2) die("usage: apeld [-u] PROG.com [args...]");
-		// -u removes this loader's own file before the program starts. A
-		// caller that unpacked a throwaway copy passes it, so an APE leaves
-		// no second file on the host. The second run removes it, because
-		// the exec needs the file. Only the marker the first run sets
-		// carries the request on, and the payload never sees that marker.
-		// So a nested run cannot delete a loader somebody installed.
-		//
-		// This host has no tmpfs, so that copy is on a disk. Removing it is
-		// what keeps the disk as it was. A caller cannot instead unlink the
-		// file and exec it through /dev/fd: XNU answers that with EACCES,
-		// where linux allows it.
-		int skip = 1;
-		if (argc > 2 && argv[1][0] == '-' && argv[1][1] == 'u' && argv[1][2] == 0) skip = 2;
-		reexec(argv, skip, envp, apple, skip == 2);
-		// The exec failed. ps then shows the program's argv, and an empty
-		// string for each loader argument after it.
-		if (skip == 2) unlink(argv[0]);
-		retitle(argv, argc, skip);
-		pargv = argv + skip;
-		pargc = argc - skip;
+	// -u removes this loader's own file before anything else. A caller that
+	// unpacked a throwaway copy passes it, so an APE leaves no second file on
+	// the host. It is argv and not an environment variable on purpose. An
+	// environment variable reaches the payload, and a nested run could then
+	// delete a loader somebody installed.
+	//
+	// This host has no tmpfs, so that copy is on a disk. Removing it here is
+	// what keeps the disk as it was. A caller cannot instead unlink the file
+	// and exec it through /dev/fd: XNU answers that with EACCES, where linux
+	// allows it.
+	int skip = 1;
+	if (argc > 2 && argv[1][0] == '-' && argv[1][1] == 'u' && argv[1][2] == 0) {
+		unlink(argv[0]);
+		skip = 2;
 	}
-	if (pargc < 1) die("usage: apeld [-u] PROG.com [args...]");
+	retitle(argv, argc, skip);
+	char **pargv = argv + skip;
+	int pargc = argc - skip;
 	const char *path = pargv[0];
 	int fd = open(path, O_RDONLY | O_CLOEXEC);
 	if (fd < 0) die("cannot open program");
