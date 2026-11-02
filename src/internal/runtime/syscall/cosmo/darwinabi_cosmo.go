@@ -297,6 +297,7 @@ const (
 	linuxTIOCGWINSZ = 0x5413
 	linuxTIOCSWINSZ = 0x5414
 	linuxTIOCNOTTY  = 0x5422
+	linuxFIONREAD   = 0x541B
 
 	appleTIOCSCTTY  = 0x20007461
 	appleTIOCGPGRP  = 0x40047477
@@ -304,6 +305,7 @@ const (
 	appleTIOCGWINSZ = 0x40087468
 	appleTIOCSWINSZ = 0x80087467
 	appleTIOCNOTTY  = 0x20007471
+	appleFIONREAD   = 0x4004667F
 
 	// The pty grant/unlock/name trio has no Linux spelling to translate FROM.
 	appleTIOCPTYGRANT = 0x20007454
@@ -359,6 +361,8 @@ func DarwinXlatIoctl(req uintptr) (uintptr, bool) {
 		return appleTIOCSWINSZ, true
 	case linuxTIOCNOTTY:
 		return appleTIOCNOTTY, true
+	case linuxFIONREAD:
+		return appleFIONREAD, true
 	case appleTIOCPTYGRANT, appleTIOCPTYUNLK, appleTIOCPTYGNAME:
 		// Already Apple's, and named here so the pass-through is a decision rather than a hole.
 		return req, true

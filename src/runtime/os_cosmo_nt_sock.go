@@ -71,6 +71,7 @@ const (
 const (
 	_NT_AF_INET6_NT = 23
 
+	_NT_WSA_FLAG_OVERLAPPED        = 0x1
 	_NT_WSA_FLAG_NO_HANDLE_INHERIT = 0x80
 
 	_NT_INVALID_SOCKET = ^uintptr(0)
@@ -533,9 +534,12 @@ func ntEmuSocket(domain, typ, proto int32) (r1, r2, errno uintptr) {
 // After the accept the client's getsockname MUST equal the accepted end's
 // getpeername, else another local process won the connect race. The halves
 // talk to a stranger. A mismatch is WSAECONNABORTED.
-func ntLoopbackTCPPair() (a, c uintptr, step string, werr uintptr) {
+//
+// wsaFlags join the sockets' creation flags. An accepted end takes them from
+// its listener.
+func ntLoopbackTCPPair(wsaFlags uintptr) (a, c uintptr, step string, werr uintptr) {
 	l, lerr := ntcallE(ntWSASocketWFn, _NT_AF_INET, _NT_SOCK_STREAM, 0,
-		0, 0, _NT_WSA_FLAG_NO_HANDLE_INHERIT, 0)
+		0, 0, _NT_WSA_FLAG_NO_HANDLE_INHERIT|wsaFlags, 0)
 	if l == _NT_INVALID_SOCKET {
 		return 0, 0, "listener socket", lerr
 	}
@@ -557,7 +561,7 @@ func ntLoopbackTCPPair() (a, c uintptr, step string, werr uintptr) {
 		return 0, 0, "listen", e
 	}
 	c, werr = ntcallE(ntWSASocketWFn, _NT_AF_INET, _NT_SOCK_STREAM, 0,
-		0, 0, _NT_WSA_FLAG_NO_HANDLE_INHERIT, 0)
+		0, 0, _NT_WSA_FLAG_NO_HANDLE_INHERIT|wsaFlags, 0)
 	if c == _NT_INVALID_SOCKET {
 		ntcall(ntWSACloseSocketFn, l, 0, 0, 0, 0, 0)
 		return 0, 0, "client socket", werr
@@ -619,7 +623,7 @@ func ntLoopbackTCPPair() (a, c uintptr, step string, werr uintptr) {
 //
 // The ends are real TCP sockets, so data flow, shutdown(2), FIONBIO and
 // WSAPoll readiness all work through the socket-kind machinery.
-func ntEmuSocketpair(domain, typ, proto int32, sv *[2]int32) (r1, r2, errno uintptr) {
+func ntEmuSocketpair(domain, typ, proto int32, sv *[2]int32, wsaFlags uintptr) (r1, r2, errno uintptr) {
 	if sv == nil {
 		return ntFail3(ntEFAULT)
 	}
@@ -637,7 +641,7 @@ func ntEmuSocketpair(domain, typ, proto int32, sv *[2]int32) (r1, r2, errno uint
 	if proto != 0 {
 		return ntFail3(ntEPROTONOSUPPORT)
 	}
-	a, c, _, werr := ntLoopbackTCPPair()
+	a, c, _, werr := ntLoopbackTCPPair(wsaFlags)
 	if werr != 0 {
 		return ntFail3(ntWSAToLinux(werr))
 	}
