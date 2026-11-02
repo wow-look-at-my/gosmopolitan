@@ -1,0 +1,10 @@
+pkg syscall (darwin-amd64), func Getloadavg() ([3]float64, error) #351
+pkg syscall (darwin-amd64-cgo), func Getloadavg() ([3]float64, error) #351
+pkg syscall (darwin-arm64), func Getloadavg() ([3]float64, error) #351
+pkg syscall (darwin-arm64-cgo), func Getloadavg() ([3]float64, error) #351
+pkg syscall (linux-386), func Getloadavg() ([3]float64, error) #351
+pkg syscall (linux-386-cgo), func Getloadavg() ([3]float64, error) #351
+pkg syscall (linux-amd64), func Getloadavg() ([3]float64, error) #351
+pkg syscall (linux-amd64-cgo), func Getloadavg() ([3]float64, error) #351
+pkg syscall (linux-arm), func Getloadavg() ([3]float64, error) #351
+pkg syscall (linux-arm-cgo), func Getloadavg() ([3]float64, error) #351
