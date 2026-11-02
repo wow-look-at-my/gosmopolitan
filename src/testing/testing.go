@@ -1968,15 +1968,21 @@ func (c *common) barrierHolder() *common {
 //	t.Serial("SetGCPercent is process-wide, and a concurrent test's allocation moves the heap goal this measures")
 func (t *T) Serial(reason string = "") {
 	t.Helper()
-	if _, file, line, ok := runtime.Caller(1); ok {
+	_, file, line, ok := runtime.Caller(1)
+	// The barrier comes first. Checking the reason formats strings and logs a
+	// warning, and a test still waiting here would be doing both while the
+	// serial test that holds the barrier counts allocations or finalizers.
+	t.serialize()
+	if ok {
 		t.checkSerialReason(reason, file, line)
 	}
-	t.serialize()
 }
 
 // serialize upgrades this test's hold on the serial barrier to exclusive. It
-// is Serial without the justification: the callers here are [T.Setenv] and
-// [T.Chdir], which name the process-wide state in their own documentation.
+// is Serial without the justification: the callers here are [T.Setenv],
+// [T.Chdir] and [T.Fork], which name the process-wide state they touch, or
+// take the barrier only on a host that starts no child, in their own
+// documentation.
 func (t *T) serialize() {
 	c := t.common.barrierHolder()
 	if c == nil {
@@ -2040,7 +2046,9 @@ const forkTargetEnv = "GO_TEST_FORK_TARGET"
 // its process, so it has what a fork would buy.
 func (t *T) Fork() {
 	if !canFork() {
-		t.Serial()
+		// The barrier is this host's stand-in for a child, not a Serial the
+		// test wrote, so it has no reason of its own to justify.
+		t.serialize()
 		return
 	}
 	if target, forked := os.LookupEnv(forkTargetEnv); forked {
@@ -2053,7 +2061,7 @@ func (t *T) Fork() {
 		// A test BELOW the target forks normally: it gets its own child, which
 		// is what a subtest asks Fork for. A peer takes the barrier instead.
 		if t.forkPeerOfTarget() {
-			t.Serial()
+			t.serialize()
 			return
 		}
 	}

@@ -687,7 +687,7 @@ func TestTRun(t *T) {
 }
 
 func TestBRun(t *T) {
-	t.Serial()
+	t.Serial("the benchmark times and the allocation totals below are compared as soon as each run returns")
 	work := func(b *B) {
 		for i := 0; i < b.N; i++ {
 			time.Sleep(time.Nanosecond)

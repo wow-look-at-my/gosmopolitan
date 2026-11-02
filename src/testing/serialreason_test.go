@@ -248,9 +248,16 @@ func TestSerialWarnsThroughT(t *T) {
 		t.Errorf("output did not carry the warning:\n%s", out)
 	}
 	// The warning above was asked for, so it must not reach the summary the
-	// run prints at the end.
-	if got := serialReasons.takeReported(); len(got) != 1 {
-		t.Errorf("the run collected %d warnings, want the one this test made: %q", len(got), got)
+	// run prints at the end. Other tests in this binary warn at the same time,
+	// so only this file's reports are this test's business.
+	var mine []string
+	for _, w := range serialReasons.takeReported() {
+		if strings.HasPrefix(w, "serialreason_test.go:") {
+			mine = append(mine, w)
+		}
+	}
+	if len(mine) != 1 {
+		t.Errorf("the run collected %d warnings from this file, want the one this test made: %q", len(mine), mine)
 	}
 }
 

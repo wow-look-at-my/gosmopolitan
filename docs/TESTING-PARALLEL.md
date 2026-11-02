@@ -10,7 +10,7 @@ A test failing only under this fork's `go test` is almost always one of these.
 
 ## t.Serial
 
-A test that mutates process-wide state - a package global, the environment, the working directory, `GOMAXPROCS` - calls `t.Serial(reason string = "")`. This waits for every other test to stop and then runs the caller alone until it returns. The reason carries a default, so `t.Serial()` compiles and runs, and warns. `testing.AllocsPerRun` panics unless the caller did. A serial test's subtests run under its hold and take none of their own.
+A test that mutates process-wide state - a package global, the environment, the working directory, `GOMAXPROCS` - calls `t.Serial(reason string = "")`. This waits for every other test to stop and then runs the caller alone until it returns. The reason carries a default, so `t.Serial()` compiles and runs, and warns. `t.Fork`, `t.Setenv` and `t.Chdir` take the same barrier and need no reason: each names the process-wide state it touches in its own documentation. `testing.AllocsPerRun` panics unless the caller did. A serial test's subtests run under its hold and take none of their own.
 
 The hold never covers a wait. `t.Run` drops the caller's hold while it waits, then takes it back. `t.Parallel()` drops one before it waits for a slot. Two holds in one line of descent deadlock. Go queues a new reader behind a waiting writer. So the inner test blocks on a pending `t.Serial()`, and the outer test waits for the inner one.
 
