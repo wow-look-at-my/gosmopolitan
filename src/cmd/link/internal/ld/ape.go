@@ -233,15 +233,7 @@ const apeLoaderDirs = `${APE_LOADERDIR:-/dev/shm /tmp "${o%/*}"}`
 // The APE is never copied and never modified, and a read-only filesystem
 // stops being a reason the binary cannot start.
 func writeLoaderBoot(script *bytes.Buffer, l *apeLoader) {
-	data := struct {
-		Name  string
-		Dirs  string
-		Tag   string
-		Block int
-		Skip  int
-		Count int
-		Gzip  bool
-	}{
+	data := apeBootData{
 		Name:  l.name,
 		Dirs:  apeLoaderDirs,
 		Tag:   l.tag,
@@ -249,18 +241,36 @@ func writeLoaderBoot(script *bytes.Buffer, l *apeLoader) {
 		Skip:  l.offset / apeLoaderBlock,
 		Count: len(l.blob) / apeLoaderBlock,
 		Gzip:  l.gzip,
+		Hash:  l.hash,
 	}
-	writeLoaderSearch(script, l.name)
+	if l.named {
+		if err := apeDarwinBootTmpl.Execute(script, data); err != nil {
+			Exitf("APE: rendering the darwin boot script: %v", err)
+		}
+		return
+	}
+	writeLoaderSearch(script, data)
 	if err := apeLoaderTmpl.Execute(script, data); err != nil {
 		Exitf("APE: rendering the loader boot script: %v", err)
 	}
 }
 
+// apeBootData fills the boot script templates.
+type apeBootData struct {
+	Name  string
+	Dirs  string
+	Tag   string
+	Block int
+	Skip  int
+	Count int
+	Gzip  bool
+	Hash  string
+}
+
 // writeLoaderSearch emits the search for a loader the host already has. It
-// reads candidates and execs one. It writes nothing, which is what makes a
-// read-only filesystem enough to start the program.
-func writeLoaderSearch(script *bytes.Buffer, name string) {
-	if err := apeSearchTmpl.Execute(script, struct{ Name string }{name}); err != nil {
+// reads candidates and execs one.
+func writeLoaderSearch(script *bytes.Buffer, data apeBootData) {
+	if err := apeSearchTmpl.Execute(script, data); err != nil {
 		Exitf("APE: rendering the loader search: %v", err)
 	}
 }
@@ -1001,6 +1011,12 @@ var apeSearchTmplSh string
 
 //go:embed ape-loader-tmpl.sh
 var apeLoaderTmplSh string
+
+// apeDarwinBootTmpl boots a darwin APE through a loader that carries the program's file name.
+var apeDarwinBootTmpl = template.Must(template.New("apedarwin").Parse(apeDarwinBootTmplSh))
+
+//go:embed ape-boot-darwin-tmpl.sh
+var apeDarwinBootTmplSh string
 
 //go:embed make-ape-header-for-payloads.sh
 var makeAPEHeaderForPayloadsSh string

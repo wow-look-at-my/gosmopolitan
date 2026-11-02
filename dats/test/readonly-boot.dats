@@ -17,12 +17,13 @@ tests:
 		stdout:
 			- "read-only boot through a resident loader: fizzbuzz"
 
-	- desc: a host with no loader runs the embedded one out of RAM
+	- desc: a host with no loader runs the embedded one, out of RAM on linux and from the cache on darwin
 	  cmd: dats/test/readonly-boot.sh ram binaries/ape-binary-Linux/fizzbuzz.com
 	  exit: 0
 	  outputs:
 		stdout:
-			- "loader from RAM: fizzbuzz, and nothing left"
+			- "read-only program directory, loader "
+			- ": fizzbuzz"
 
 	- desc: a read-only host with no loader and no RAM refuses, and names the fix
 	  cmd: dats/test/readonly-boot.sh refuse binaries/ape-binary-Linux/fizzbuzz.com
