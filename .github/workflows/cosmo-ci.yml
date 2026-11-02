@@ -656,10 +656,11 @@ jobs:
         timeout-minutes: 10
         shell: bash
         run: |
-          if [ "${{ runner.os }}" = macOS ]; then brew install htop btop; else sudo apt-get install -y htop btop; fi
+          # The macOS runner has a logged-in screen, so Activity Monitor can run there.
+          if [ "${{ runner.os }}" = macOS ]; then brew install htop btop; export APETEST_GUI=1; else sudo apt-get install -y htop btop; fi
           cd testdata/ape/apetest
           bins="$PWD/../../../binaries/ape-binary-${{ runner.os }}"
-          APETEST_TUI_TOOLS="htop btop" FIZZBUZZ_BIN="$bins/fizzbuzz.com" RUNTIMEPROBE_BIN="$bins/runtimeprobe.com" sh ./with-deadline.sh 300 go test -v -run '^(TestDarwinLaunchIsNoSlowerThanTheOldBoot|TestProcessListShowsTheProgram|TestTUIProcessListsShowTheProgram)$' .
+          APETEST_TUI_TOOLS="htop btop" FIZZBUZZ_BIN="$bins/fizzbuzz.com" RUNTIMEPROBE_BIN="$bins/runtimeprobe.com" sh ./with-deadline.sh 400 go test -v -run '^(TestDarwinLaunchIsNoSlowerThanTheOldBoot|TestProcessListShowsTheProgram|TestTUIProcessListsShowTheProgram|TestActivityMonitorShowsTheProgram)$' .
 
       # The container suite runs the boot script under busybox as well as dash.
       - if: runner.os == 'Linux'
