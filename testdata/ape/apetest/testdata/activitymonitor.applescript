@@ -1,5 +1,5 @@
--- Opens Activity Monitor and prints each value in its window that contains
--- one of the words given as arguments, one value per line. When nothing
+-- Opens Activity Monitor and prints each text in its window that contains
+-- one of the words given as arguments, one text per line. When nothing
 -- matches, it prints how many elements of each kind the window held.
 on run argv
 	tell application "Activity Monitor" to activate
@@ -14,12 +14,21 @@ on run argv
 				try
 					set end of kinds to (class of elem) as text
 				end try
-				try
-					set shown to (value of elem) as text
-					repeat with wanted in argv
-						if shown contains (wanted as text) then set end of found to shown
-					end repeat
-				end try
+				-- A table cell can carry its text as its value, its name or its description.
+				repeat with field in {"value", "name", "description"}
+					try
+						if field as text is "value" then
+							set shown to (value of elem) as text
+						else if field as text is "name" then
+							set shown to (name of elem) as text
+						else
+							set shown to (description of elem) as text
+						end if
+						repeat with wanted in argv
+							if shown contains (wanted as text) and found does not contain shown then set end of found to shown
+						end repeat
+					end try
+				end repeat
 			end repeat
 		end tell
 	end tell
