@@ -64,13 +64,21 @@ func TestProcessListShowsTheProgram(t *testing.T) {
 	}
 	assert.Equal(t, want, filepath.Base(comm), "ps must name the program")
 
-	topTool := hostTool(t, "top")
+	topPath, err := exec.LookPath("top")
+	require.NoError(t, err)
 	var top []byte
 	if runtime.GOOS == "darwin" {
-		top, err = exec.Command(topTool, "-l", "1", "-pid", pid, "-stats", "pid,command").Output()
+		top, err = exec.Command(topPath, "-l", "1", "-pid", pid, "-stats", "pid,command").Output()
+		if errors.Is(err, syscall.EPERM) {
+			// macOS top needs its setuid bit, so a copy cannot stand in. top shows the kernel's short process name.
+			short := ps("-c", "-o", "comm=")
+			t.Logf("this host refuses to exec %s, which is setuid; ps -c -o comm, the name top shows: %s", topPath, short)
+			assert.Equal(t, want, short, "the short process name must name the program")
+			return
+		}
 	} else {
 		// -w widens the batch output, so top does not cut the name to fit.
-		top, err = exec.Command(topTool, "-b", "-n", "1", "-w", "512", "-p", pid).Output()
+		top, err = exec.Command(topPath, "-b", "-n", "1", "-w", "512", "-p", pid).Output()
 	}
 	require.NoError(t, err, "top")
 	rows := strings.Split(strings.TrimSpace(string(top)), "\n")
@@ -81,9 +89,9 @@ func TestProcessListShowsTheProgram(t *testing.T) {
 	assert.Equal(t, want, row[len(row)-1], "top must name the program")
 }
 
-// hostTool returns the path of the host's own tool. macOS installs ps and top
-// setuid root, and a sandbox refuses to exec a setuid file. A copy of the
-// tool loses the setuid bit, and it still reads this user's own processes.
+// hostTool returns the path of the host's own tool. macOS installs ps setuid
+// root, and a sandbox refuses to exec a setuid file. A copy of the tool loses
+// the setuid bit, and ps still reads this user's own processes without it.
 // The copy runs only when the host refuses the tool itself.
 func hostTool(t *testing.T, name string) string {
 	t.Helper()
