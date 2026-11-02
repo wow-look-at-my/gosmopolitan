@@ -31,6 +31,15 @@ const (
 	inotifyTickMillis = 5
 )
 
+// An inotifyRecheck is a path a source looks at again once the host can no
+// longer drop a hint about it.
+type inotifyRecheck struct {
+	path   string
+	millis uint32 // how long to wait after the last hint
+	waited uint32
+	again  func()
+}
+
 // An inotifySource is one host's way of hearing about changes.
 type inotifySource interface {
 	// canonical returns the path the host reports a file under.
@@ -154,6 +163,7 @@ type inotifyInstance struct {
 	paths      map[string]*inotifyDir
 	ids        map[epollID]*inotifyFile // the children of every watched directory
 	held       []*inotifyFile           // left, and maybe half of a rename
+	rechecks   []*inotifyRecheck
 	lastWd     int32
 	lastCookie uint32
 	queue      inotifyQueue
@@ -530,7 +540,7 @@ func (ino *inotifyInstance) clock() {
 	ino.mu.Lock()
 	defer ino.mu.Unlock()
 	for !ino.closed {
-		if len(ino.held) == 0 && len(ino.queue.records) == 0 {
+		if len(ino.held) == 0 && len(ino.queue.records) == 0 && len(ino.rechecks) == 0 {
 			ino.busy.Wait()
 			continue
 		}
@@ -538,6 +548,7 @@ func (ino *inotifyInstance) clock() {
 		inotifySleep(inotifyTickMillis * 1000000)
 		ino.mu.Lock()
 		ino.age(inotifyTickMillis)
+		ino.ageRechecks(inotifyTickMillis)
 		ino.flush()
 	}
 }
@@ -576,6 +587,7 @@ func (ino *inotifyInstance) monitor() {
 		ino.dropWatch(watch)
 	}
 	ino.held = nil
+	ino.rechecks = nil
 	ino.queue.records = nil
 	ino.busy.Broadcast()
 	ino.mu.Unlock()

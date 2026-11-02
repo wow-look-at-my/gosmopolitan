@@ -18,6 +18,8 @@ No host costs a descriptor per child of a watched directory.
 
 A macOS host calls CoreServices through the APE loader's `dlopen`. FSEvents delivers from a dispatch queue, so a C callback writes each event to a pipe and a goroutine reads it. An FSEvents stream covers everything under its directory. By name, events about other directories are dropped. A stream watches a path, so a rename restarts it and compares the directory with what is recorded of it.
 
+XNU drops an fsevent that repeats the last one it kept, from the same process on the same file, within one second. A second truncate soon after the first is lost that way. So after a setattr or a close after a write, the source looks at the path again one second later.
+
 A new stream can report what happened before it started, and FSEvents can still receiv that when `FSEventStreamFlushSync` returns. Such a report, followed by a stat, will give away a write a descriptor still holds. So each stream also watches a cookie, a name in `$TMPDIR` created and removed once as it starts. Event ids are ordered, so the cookie's id separates the directory's past from what the watch reports. Events wait until the cookie arrives.
 
 ## What a caller sees
