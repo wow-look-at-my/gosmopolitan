@@ -7,8 +7,8 @@ package main
 
 import "errors"
 
-// darwinProcArgs has no caller here: cosmoHostOS names this build's GOOS,
-// and that is not darwin.
-func darwinProcArgs() ([]byte, error) {
+// darwinSysctl has no caller here: cosmoHostOS names this build's GOOS, and
+// that is not darwin.
+func darwinSysctl(...uint32) ([]byte, error) {
 	return nil, errors.New("no darwin sysctl in this build")
 }

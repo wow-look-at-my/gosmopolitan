@@ -35,6 +35,8 @@ type apeLoader struct {
 	gzip   bool   // blob is gzipped, so the script pipes it through gzip -dc
 	offset int    // where in the header those bytes go
 	tag    string
+	// named runs the loader from a file with the program's name.
+	named bool
 }
 
 // apeLoaderBlock is the dd block size the script copies a loader with.
@@ -57,7 +59,9 @@ func apeLoaderFor(p cosmoape.Platform) *apeLoader {
 	case cosmoape.LinuxARM64:
 		return newApeLoader("apeld-linux-arm64", apeldLinuxARM64, false, apeLdLinuxARM64Offset)
 	case cosmoape.DarwinARM64:
-		return newApeLoader("apeld-darwin-arm64", apeldDarwinARM64, true, apeLdDarwinARM64Offset)
+		l := newApeLoader("apeld-darwin-arm64", apeldDarwinARM64, true, apeLdDarwinARM64Offset)
+		l.named = true
+		return l
 	}
 	return nil
 }

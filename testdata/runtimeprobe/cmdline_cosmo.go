@@ -7,14 +7,11 @@ package main
 
 import (
 	"errors"
-	"os"
 	"runtime"
 )
 
-// darwinProcArgs reads this process's argv the way ps reads it on macOS.
-func darwinProcArgs() ([]byte, error) {
-	const ctlKern, kernProcArgs2 = 1, 49
-	mib := []uint32{ctlKern, kernProcArgs2, uint32(os.Getpid())}
+// darwinSysctl reads one macOS sysctl by its numeric MIB.
+func darwinSysctl(mib ...uint32) ([]byte, error) {
 	size, done := runtime.CosmoDarwinSysctl(mib, nil)
 	if !done || size == 0 {
 		return nil, errors.New("the host reports no size")

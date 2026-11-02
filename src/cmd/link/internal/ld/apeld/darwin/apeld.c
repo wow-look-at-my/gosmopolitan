@@ -342,9 +342,18 @@ int main(int argc, char **argv, char **envp) {
 	// what keeps the disk as it was. A caller cannot instead unlink the file
 	// and exec it through /dev/fd: XNU answers that with EACCES, where linux
 	// allows it.
+	//
+	// The copy has the program's file name, so the kernel names this process
+	// after the program. The script puts the copy in a directory of its own
+	// for that, and -u removes that directory too.
 	int skip = 1;
 	if (argc > 2 && argv[1][0] == '-' && argv[1][1] == 'u' && argv[1][2] == 0) {
 		unlink(argv[0]);
+		char *slash = strrchr(argv[0], '/');
+		if (slash) {
+			*slash = 0;
+			rmdir(argv[0]);
+		}
 		skip = 2;
 	}
 	retitle(argv, argc, skip);

@@ -4,16 +4,17 @@
 package main
 
 import (
-	"os"
 	"syscall"
 	"unsafe"
 )
 
-// darwinProcArgs reads this process's argv the way ps reads it on macOS.
-// A host-GOOS darwin build reaches the same sysctl through package syscall.
-func darwinProcArgs() ([]byte, error) {
-	const ctlKern, kernProcArgs2 = 1, 49
-	mib := [3]int32{ctlKern, kernProcArgs2, int32(os.Getpid())}
+// darwinSysctl reads one macOS sysctl by its numeric MIB. A host-GOOS
+// darwin build reaches it through package syscall.
+func darwinSysctl(numbers ...uint32) ([]byte, error) {
+	mib := make([]int32, len(numbers))
+	for idx, num := range numbers {
+		mib[idx] = int32(num)
+	}
 	var size uintptr
 	if err := sysctl(mib[:], nil, &size); err != nil {
 		return nil, err

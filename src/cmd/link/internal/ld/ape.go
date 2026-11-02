@@ -233,15 +233,7 @@ const apeLoaderDirs = `${APE_LOADERDIR:-/dev/shm /tmp "${o%/*}"}`
 // The APE is never copied and never modified, and a read-only filesystem
 // stops being a reason the binary cannot start.
 func writeLoaderBoot(script *bytes.Buffer, l *apeLoader) {
-	data := struct {
-		Name  string
-		Dirs  string
-		Tag   string
-		Block int
-		Skip  int
-		Count int
-		Gzip  bool
-	}{
+	data := apeBootData{
 		Name:  l.name,
 		Dirs:  apeLoaderDirs,
 		Tag:   l.tag,
@@ -249,18 +241,31 @@ func writeLoaderBoot(script *bytes.Buffer, l *apeLoader) {
 		Skip:  l.offset / apeLoaderBlock,
 		Count: len(l.blob) / apeLoaderBlock,
 		Gzip:  l.gzip,
+		Named: l.named,
 	}
-	writeLoaderSearch(script, l.name)
+	writeLoaderSearch(script, data)
 	if err := apeLoaderTmpl.Execute(script, data); err != nil {
 		Exitf("APE: rendering the loader boot script: %v", err)
 	}
 }
 
+// apeBootData fills the loader search and the loader unpack templates.
+type apeBootData struct {
+	Name  string
+	Dirs  string
+	Tag   string
+	Block int
+	Skip  int
+	Count int
+	Gzip  bool
+	// Named runs the loader from a file with the program's name, in a directory of its own.
+	Named bool
+}
+
 // writeLoaderSearch emits the search for a loader the host already has. It
-// reads candidates and execs one. It writes nothing, which is what makes a
-// read-only filesystem enough to start the program.
-func writeLoaderSearch(script *bytes.Buffer, name string) {
-	if err := apeSearchTmpl.Execute(script, struct{ Name string }{name}); err != nil {
+// reads candidates and execs one.
+func writeLoaderSearch(script *bytes.Buffer, data apeBootData) {
+	if err := apeSearchTmpl.Execute(script, data); err != nil {
 		Exitf("APE: rendering the loader search: %v", err)
 	}
 }

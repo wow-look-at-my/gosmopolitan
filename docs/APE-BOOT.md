@@ -103,6 +103,10 @@ On linux the loader execs itself one more time, with the program's argv, so `/pr
 
 On darwin a second exec loads libSystem again, and that makes every launch markedly slower. So the darwin loader does not take one. It moves the program's argv strings over its own, in the memory ps reads. The kernel keeps the loader's argc, so an empty string follows the program's argv for each loader argument. htop shows them as trailing spaces.
 
+**top, Activity Monitor and btop show the program's name.** On linux the loader sets the process name with `prctl(PR_SET_NAME)`. XNU has no such call. It names a process after the file it execs, in `p_comm` and `p_name`, and btop reads the path of that file. So on darwin the script runs the loader from a file that carries the program's name. It makes a directory of its own, `.ape-<loader>-<tag>.<pid>`, in the first writable unpack directory.
+
+The loader goes in there under the program's file name. That is the unpacked loader, or a clone of an installed one. The loader runs with `-u`, so it removes that file and that directory before the program starts. A darwin host with no writable directory execs an installed loader where it lies. The process then carries the loader's name.
+
 `dats/test/launch-time.dats` reports the launch cost on each test host.
 
 On Linux the loader maps the payload itself, so `/proc/self/exe` names the loader. The loader passes the APE's open descriptor as `AT_EXECFD`, and `os.Executable` reads the path from `/proc/self/fd/<n>`. A program that re-execs itself, or reads its own file, gets an openable path. `/proc/self/maps` names the APE.
