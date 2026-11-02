@@ -14,19 +14,20 @@ on run argv
 			keystroke "f" using command down
 			keystroke (item 1 of argv)
 			delay 4
-			set table to my findTable(front window, 0)
-			if table is missing value then
-				set roles to {}
+			-- table, cell, kind and text name System Events classes and properties, so no variable takes them.
+			set procTable to my findTable(front window, 0)
+			if procTable is missing value then
+				set childRoles to {}
 				repeat with child in (UI elements of front window)
 					try
-						set end of roles to (role of child) as text
+						set end of childRoles to (role of child) as text
 					end try
 				end repeat
 				set AppleScript's text item delimiters to " "
-				return "no table in the window; its children: " & (roles as text)
+				return "no table in the window; its children: " & (childRoles as text)
 			end if
-			set total to count of rows of table
-			repeat with tableRow in rows of table
+			set total to count of rows of procTable
+			repeat with tableRow in rows of procTable
 				repeat with shown in my rowTexts(tableRow)
 					repeat with wanted in argv
 						if (shown as text) contains (wanted as text) then set end of found to (shown as text)
@@ -46,13 +47,13 @@ on findTable(elem, depth)
 	if depth > 8 then return missing value
 	tell application "System Events"
 		try
-			set kind to role of elem
-			if kind is "AXOutline" or kind is "AXTable" then return elem
+			set elemRole to role of elem
+			if elemRole is "AXOutline" or elemRole is "AXTable" then return elem
 		end try
 		try
 			repeat with child in (UI elements of elem)
-				set table to my findTable(child, depth + 1)
-				if table is not missing value then return table
+				set hit to my findTable(child, depth + 1)
+				if hit is not missing value then return hit
 			end repeat
 		end try
 	end tell
@@ -62,33 +63,33 @@ end findTable
 -- rowTexts returns the value, name and description of each cell in tableRow,
 -- and of each element inside a cell.
 on rowTexts(tableRow)
-	set texts to {}
+	set collected to {}
 	tell application "System Events"
-		repeat with cell in (UI elements of tableRow)
-			set texts to texts & my elemTexts(cell)
+		repeat with rowCell in (UI elements of tableRow)
+			set collected to collected & my elemTexts(rowCell)
 			try
-				repeat with inner in (UI elements of cell)
-					set texts to texts & my elemTexts(inner)
+				repeat with inner in (UI elements of rowCell)
+					set collected to collected & my elemTexts(inner)
 				end repeat
 			end try
 		end repeat
 	end tell
-	return texts
+	return collected
 end rowTexts
 
 -- elemTexts returns whichever of value, name and description elem has.
 on elemTexts(elem)
-	set texts to {}
+	set collected to {}
 	tell application "System Events"
 		try
-			set end of texts to (value of elem) as text
+			set end of collected to (value of elem) as text
 		end try
 		try
-			set end of texts to (name of elem) as text
+			set end of collected to (name of elem) as text
 		end try
 		try
-			set end of texts to (description of elem) as text
+			set end of collected to (description of elem) as text
 		end try
 	end tell
-	return texts
+	return collected
 end elemTexts
