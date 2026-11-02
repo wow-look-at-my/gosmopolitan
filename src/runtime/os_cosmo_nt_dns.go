@@ -3,6 +3,8 @@
 
 //go:build cosmo && amd64
 
+// FIXED_INFO and IP_ADDR_STRING, win64.
+
 package runtime
 
 import (

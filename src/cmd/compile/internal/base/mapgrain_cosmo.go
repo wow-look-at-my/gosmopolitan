@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// ntAllocationGranularity is what NT rounds a mapping's file offset down to.
+
 package base
 
 import (

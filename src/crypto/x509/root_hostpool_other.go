@@ -3,6 +3,8 @@
 
 //go:build !cosmo
 
+// Every other port either reads a bundle off disk or verifies through the platform.
+
 package x509
 
 // Every other port either reads a bundle off disk or verifies through the platform.

@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// procSelfAuxv is the one /proc path this package answers itself.
+
 package syscall
 
 import (

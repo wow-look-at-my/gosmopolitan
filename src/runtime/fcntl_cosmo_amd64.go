@@ -3,6 +3,8 @@
 
 //go:build cosmo && amd64
 
+// Consult the NT fd table (os_cosmo_nt_fd.go).
+
 package runtime
 
 import "internal/runtime/syscall/cosmo"

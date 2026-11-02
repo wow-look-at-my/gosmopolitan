@@ -3,6 +3,8 @@
 
 //go:build wasm && wasm.threads
 
+// wasmGrowEpochBump records a successful memory.grow.
+
 package runtime
 
 import _ "unsafe" // for go:linkname

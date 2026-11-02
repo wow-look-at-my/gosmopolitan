@@ -3,6 +3,8 @@
 
 //go:build cosmo && amd64
 
+// File-metadata syscalls on an NT host: utimensat, truncate, fchdir and linkat.
+
 package runtime
 
 import "unsafe"
