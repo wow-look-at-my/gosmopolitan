@@ -121,6 +121,7 @@ func (c *Command) Runnable() bool {
 	return c.Run != nil
 }
 
+<<<<<<< HEAD
 // Module loading registers exit functions from parallel goroutines. An
 // unlocked append can then leave a nil entry, which Exit calls.
 var (
@@ -132,17 +133,64 @@ func AtExit(f func()) {
 	atExitMu.Lock()
 	atExitFuncs = append(atExitFuncs, f)
 	atExitMu.Unlock()
+=======
+var (
+	atExitMu    sync.Mutex
+	atExitFuncs []func()
+	exiting     bool
+)
+
+func AtExit(f func()) {
+	OnExit(f)
+}
+
+// OnExit registers f like AtExit. It reports false, and registers nothing,
+// once the go command has started to exit: a caller about to create state that
+// only f removes must then not create it.
+func OnExit(f func()) bool {
+	atExitMu.Lock()
+	defer atExitMu.Unlock()
+	if exiting {
+		return false
+	}
+	atExitFuncs = append(atExitFuncs, f)
+	return true
+}
+
+// RunAtExit runs every AtExit function a single time. The go command calls it
+// as it exits, and before it replaces its own process image with another
+// toolchain. From then on OnExit refuses.
+func RunAtExit() {
+	atExitMu.Lock()
+	exiting = true
+	atExitMu.Unlock()
+	for idx := 0; ; idx++ {
+		atExitMu.Lock()
+		if idx >= len(atExitFuncs) {
+			atExitFuncs = nil
+			atExitMu.Unlock()
+			return
+		}
+		f := atExitFuncs[idx]
+		atExitMu.Unlock()
+		f()
+	}
+>>>>>>> origin/master
 }
 
 // Exit runs a copy of the list without the lock, because an exit function
 // can call AtExit or Fatalf.
 func Exit() {
+<<<<<<< HEAD
 	atExitMu.Lock()
 	funcs := slices.Clone(atExitFuncs)
 	atExitMu.Unlock()
 	for _, f := range funcs {
 		f()
 	}
+=======
+	RunAtExit()
+>>>>>>> origin/master
 	os.Exit(exitStatus)
 }
 
