@@ -4,19 +4,20 @@
 
 //go:build linux || darwin
 
-package syscall
+package syscall_test
 
 import (
 	"errors"
 	"math"
+	"syscall"
 	"testing"
 )
 
 func TestGetloadavg(t *testing.T) {
-	load, err := Getloadavg()
+	load, err := syscall.Getloadavg()
 	if err != nil {
 		// A Cosmopolitan build on a host without procfs cannot answer this.
-		if errors.Is(err, ENOENT) || errors.Is(err, ENOSYS) {
+		if errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ENOSYS) {
 			t.Skipf("this host reports no load average: %v", err)
 		}
 		t.Fatalf("Getloadavg: %v", err)
