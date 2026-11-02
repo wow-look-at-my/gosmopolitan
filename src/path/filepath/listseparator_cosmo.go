@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// ListSeparator is a variable here because one APE runs on hosts that disagree about it. os answers it from the host.
+
 package filepath
 
 import "os"

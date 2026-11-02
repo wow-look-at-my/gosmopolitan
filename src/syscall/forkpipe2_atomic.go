@@ -3,6 +3,8 @@
 
 //go:build (dragonfly || freebsd || linux || netbsd || openbsd || solaris) && !cosmo
 
+// forkPipeIsAtomic reports whether forkExecPipe returns a pipe that is already close-on-exec.
+
 package syscall
 
 // forkPipeIsAtomic reports whether forkExecPipe returns a pipe that is already close-on-exec.

@@ -1,6 +1,8 @@
 // Copyright The Go Authors. All rights reserved. Use of this source code is
 // governed by a BSD-style license that can be found in the LICENSE file.
 
+// testUnitBarriers name the symbols a walk of the binary must not follow when it asks what one package's tests reach.
+
 package load
 
 import (

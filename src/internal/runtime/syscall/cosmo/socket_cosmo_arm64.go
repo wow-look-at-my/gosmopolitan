@@ -3,6 +3,8 @@
 
 //go:build cosmo && arm64
 
+// Darwin (macOS ARM64) socket syscall emulation, the socket half of the slow path in syscall_cosmo_arm64.go.
+
 package cosmo
 
 import "unsafe"

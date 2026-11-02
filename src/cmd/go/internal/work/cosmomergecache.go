@@ -1,6 +1,8 @@
 // Copyright The Go Authors. All rights reserved. Use of this source code is
 // governed by a BSD-style license that can be found in the LICENSE file.
 
+// The merge that assembles an APE out of its payloads is a command outside the action graph.
+
 package work
 
 import (

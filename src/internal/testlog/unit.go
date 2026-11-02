@@ -1,6 +1,8 @@
 // Copyright The Go Authors. All rights reserved. Use of this source code is
 // governed by a BSD-style license that can be found in the LICENSE file.
 
+// UnitEnv names the package a test binary holding several packages' tests runs, for a copy of that binary started as a child process.
+
 package testlog
 
 import "sync/atomic"
