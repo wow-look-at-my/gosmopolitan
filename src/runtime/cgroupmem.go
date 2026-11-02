@@ -3,6 +3,8 @@
 
 //go:build linux
 
+// We can't allocate during early initialization when we need to find the cgroup. use a fixed global.
+
 package runtime
 
 import (

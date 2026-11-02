@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// Time, clock and file-timestamp calls that the linux port declares on every architecture.
+
 package syscall
 
 import (

@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// Darwin-host halves of sendmsg/recvmsg.
+
 package syscall
 
 import (
