@@ -58,9 +58,13 @@ func oldDarwinBoot(t *testing.T, ape string) string {
 }
 
 // The darwin boot runs the loader from a per-user cache, so that XNU names
-// the process after the program. The rounds alternate the boots, so a busy
-// host slows each of them alike.
+// the process after the program. The rounds alternate the boots, which cancels
+// load both boots feel the same, and not load only one of them forks into: the
+// old boot starts gzip, chmod and the loader where the cache boot starts chmod
+// alone. The limit is five percent, so the test takes the barrier and times a
+// machine at rest.
 func TestDarwinLaunchIsNoSlowerThanTheOldBoot(t *testing.T) {
+	t.Serial("the two boots are timed against each other, and a test running beside them forks into the same machine")
 	if loader := residentLoader(t); loader != "" {
 		t.Fatalf("%s is on this host: the old boot would exec it and never unpack", loader)
 	}

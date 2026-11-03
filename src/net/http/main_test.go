@@ -63,7 +63,10 @@ func goroutineLeaked() bool {
 	}
 
 	var stackCount map[string]int
-	for i := 0; i < 5; i++ {
+	// afterTest no longer scans, so a run gets this scan alone: it waits as
+	// long as the per-test scan it replaced allowed, and a goroutine still
+	// shutting down at the end of the run does not fail the binary.
+	for i := 0; i < 2500; i++ {
 		n := 0
 		stackCount = make(map[string]int)
 		gs := interestingGoroutines()
@@ -75,7 +78,7 @@ func goroutineLeaked() bool {
 			return false
 		}
 		// Wait for goroutines to schedule and die off:
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(1 * time.Millisecond)
 	}
 	fmt.Fprintf(os.Stderr, "Too many goroutines running after net/http test(s).\n")
 	for stack, count := range stackCount {
