@@ -1895,10 +1895,7 @@ func TestTLSServerWithoutTLSConn(t *testing.T) {
 
 func TestServeTLS(t *testing.T) {
 	CondSkipHTTP2(t)
-	// Every other test reaches the global test hooks this sets.
-	t.Serial()
 	defer afterTest(t)
-	defer SetTestHookServerServe(nil)
 
 	cert, err := tls.X509KeyPair(testcert.LocalhostCert, testcert.LocalhostKey)
 	if err != nil {
@@ -1913,15 +1910,15 @@ func TestServeTLS(t *testing.T) {
 	addr := ln.Addr().String()
 
 	serving := make(chan bool, 1)
-	SetTestHookServerServe(func(s *Server, ln net.Listener) {
-		serving <- true
-	})
 	handler := HandlerFunc(func(w ResponseWriter, r *Request) {})
 	s := &Server{
 		Addr:      addr,
 		TLSConfig: tlsConf,
 		Handler:   handler,
 	}
+	s.SetTestHookServerServe(func(s *Server, ln net.Listener) {
+		serving <- true
+	})
 	errc := make(chan error, 1)
 	go func() { errc <- s.ServeTLS(ln, "", "") }()
 	select {
@@ -2064,10 +2061,7 @@ func TestAutomaticHTTP2_ListenAndServe_GetConfigForClient(t *testing.T) {
 
 func testAutomaticHTTP2_ListenAndServe(t *testing.T, tlsConf *tls.Config) {
 	CondSkipHTTP2(t)
-	// Every other test reaches the global test hooks this sets.
-	t.Serial()
 	defer afterTest(t)
-	defer SetTestHookServerServe(nil)
 	var ok bool
 	var s *Server
 	const maxTries = 5
@@ -2079,13 +2073,13 @@ Try:
 		ln.Close()
 		t.Logf("Got %v", addr)
 		lnc := make(chan net.Listener, 1)
-		SetTestHookServerServe(func(s *Server, ln net.Listener) {
-			lnc <- ln
-		})
 		s = &Server{
 			Addr:      addr,
 			TLSConfig: tlsConf,
 		}
+		s.SetTestHookServerServe(func(s *Server, ln net.Listener) {
+			lnc <- ln
+		})
 		errc := make(chan error, 1)
 		go func() { errc <- s.ListenAndServeTLS("", "") }()
 		select {
@@ -3729,8 +3723,7 @@ func TestServerBufferedChunking(t *testing.T) {
 // closing the TCP connection, causing the client to get a RST.
 // See https://golang.org/issue/3595
 func TestServerGracefulClose(t *testing.T) {
-	// Not parallel: modifies the global rstAvoidanceDelay.
-	run(t, testServerGracefulClose, []testMode{http1Mode}, testNotParallel)
+	run(t, testServerGracefulClose, []testMode{http1Mode})
 }
 func testServerGracefulClose(t *testing.T, mode testMode) {
 	runTimeSensitiveTest(t, []time.Duration{
@@ -3743,7 +3736,6 @@ func testServerGracefulClose(t *testing.T, mode testMode) {
 		time.Second,
 		5 * time.Second,
 	}, func(t *testing.T, timeout time.Duration) error {
-		SetRSTAvoidanceDelay(t, timeout)
 		t.Logf("set RST avoidance delay to %v", timeout)
 
 		const bodySize = 5 << 20
@@ -3755,10 +3747,9 @@ func testServerGracefulClose(t *testing.T, mode testMode) {
 		cst := newClientServerTest(t, mode, HandlerFunc(func(w ResponseWriter, r *Request) {
 			Error(w, "bye", StatusUnauthorized)
 		}))
-		// We need to close cst explicitly here so that in-flight server
-		// requests don't race with the call to SetRSTAvoidanceDelay for a retry.
 		defer cst.close()
 		ts := cst.ts
+		ts.Config.SetRSTAvoidanceDelay(timeout)
 
 		conn, err := net.Dial("tcp", ts.Listener.Addr().String())
 		if err != nil {
@@ -4575,7 +4566,7 @@ func TestContentTypeOkayOn204(t *testing.T) {
 // and the http client), and both think they can close it on failure.
 // Therefore, all incoming server requests Bodies need to be thread-safe.
 func TestTransportAndServerSharedBodyRace(t *testing.T) {
-	run(t, testTransportAndServerSharedBodyRace, testNotParallel, http3SkippedMode)
+	run(t, testTransportAndServerSharedBodyRace, http3SkippedMode)
 }
 func testTransportAndServerSharedBodyRace(t *testing.T, mode testMode) {
 	// The proxy server in the middle of the stack for this test potentially
@@ -4592,7 +4583,6 @@ func testTransportAndServerSharedBodyRace(t *testing.T, mode testMode) {
 		time.Second,
 		5 * time.Second,
 	}, func(t *testing.T, timeout time.Duration) error {
-		SetRSTAvoidanceDelay(t, timeout)
 		t.Logf("set RST avoidance delay to %v", timeout)
 
 		const bodySize = 1 << 20
@@ -4614,8 +4604,7 @@ func testTransportAndServerSharedBodyRace(t *testing.T, mode testMode) {
 			t.Logf("backend CopyN: %v, %v", n, err)
 			<-req.Context().Done()
 		}))
-		// We need to close explicitly here so that in-flight server
-		// requests don't race with the call to SetRSTAvoidanceDelay for a retry.
+		backend.ts.Config.SetRSTAvoidanceDelay(timeout)
 		defer func() {
 			wg.Wait()
 			backend.close()
@@ -4653,6 +4642,7 @@ func testTransportAndServerSharedBodyRace(t *testing.T, mode testMode) {
 			rw.Write([]byte("OK"))
 		}))
 		defer proxy.close()
+		proxy.ts.Config.SetRSTAvoidanceDelay(timeout)
 
 		req, _ := NewRequest("POST", proxy.ts.URL, io.LimitReader(neverEnding('a'), bodySize))
 		res, err := proxy.c.Do(req)
@@ -4983,9 +4973,8 @@ func (c *closeWriteTestConn) CloseWrite() error {
 }
 
 func TestCloseWrite(t *testing.T) {
-	SetRSTAvoidanceDelay(t, 1*time.Millisecond)
-
 	var srv Server
+	srv.SetRSTAvoidanceDelay(1 * time.Millisecond)
 	var testConn closeWriteTestConn
 	c := ExportServerNewConn(&srv, &testConn)
 	ExportCloseWriteAndWait(c)
@@ -7383,7 +7372,6 @@ func testQuerySemicolon(t *testing.T, mode testMode, query string, wantX string,
 }
 
 func TestMaxBytesHandler(t *testing.T) {
-	// Not parallel: modifies the global rstAvoidanceDelay.
 	defer afterTest(t)
 
 	for _, maxSize := range []int64{100, 1_000, 1_000_000} {
@@ -7392,7 +7380,7 @@ func TestMaxBytesHandler(t *testing.T) {
 				func(t *testing.T) {
 					run(t, func(t *testing.T, mode testMode) {
 						testMaxBytesHandler(t, mode, maxSize, requestSize)
-					}, testNotParallel)
+					})
 				})
 		}
 	}
@@ -7409,7 +7397,6 @@ func testMaxBytesHandler(t *testing.T, mode testMode, maxSize, requestSize int64
 		time.Second,
 		5 * time.Second,
 	}, func(t *testing.T, timeout time.Duration) error {
-		SetRSTAvoidanceDelay(t, timeout)
 		t.Logf("set RST avoidance delay to %v", timeout)
 
 		var (
@@ -7426,10 +7413,9 @@ func testMaxBytesHandler(t *testing.T, mode testMode, maxSize, requestSize int64
 		})
 
 		cst := newClientServerTest(t, mode, MaxBytesHandler(echo, maxSize))
-		// We need to close cst explicitly here so that in-flight server
-		// requests don't race with the call to SetRSTAvoidanceDelay for a retry.
 		defer cst.close()
 		ts := cst.ts
+		ts.Config.SetRSTAvoidanceDelay(timeout)
 		c := ts.Client()
 
 		body := strings.Repeat("a", int(requestSize))
