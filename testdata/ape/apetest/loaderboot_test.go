@@ -27,22 +27,16 @@ func skipWhereNoLoaderBoots(t *testing.T) {
 	}
 }
 
-// embeddedLoader writes this host's loader out of the APE and returns its
-// path. The script reads the same region with dd, at the offset it names. The
-// darwin loader is the gzipped one, and the linux loader is not, which is what
-// tells them apart in a fat file.
-//
-// The name is the loader's own, because a darwin ad-hoc signature names the
-// file it signed.
-func embeddedLoader(t *testing.T) string {
+// loaderBytes returns the named loader as the script unpacks it, read from
+// the region the script's dd names.
+func loaderBytes(t *testing.T, name string) []byte {
 	t.Helper()
 	bin := loadBinary(t)
 	for _, region := range loaderRegions(t) {
-		if region.gzipped != (runtime.GOOS == "darwin") {
+		if region.name != name {
 			continue
 		}
 		require.LessOrEqual(t, region.offset+region.size, len(bin), "the loader region must be inside the file")
-
 		raw := bin[region.offset : region.offset+region.size]
 		if region.gzipped {
 			gz, err := gzip.NewReader(bytes.NewReader(raw))
@@ -50,12 +44,27 @@ func embeddedLoader(t *testing.T) string {
 			raw, err = io.ReadAll(gz)
 			require.NoError(t, err)
 		}
-		path := filepath.Join(t.TempDir(), fmt.Sprintf("apeld-%s-%s", runtime.GOOS, runtime.GOARCH))
-		require.NoError(t, os.WriteFile(path, raw, 0o755))
-		return path
+		return raw
 	}
-	t.Fatalf("the bootstrap script carries no loader for %s/%s", runtime.GOOS, runtime.GOARCH)
-	return ""
+	t.Fatalf("the bootstrap script carries no %s", name)
+	return nil
+}
+
+// darwinLoader returns the loader that boots the APE on macOS.
+func darwinLoader(t *testing.T) []byte {
+	t.Helper()
+	return loaderBytes(t, "apeld-darwin-arm64")
+}
+
+// embeddedLoader writes this host's loader out of the APE and returns its
+// path. The name is the loader's own, because a darwin ad-hoc signature
+// names the file it signed.
+func embeddedLoader(t *testing.T) string {
+	t.Helper()
+	name := fmt.Sprintf("apeld-%s-%s", runtime.GOOS, runtime.GOARCH)
+	path := filepath.Join(t.TempDir(), name)
+	require.NoError(t, os.WriteFile(path, loaderBytes(t, name), 0o755))
+	return path
 }
 
 // residentLoader returns the loader this host already carries, or "". The

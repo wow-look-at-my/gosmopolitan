@@ -237,9 +237,9 @@ func writeLoaderBoot(script *bytes.Buffer, l *apeLoader) {
 		Name:  l.name,
 		Dirs:  apeLoaderDirs,
 		Tag:   l.tag,
-		Block: apeLoaderBlock,
-		Skip:  l.offset / apeLoaderBlock,
-		Count: len(l.blob) / apeLoaderBlock,
+		Block: l.block(),
+		Skip:  l.offset / l.block(),
+		Count: len(l.blob) / l.block(),
 		Gzip:  l.gzip,
 		Hash:  l.hash,
 	}
