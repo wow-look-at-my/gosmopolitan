@@ -30,9 +30,14 @@ const (
 	fseventUserDropped   = 0x2
 	fseventKernelDropped = 0x4
 	fseventRemoved       = 0x200
+	fseventInodeMetaMod  = 0x400
 	fseventRenamed       = 0x800
+	fseventModified      = 0x1000
 
 	fseventDropped = fseventMustScan | fseventUserDropped | fseventKernelDropped
+
+	// fseventCoalesceMillis is how long XNU's add_fsevent drops an event the same as the last one it kept: the same type.
+	fseventCoalesceMillis = 1000
 
 	// fseventCookieName starts the name of every instance's cookies, which no watch of the temporary directory reports.
 	fseventCookieName = ".inotify-fsevents-"
@@ -216,7 +221,7 @@ func (source *fseventSource) settle(owner *fseventStream, id uint64) {
 	held := source.held
 	source.held = nil
 	for _, item := range held {
-		source.event(item.id, item.flags, item.path)
+		source.heard(item.id, item.flags, item.path)
 	}
 }
 
@@ -333,7 +338,36 @@ func (source *fseventSource) record(id uint64, flags uint32, path string) {
 		source.held = append(source.held, fseventRecord{id, flags, path})
 		return
 	}
+	source.heard(id, flags, path)
+}
+
+// heard applies an event. XNU drops a repeat of a setattr or of a close after
+// a write, and no event then reports that change. So after one of those, heard
+// looks at the path again once XNU can no longer drop a repeat.
+func (source *fseventSource) heard(id uint64, flags uint32, path string) {
 	source.event(id, flags, path)
+	if flags&(fseventInodeMetaMod|fseventModified) != 0 && source.watched(id, path) {
+		source.ino.recheck(path, fseventCoalesceMillis, func() { source.event(^uint64(0), 0, path) })
+	}
+}
+
+// watched reports whether a watch reports the event, on the path itself or on
+// a name in its directory.
+func (source *fseventSource) watched(id uint64, path string) bool {
+	ino := source.ino
+	if dir := ino.paths[path]; dir != nil && source.reports(dir, id) {
+		return true
+	}
+	slash := bytealg.LastIndexByteString(path, '/')
+	if slash < 0 || slash == len(path)-1 {
+		return false
+	}
+	above := path[:slash]
+	if slash == 0 {
+		above = "/"
+	}
+	dir := ino.paths[above]
+	return dir != nil && !dir.closing && source.reports(dir, id)
 }
 
 // first reports whether no stream has delivered the event yet.

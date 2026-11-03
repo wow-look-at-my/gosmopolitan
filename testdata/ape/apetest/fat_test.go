@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"debug/elf"
 	"io"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -252,8 +253,12 @@ func TestFatApeLoaderEmbedded(t *testing.T) {
 
 		loader := bin[skip : skip+region.size]
 		if !region.gzipped {
-			// Read straight out of the file: a static ELF, the Linux loader.
-			assert.Equal(t, []byte("\x7fELF"), loader[:4], "the loader at %#x must be an ELF", skip)
+			// Read straight out of the file: a static ELF for Linux, a 64-bit Mach-O for darwin.
+			magic := []byte("\x7fELF")
+			if strings.Contains(region.name, "darwin") {
+				magic = []byte{0xcf, 0xfa, 0xed, 0xfe}
+			}
+			assert.Equal(t, magic, loader[:4], "the %s loader at %#x has the wrong magic", region.name, skip)
 			continue
 		}
 		gz, err := gzip.NewReader(bytes.NewReader(loader))

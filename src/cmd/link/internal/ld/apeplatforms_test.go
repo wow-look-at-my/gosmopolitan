@@ -248,9 +248,10 @@ func TestAPEPlatformsHeaderPieces(t *testing.T) {
 				t.Error("the script copies the program; a loader reads it where it lies")
 			}
 
-			gotLoader := bin[apeLdDarwinARM64Offset] == 0x1f && bin[apeLdDarwinARM64Offset+1] == 0x8b
+			darwin := apeLoaderFor(cosmoape.DarwinARM64)
+			gotLoader := bytes.Equal(bin[darwin.offset:darwin.offset+len(darwin.blob)], darwin.blob)
 			if gotLoader != tt.wantLoader {
-				t.Errorf("gzipped darwin loader present = %v, want %v", gotLoader, tt.wantLoader)
+				t.Errorf("darwin loader present = %v, want %v", gotLoader, tt.wantLoader)
 			}
 
 			if got := bytes.Contains(head, []byte("exec cmd //c")); got != tt.wantWindowsShell {
@@ -319,7 +320,7 @@ func TestAPEPlatformsDerivedFromPayloads(t *testing.T) {
 		t.Error("amd64-only input produced an arm64 boot header")
 	}
 	// The only darwin platform is darwin/arm64, which this input cannot serve.
-	if amdOnly[apeLdDarwinARM64Offset] == 0x1f && amdOnly[apeLdDarwinARM64Offset+1] == 0x8b {
+	if darwin := apeLoaderFor(cosmoape.DarwinARM64); bytes.Contains(amdOnly[:apeHeaderSize], darwin.blob) {
 		t.Error("amd64-only input embedded the darwin loader")
 	}
 	// It carries the linux/amd64 one, because it claims that platform.

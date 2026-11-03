@@ -50,6 +50,18 @@ func (queue *inotifyQueue) RecordsForTest() [][]byte {
 	return queue.records
 }
 
+// InotifyRechecksForTest drives the recheck timer of an instance with no source.
+type InotifyRechecksForTest struct{ ino inotifyInstance }
+
+func (test *InotifyRechecksForTest) Recheck(path string, millis uint32, again func()) {
+	test.ino.busy.L = &test.ino.mu
+	test.ino.recheck(path, millis, again)
+}
+
+func (test *InotifyRechecksForTest) Age(millis uint32) { test.ino.ageRechecks(millis) }
+
+func (test *InotifyRechecksForTest) Pending() int { return len(test.ino.rechecks) }
+
 // InotifyLiveForTest counts the instances that have not let go of everything.
 func InotifyLiveForTest() int {
 	return int(inotifyLive.Load())
