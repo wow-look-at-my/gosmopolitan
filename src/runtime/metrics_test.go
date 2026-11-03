@@ -1577,9 +1577,7 @@ func TestReadMetricsCleanups(t *testing.T) {
 }
 
 func TestReadMetricsFinalizers(t *testing.T) {
-	// The counters are process-wide and the difference must be EXACTLY N, so
-	// one finalizer set by any other test lands in this count.
-	t.Serial()
+	t.Serial("the finalizer counters are process-wide and the difference must be exactly N, so one finalizer set by any other test lands in this count")
 	runtime.GC()                                                  // End any in-progress GC.
 	runtime.BlockUntilEmptyFinalizerQueue(int64(1 * time.Second)) // Flush any queued finalizers.
 
