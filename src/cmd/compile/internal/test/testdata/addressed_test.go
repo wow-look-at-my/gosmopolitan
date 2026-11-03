@@ -23,7 +23,7 @@ func assertEqual(t *testing.T, x, y int) {
 }
 
 func TestAddressed(t *testing.T) {
-	t.Serial()
+	t.Serial("output is a package-level string this file's tests append to, and a failure prints it, so a concurrent test would mix its lines in")
 	x := f1_ssa(2, 3)
 	output += fmt.Sprintln("*x is", *x)
 	output += fmt.Sprintln("Gratuitously use some stack")
