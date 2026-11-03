@@ -107,6 +107,36 @@ func (ino *inotifyInstance) age(millis uint32) {
 	}
 }
 
+// recheck runs again after millis with no newer hint about path. A later hint
+// about the same path starts the wait over.
+func (ino *inotifyInstance) recheck(path string, millis uint32, again func()) {
+	for _, item := range ino.rechecks {
+		if item.path == path {
+			item.waited, item.again = 0, again
+			return
+		}
+	}
+	ino.rechecks = append(ino.rechecks, &inotifyRecheck{path: path, millis: millis, again: again})
+	ino.busy.Signal()
+}
+
+// ageRechecks runs the rechecks that have waited long enough.
+func (ino *inotifyInstance) ageRechecks(millis uint32) {
+	var kept, due []*inotifyRecheck
+	for _, item := range ino.rechecks {
+		item.waited += millis
+		if item.waited < item.millis {
+			kept = append(kept, item)
+		} else {
+			due = append(due, item)
+		}
+	}
+	ino.rechecks = kept
+	for _, item := range due {
+		item.again()
+	}
+}
+
 // departed reports a name that has gone for good.
 func (ino *inotifyInstance) departed(entry *inotifyFile) {
 	ino.emit(entry.dir.watch, IN_DELETE|entry.dirBit(), 0, entry.name)

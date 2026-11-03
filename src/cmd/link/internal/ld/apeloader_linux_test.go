@@ -26,7 +26,7 @@ func TestApeDarwinBootNamesTheLoaderAfterTheProgram(t *testing.T) {
 	// A loader with no arguments exits 127, which the boot takes as proof it runs.
 	stand := []byte("#!/bin/sh\n[ $# -eq 0 ] && exit 127\nprintf '%s|' \"$0\" \"$@\"\n")
 	hash := strings.Repeat("ab", 32)
-	l := &apeLoader{name: "apeld-darwin-arm64", blob: apeGzip(stand, "apeld-darwin-arm64"), gzip: true, tag: "abababab", hash: hash, named: true}
+	l := &apeLoader{name: "apeld-darwin-arm64", blob: stand, bs: len(stand), tag: "abababab", hash: hash, named: true}
 	prog := filepath.Join(dir, "myprog.com")
 	if err := os.WriteFile(prog, l.blob, 0o755); err != nil {
 		t.Fatal(err)

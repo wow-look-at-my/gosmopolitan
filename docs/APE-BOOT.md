@@ -81,7 +81,7 @@ A loader somebody installed is called without `-u` and stays where it is. That i
 
 Unlinking the file first and exec'ing it through `/dev/fd` works on linux and is shorter. XNU answers that with `EACCES`.
 
-The loader is many bytes on linux/amd64, against the program's megabytes. `dd` reads it out of the APE. The darwin loader is gzipped. It goes through `gzip -dc` as well.
+The loader is many bytes on linux/amd64, against the program's megabytes. `dd` reads it out of the APE. Every loader sits uncompressed. The unpack is one `dd` and no `gzip`. The darwin loader must unpack to its exact bytes, because it checks its own hash against the cache key. So the linker places it where a large `dd` block divides both its offset and its size.
 
 Root also hands the loader to `binfmt_misc` on the way past, before the unlink. Every later run on that machine then skips this path fully. `APE_NOBINFMT` marks a pass that took it, so a kernel that hands the file back to a shell cannot make a loop.
 
@@ -97,7 +97,7 @@ APE: no apeld-linux-amd64 on this host, and nowhere to unpack the embedded one: 
 
 ## What it costs the program
 
-**ps, top and htop show the program's argv, not the loader's.** The kernel starts the loader with the loader's own path as `argv[0]`. The kernel shows that argv. runtimeprobe's `cmdline` check compares the host's copy with `os.Args`, and requires `argv[0]` to name the program file.
+**ps, top and htop show the program's argv, not the loader's.** The kernel starts the loader with the loader's own path as `argv[0]`. The kernel shows that argv. runtimeprobe's `cmdline` check compares the host's copy with `os.Args`. It requires `argv[0]` to name the program file. apetest's `TestProcessListShowsTheProgram` asks the host's own `ps` and `top` about a running APE.
 
 Each loader moves the program's argv strings over its own, in the memory ps reads, before anything else. A second exec of the loader will give an exact copy. It costs every launch, and on darwin it costs a second load of libSystem. Linux reads back the loader's leftover bytes as nulls after the program's argv. XNU keeps the loader's argc, so one empty string follows the program's argv there. ps and htop show neither.
 
