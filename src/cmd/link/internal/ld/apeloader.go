@@ -38,17 +38,42 @@ type apeLoader struct {
 	hash   string // the loader's full SHA-256, which keys the darwin cache
 	// named boots through apeDarwinBootTmpl, which runs the loader from a cached copy with the program's file name.
 	named bool
+	bs    int // the dd block size
+	low   int // the offset the caller asked for; a named loader can move past it
 }
 
 // apeLoaderBlock is the dd block size the script copies a loader with.
 const apeLoaderBlock = 512
 
-// Loader regions of the 64K APE header.
+// block returns the dd block size for l.
+func (l *apeLoader) block() int { return l.bs }
+
+// Loader regions of the 64K APE header. The darwin loader takes the first
+// offset at or past its constant that apeNamedPlacement allows.
 const (
 	apeLdLinuxAMD64Offset  = 0x2800
 	apeLdLinuxARM64Offset  = 0x3800
-	apeLdDarwinARM64Offset = 0x8000
+	apeLdDarwinARM64Offset = 0x4800
 )
+
+// apeNamedPlacement places a loader that must unpack to its exact size.
+// The dd block must divide both the size and the offset. So it picks the
+// largest block that leaves the region inside the header. A small block
+// makes dd do one read and one write per block.
+func apeNamedPlacement(name string, size, low int) (offset, block int) {
+	for blocks := 1; blocks <= size; blocks++ {
+		if size%blocks != 0 {
+			continue
+		}
+		block = size / blocks
+		offset = (low + block - 1) / block * block
+		if offset+size <= apeHeaderSize {
+			return offset, block
+		}
+	}
+	Exitf("APE: the %s loader (%d bytes) does not fit the APE header past %#x", name, size, low)
+	return 0, 0
+}
 
 // apeLoaderFor returns the loader that boots p, or nil for a platform that
 // needs none. windows/amd64 needs none: the file is a valid PE and the OS
@@ -60,9 +85,8 @@ func apeLoaderFor(p cosmoape.Platform) *apeLoader {
 	case cosmoape.LinuxARM64:
 		return newApeLoader("apeld-linux-arm64", apeldLinuxARM64, false, apeLdLinuxARM64Offset)
 	case cosmoape.DarwinARM64:
-		l := newApeLoader("apeld-darwin-arm64", apeldDarwinARM64, true, apeLdDarwinARM64Offset)
-		l.named = true
-		return l
+		// Uncompressed, so the unpack runs no gzip: each process is a fork and an exec on every launch with a cold cache.
+		return newApeLoader("apeld-darwin-arm64", apeldDarwinARM64, false, apeLdDarwinARM64Offset)
 	}
 	return nil
 }
@@ -78,10 +102,16 @@ func newApeLoader(name string, bin []byte, compress bool, offset int) *apeLoader
 		Exitf("APE: the %s loader region at %#x is not %d-aligned", name, offset, apeLoaderBlock)
 	}
 	sum := sha256.Sum256(bin)
-	l := &apeLoader{name: name, gzip: compress, offset: offset, tag: hex.EncodeToString(sum[:4]), hash: hex.EncodeToString(sum[:])}
-	if compress {
+	l := &apeLoader{name: name, gzip: compress, offset: offset, tag: hex.EncodeToString(sum[:4]), hash: hex.EncodeToString(sum[:]), bs: apeLoaderBlock, low: offset}
+	// The darwin loader runs from a cache named by its hash, so its unpacked copy must be its exact bytes.
+	l.named = name == "apeld-darwin-arm64"
+	switch {
+	case compress:
 		l.blob = apeGzip(bin, name)
-	} else {
+	case l.named:
+		l.blob = bin
+		l.offset, l.bs = apeNamedPlacement(name, len(bin), offset)
+	default:
 		// Bytes past the end of an ELF file are never mapped.
 		l.blob = make([]byte, apeBlockCeil(len(bin)))
 		copy(l.blob, bin)
@@ -139,7 +169,7 @@ func apeLoadersFor(plat cosmoape.Set) []*apeLoader {
 		}
 		if dir := os.Getenv("GOCOSMOAPELD"); dir != "" {
 			if bin, err := os.ReadFile(dir + "/" + l.name); err == nil {
-				l = newApeLoader(l.name, bin, l.gzip, l.offset)
+				l = newApeLoader(l.name, bin, l.gzip, l.low)
 			}
 		}
 		out = append(out, l)
