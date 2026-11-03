@@ -867,7 +867,7 @@ func testSchedPauseMetrics(t *testing.T, fn func(t *testing.T), isGC, isOther bo
 }
 
 func TestSchedPauseMetrics(t *testing.T) {
-	t.Serial() // The pause counters are process-wide; another test's GC moves the baseline.
+	t.Serial("the pause counters are cumulative for the process, so another goroutine collecting moves the baseline")
 	tests := []struct {
 		name   string
 		isGC   bool
@@ -1577,9 +1577,7 @@ func TestReadMetricsCleanups(t *testing.T) {
 }
 
 func TestReadMetricsFinalizers(t *testing.T) {
-	// The counters are process-wide and the difference must be EXACTLY N, so
-	// one finalizer set by any other test lands in this count.
-	t.Serial()
+	t.Serial("the finalizer counters are process-wide and the difference must be exactly N, so one finalizer set by any other test lands in this count")
 	runtime.GC()                                                  // End any in-progress GC.
 	runtime.BlockUntilEmptyFinalizerQueue(int64(1 * time.Second)) // Flush any queued finalizers.
 

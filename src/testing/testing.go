@@ -1952,7 +1952,38 @@ func (c *common) barrierHolder() *common {
 // The subtests of a serial test run one at a time, inside the calls to
 // [T.Run] that start them, under the same hold. Calling Serial again, from the
 // test or from one of its subtests, does nothing.
-func (t *T) Serial() {
+//
+// Pass the reason this test cannot share the process. It is what the next
+// reader has instead of the shared state itself, which is invisible from the
+// call. The parameter carries a default, so an existing t.Serial() still
+// compiles; it earns the first warning below. Serial reports a warning, and
+// runs the test alone anyway, when the reason is missing, when it is shorter
+// than 48 characters, when it repeats the test's own name or file, or when it
+// is more than 98% the same as the reason another test in this binary gives.
+// Those bounds are there because a serial test stops every other test in the
+// package: a reason pasted across a whole file turns a suite parallel by
+// default back into a serial one, one call at a time, and nothing else in the
+// build would say so.
+//
+//	t.Serial("SetGCPercent is process-wide, and a concurrent test's allocation moves the heap goal this measures")
+func (t *T) Serial(reason string = "") {
+	t.Helper()
+	_, file, line, ok := runtime.Caller(1)
+	// The barrier comes first. Checking the reason formats strings and logs a
+	// warning, and a test still waiting here would be doing both while the
+	// serial test that holds the barrier counts allocations or finalizers.
+	t.serialize()
+	if ok {
+		t.checkSerialReason(reason, file, line)
+	}
+}
+
+// serialize upgrades this test's hold on the serial barrier to exclusive. It
+// is Serial without the justification: the callers here are [T.Setenv],
+// [T.Chdir] and [T.Fork], which name the process-wide state they touch, or
+// take the barrier only on a host that starts no child, in their own
+// documentation.
+func (t *T) serialize() {
 	c := t.common.barrierHolder()
 	if c == nil {
 		// The root test: nothing else runs to be serialized against.
@@ -2015,7 +2046,9 @@ const forkTargetEnv = "GO_TEST_FORK_TARGET"
 // its process, so it has what a fork would buy.
 func (t *T) Fork() {
 	if !canFork() {
-		t.Serial()
+		// The barrier is this host's stand-in for a child, not a Serial the
+		// test wrote, so it has no reason of its own to justify.
+		t.serialize()
 		return
 	}
 	if target, forked := os.LookupEnv(forkTargetEnv); forked {
@@ -2028,7 +2061,7 @@ func (t *T) Fork() {
 		// A test BELOW the target forks normally: it gets its own child, which
 		// is what a subtest asks Fork for. A peer takes the barrier instead.
 		if t.forkPeerOfTarget() {
-			t.Serial()
+			t.serialize()
 			return
 		}
 	}
@@ -2104,7 +2137,7 @@ func (t *T) failWithoutAChild() {
 	}
 	t.Fail()
 	t.log("AllocsPerRun needs this process to itself, and "+reason+
-		": call t.Serial() in this test", true)
+		": call t.Serial(reason) in this test", true)
 
 	t.mu.Lock()
 	t.finished = true
@@ -2607,11 +2640,21 @@ func (t *T) checkParallel() {
 	// one still has the barrier, which buys the same isolation by stopping
 	// every other test. A test with no parallel ancestor already has the
 	// process to itself.
+	//
+	// Inside a child there is no second fork to take, and the child's own
+	// subtests can run in parallel like any other run, so the barrier is what
+	// isolates the caller from them. Without it a test whose subtests each set
+	// an environment variable would have them overwrite each other.
 	for c := &t.common; c != nil; c = c.parent {
-		if c.isParallel {
+		if !c.isParallel {
+			continue
+		}
+		if canFork() && os.Getenv(forkTargetEnv) == "" {
 			t.Fork()
 			return
 		}
+		t.serialize()
+		return
 	}
 }
 
@@ -3295,6 +3338,10 @@ func (m *M) Run() (code int) {
 		fuzzTargetsRan, fuzzTargetsOk := runFuzzTests(m.deps, m.fuzzTargets, deadline)
 		exampleRan, exampleOk := runExamples(m.deps.MatchString, m.examples)
 		m.stopAlarm()
+		// A serial test stops every other test in the package, so a call that
+		// did not justify itself is reported where a green run still shows
+		// it. The per-test log this repeats only appears under -v.
+		serialReasons.report(os.Stderr)
 		if !testRan && !exampleRan && !fuzzTargetsRan && *matchBenchmarks == "" && *matchFuzz == "" {
 			fmt.Fprintln(os.Stderr, "testing: warning: no tests to run")
 			if testingTesting && *match != "^$" {
