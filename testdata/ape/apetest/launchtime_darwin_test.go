@@ -126,18 +126,27 @@ func TestDarwinLaunchIsNoSlowerThanTheOldBoot(t *testing.T) {
 			times[idx] = append(times[idx], modes[idx].run())
 		}
 	}
+	// The host speed drifts over the rounds.
+	ratios := make([][]float64, len(modes))
+	for round := range rounds {
+		for idx := 1; idx < len(modes); idx++ {
+			ratios[idx] = append(ratios[idx], float64(times[idx][round])/float64(times[0][round]))
+		}
+	}
 	median := make([]time.Duration, len(modes))
 	for idx := range modes {
-		slices.Sort(times[idx])
-		median[idx] = times[idx][rounds/2]
+		sorted := slices.Clone(times[idx])
+		slices.Sort(sorted)
+		median[idx] = sorted[rounds/2]
 	}
 
 	millis := func(took time.Duration) float64 { return float64(took.Microseconds()) / 1000 }
 	t.Logf("median per launch of %d rounds: old boot %.1f ms, cache wiped %.1f ms, cache warm %.1f ms",
 		rounds, millis(median[0]), millis(median[1]), millis(median[2]))
 	for idx := 1; idx < len(modes); idx++ {
-		change := 100 * (float64(median[idx]) - float64(median[0])) / float64(median[0])
-		t.Logf("%s against the old boot: %+.1f%%", modes[idx].name, change)
+		slices.Sort(ratios[idx])
+		change := 100 * (ratios[idx][rounds/2] - 1)
+		t.Logf("%s against the old boot of the same round, median of %d rounds: %+.1f%%", modes[idx].name, rounds, change)
 		if change > 5 {
 			t.Errorf("a launch with the %s takes %.1f ms, %+.1f%% against the old boot's %.1f ms: the limit is +5%%",
 				modes[idx].name, millis(median[idx]), change, millis(median[0]))
