@@ -3,6 +3,8 @@
 
 //go:build cosmo && amd64
 
+// sigctxt is HOST-AWARE.
+
 package runtime
 
 import (
@@ -87,6 +89,13 @@ type xnuSiginfo struct {
 	si_value  [8]byte
 	si_band   int64
 	_         [7]uint64
+}
+
+// cosmoSigG has nothing to add: sigFetchG takes g from the register here.
+//
+//go:nosplit
+func cosmoSigG(pc uintptr) (*g, bool) {
+	return nil, false
 }
 
 //go:nosplit

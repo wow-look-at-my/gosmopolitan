@@ -1111,12 +1111,6 @@ func (t *tester) registerStdTest(pkg string) {
 		test.timeout = timeoutSec
 		test.yield = true
 		test.keep = filepath.Join(workdir, "std.test")
-		// cmd/go runs beside std.test. Its output waits in a buffer, and it
-		// prints after std.test's.
-		var cmdGoDone func() error
-		if alone {
-			cmdGoDone = t.startCmdGo(timeoutSec)
-		}
 
 		// One step builds and runs every package here, so its own line is the only thing that accounts for the compile.
 		var err error
@@ -1134,47 +1128,31 @@ func (t *tester) registerStdTest(pkg string) {
 			t.recordOneBinary(false, test.keep, rest)
 		}
 
-		if cmdGoDone != nil {
-			if errCmdGo := cmdGoDone(); err == nil {
+		// cmd/go has one binary and one deadline, and its scripts each build
+		// with -p and fill the machine. Beside std.test's packages, its
+		// compile and vet actions waited a minute at a time for a worker, and
+		// the run reached its deadline without ending. So it runs after them,
+		// alone, the way its own `alone` flag says a machine-filling test
+		// must.
+		if alone {
+			cmdGo := oneBinaryTest([]string{"cmd/go"}, goos)
+			cmdGo.timeout = timeoutSec
+			if !t.json {
+				cmdGo.actionGraph = filepath.Join(workdir, "cmd-go.test.actions.json")
+			}
+			started := time.Now()
+			var state *os.ProcessState
+			state, errCmdGo := cmdGo.runState(t)
+			if !t.json {
+				reportTestStep("cmd-go.test", time.Since(started), state)
+				reportSlowActions(os.Stdout, "cmd-go.test", cmdGo.actionGraph)
+			}
+			if err == nil {
 				err = errCmdGo
 			}
 		}
 		return err
 	})
-}
-
-// startCmdGo starts cmd/go's one-binary test and answers a function that
-// waits for it, prints its output and reports its step.
-func (t *tester) startCmdGo(timeoutSec time.Duration) func() error {
-	cmdGo := oneBinaryTest([]string{"cmd/go"}, goos)
-	cmdGo.timeout = timeoutSec
-	if !t.json {
-		cmdGo.actionGraph = filepath.Join(workdir, "cmd-go.test.actions.json")
-	}
-	var out bytes.Buffer
-	cmd, flush := cmdGo.bgCommand(t, &out, &out)
-	started := time.Now()
-	err := startYielding(cmd)
-	// The step's time ends when cmd/go exits, not when std.test lets its output print.
-	var elapsed time.Duration
-	ended := make(chan struct{})
-	go func() {
-		if err == nil {
-			err = cmd.Wait()
-		}
-		elapsed = time.Since(started)
-		close(ended)
-	}()
-	return func() error {
-		<-ended
-		flush()
-		os.Stdout.Write(out.Bytes())
-		if !t.json {
-			reportTestStep("cmd-go.test", elapsed, cmd.ProcessState)
-			reportSlowActions(os.Stdout, "cmd-go.test", cmdGo.actionGraph)
-		}
-		return err
-	}
 }
 
 // withoutCmdGo answers pkgs without cmd/go, and whether cmd/go was there.

@@ -49,7 +49,9 @@ Measured: an entry registered with `F` still boots the payload after its interpr
 
 Measured on a writable host with no loader installed. The first run leaves nothing at all under `/tmp`. The entry it registered names a path that the same run then deleted. An unprivileged run of the same program keeps its unpacked loader and registers no entry.
 
-`dats/test/readonly-boot.dats` holds the standing read-only claim for linux and darwin. `dats/test/readonly-boot-container.dats` adds the `docker run --read-only` shape, which needs mount namespaces and so runs on linux alone. `dats/test/nt.dats` holds the claim for NT. The test job runs all three on every push. Each case makes the program's directory, the unpack directory and the loader's directory read-only. Then it writes a canary file there and requires that write to fail. A case that finds a writable directory fails rather than reporting a pass it did not earn.
+`dats/test/readonly-boot.dats` holds the standing read-only claim for linux and darwin. `dats/test/readonly-boot-container.dats` adds the `docker run --read-only` shape, which needs mount namespaces and so runs on linux alone. `dats/test/nt.dats` holds the claim for NT. The test job runs all three on every push. Each case makes the program's directory, the unpack directory and the loader's directory read-only. Then it writes a canary file there and requires that write to fail.
+
+A case that finds a writable directory fails rather than reporting a pass it did not earn.
 
 The register file lives in procfs, not on the disk, so a read-only disk does not stop it. Root does. The registration is best effort: a run that cannot take it says nothing and goes through the search instead.
 
@@ -65,23 +67,23 @@ ${APE_LOADERDIR:-/dev/shm /tmp "${o%/*}"}
 
 `/dev/shm` is tmpfs, so those bytes live in RAM and reach no disk at all. `/tmp` follows, for a host that has no `/dev/shm`. Every darwin host is one of those. The program's own directory is last, for a read-only container that leaves nothing else: docker mounts `/dev/shm` **noexec**, and `--read-only` closes `/tmp`. `APE_LOADERDIR` replaces the list, and it may name more than one directory.
 
-That last candidate is not a sidecar. `-u` unlinks the file before the program starts. Nothing is distributed. Nothing is left.
+On linux that last candidate is not a sidecar. `-u` unlinks the file before the program starts. Nothing is distributed. Nothing is left. darwin keeps the loader in a per-user cache instead, under "What it costs the program".
 
 A container with nothing writable at all reaches none of them. `memfd` is immune to both `noexec` and a read-only mount. The loader falls back to it when the APE's own mount refuses an executable mapping. No POSIX shell can create one. So the loader itself still has to start from somewhere. Register the `binfmt_misc` entry on the host.
 
 The kernel then starts the APE with no file anywhere.
 
-**The loader removes its own copy before the program starts.** The script execs it as `apeld -u <ape>`. `-u` makes it unlink `argv[0]` as its first act. The loader has to do this. A script cannot delete anything after it execs.
+**On linux the loader removes its own copy before the program starts.** The script execs it as `apeld -u <ape>`. `-u` makes it unlink its own file as its first act. The loader has to do this. A script cannot delete anything after it execs.
 
 So nothing is left for anybody to find. On linux nothing was written to a disk in the first place. The name carries the PID. The mode is 700. No run can therefore read or collide with another's.
 
 A loader somebody installed is called without `-u` and stays where it is. That is why the flag rides argv. An environment variable reaches the payload. A nested run can then delete the installed copy.
 
-Unlinking the file first and exec'ing it through `/dev/fd` works on linux and is shorter. XNU answers that with `EACCES`. It is therefore not available on darwin, and both platforms take the same path instead.
+Unlinking the file first and exec'ing it through `/dev/fd` works on linux and is shorter. XNU answers that with `EACCES`.
 
-The loader is many bytes on linux/amd64, against the program's megabytes. `dd` reads it out of the APE. The darwin loader is gzipped. It goes through `gzip -dc` as well.
+The loader is many bytes on linux/amd64, against the program's megabytes. `dd` reads it out of the APE. Every loader sits uncompressed. The unpack is one `dd` and no `gzip`. The darwin loader must unpack to its exact bytes, because it checks its own hash against the cache key. So the linker places it where a large `dd` block divides both its offset and its size.
 
-Root also hands the loader to `binfmt_misc` on the way past, before the unlink. Every later run on that machine then skips this path entirely. `APE_NOBINFMT` marks a pass that took it, so a kernel that hands the file back to a shell cannot make a loop.
+Root also hands the loader to `binfmt_misc` on the way past, before the unlink. Every later run on that machine then skips this path fully. `APE_NOBINFMT` marks a pass that took it, so a kernel that hands the file back to a shell cannot make a loop.
 
 A **noexec** directory takes the loader fine, and execve then refuses it. The loop treats that like any other failure and tries the next directory.
 
@@ -94,6 +96,30 @@ APE: no apeld-linux-amd64 on this host, and nowhere to unpack the embedded one: 
 ```
 
 ## What it costs the program
+
+**ps, top and htop show the program's argv, not the loader's.** The kernel starts the loader with the loader's own path as `argv[0]`. The kernel shows that argv. runtimeprobe's `cmdline` check compares the host's copy with `os.Args`. It requires `argv[0]` to name the program file. apetest's `TestProcessListShowsTheProgram` asks the host's own `ps` and `top` about a running APE.
+
+Each loader moves the program's argv strings over its own, in the memory ps reads, before anything else. A second exec of the loader will give an exact copy. It costs every launch, and on darwin it costs a second load of libSystem. Linux reads back the loader's leftover bytes as nulls after the program's argv. XNU keeps the loader's argc, so one empty string follows the program's argv there. ps and htop show neither.
+
+**top, Activity Monitor and btop show the program's name.** On linux the loader sets the process name with `prctl(PR_SET_NAME)`. XNU has no such call. It names a process after the file it execs, in `p_comm` and `p_name`, and btop reads the path of that file. So on darwin the script execs the loader from a file with the program's own name. That file lives in a per-user cache, `.ape-<loader>-<sha256>-<uid>`, in the first unpack directory that holds one.
+
+The key is the full SHA-256 of the loader the APE carries. A new loader gets a new entry.
+
+The first launch of a program name unpacks the loader into the unpack directory under the program's name, such as `/tmp/fizzbuzz.com`. The shell creates that file with `set -C`, so the launch never writes over a file that is already there. When the name is taken, the copy goes to a per-run directory of the entry, `.<pid>`. The first launch execs the copy with `-i` and the entry's path. The loader hashes its own file against the entry's name, makes the entry, moves itself in, and boots the program. No `mkdir` runs on that path.
+
+Every later launch execs the entry at once, with no unpack and no test run.
+
+The cache is safe against another user and against corrupt bytes:
+
+- The script uses an entry only under a sticky directory, such as `/tmp`. No other user can rename it between the check and the exec.
+- The entry mode 700. The script requires that this user owns the entry and the file, and that neither is a symlink.
+- The loader hashes its own file on every start from the cache. A file that does not match its key is removed, and that run fails, so a corrupt copy never runs twice.
+
+The cache stays after the program exits. macOS clears `/tmp` of files nobody used for some days. A process of the same user can replace the file, as it can replace the APE itself.
+
+`APE_LOADER` still wins, and the script execs it where it lies. A darwin host where no unpack directory can be written execs an installed loader where it lies too. Such a process carries the loader's name.
+
+`TestDarwinLaunchIsNoSlowerThanTheOldBoot` in apetest times the darwin boot against the boot before the cache. It alternates the boots in each round. It fails when the warm cache or a cache wiped before each launch is more than five percent slower.
 
 On Linux the loader maps the payload itself, so `/proc/self/exe` names the loader. The loader passes the APE's open descriptor as `AT_EXECFD`, and `os.Executable` reads the path from `/proc/self/fd/<n>`. A program that re-execs itself, or reads its own file, gets an openable path. `/proc/self/maps` names the APE.
 

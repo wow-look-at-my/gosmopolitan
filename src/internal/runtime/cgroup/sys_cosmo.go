@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// Cosmopolitan uses Linux syscall numbers and Linux errno values on every host, so ENOENT here is the Linux one.
+
 package cgroup
 
 import (

@@ -23,9 +23,16 @@ import (
 // the region's end, because gzip on macOS fails on bytes past it.
 func TestApeLoaderRegionsAreWholeBlocks(t *testing.T) {
 	for _, l := range apeLoadersFor(apeAllLoaderPlatforms()) {
-		if l.offset%apeLoaderBlock != 0 || len(l.blob)%apeLoaderBlock != 0 {
-			t.Errorf("%s spans %d bytes at %#x, not whole %d-byte blocks", l.name, len(l.blob), l.offset, apeLoaderBlock)
+		if l.offset%l.block() != 0 || len(l.blob)%l.block() != 0 {
+			t.Errorf("%s spans %d bytes at %#x, not whole %d-byte blocks", l.name, len(l.blob), l.offset, l.block())
 			continue
+		}
+		if l.named && !bytes.Equal(l.blob, apeLoaderBins()[l.name]) {
+			t.Errorf("%s is hashed against its cache key, so its region must hold exactly its bytes", l.name)
+		}
+		// dd does a read and a write per block, on every launch that unpacks the loader.
+		if l.block() < apeLoaderBlock {
+			t.Errorf("the script copies %s in %d-byte blocks, under %d", l.name, l.block(), apeLoaderBlock)
 		}
 		bin := apeLoaderBins()[l.name]
 		got := l.blob
@@ -79,9 +86,9 @@ func apeGunzip(t *testing.T, name string, blob []byte) []byte {
 // reaches the host verbatim, and nothing on the host checks it, so this is
 // the only place that can.
 var apeLoaderSums = map[string]string{
-	"apeld-linux-amd64":  "09809f110107fd36b53f2b3e8068d679f51c70e495d6669b0eb4adeb5cd5af7d",
-	"apeld-linux-arm64":  "5dc25e1d2eb44a7067491e4138dcf157b9de55d34a23ebe5b3062d95fba60a59",
-	"apeld-darwin-arm64": "b67e73680faea89c0db389089939ab9bf2acc6f36a3ce90a661eb64694ed2cbc",
+	"apeld-linux-amd64":  "08bba69bfc5d4716d9c2034f7f270dec56fd4b1c484349cbb4a6482353d10b83",
+	"apeld-linux-arm64":  "e7787f7d572fe267d19a5a2306a19eb54b5fbe446f74671fc98f90aa93cc1c2e",
+	"apeld-darwin-arm64": "ff23a3ff22c521dbc9fc4c98db7b0bef2e35177aa9c95303a152e22a98443ce6",
 }
 
 // apeLoaderBins is the embedded loader for each platform that has one.

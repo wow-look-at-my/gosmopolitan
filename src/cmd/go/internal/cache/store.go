@@ -3,6 +3,8 @@
 
 //go:build !cmd_go_bootstrap
 
+// openCache opens the directory, puts the store under it when one is configured, and serves the result to the go commands this starts.
+
 package cache
 
 import (
@@ -27,6 +29,14 @@ import (
 // openCache opens the directory, puts the store under it when one is
 // configured, and serves the result to the go commands this starts.
 func openCache(dir string) (Cache, error) {
+	// The cleanup is registered before the broker exists. An exit during the open does not wait for it: StopBroker makes the open serve no broker.
+	if !base.OnExit(func() {
+		cacheclient.CloseStore()
+		cacheclient.Exit()
+	}) {
+		// The go command is exiting, and a broker created now would outlive it. os.Exit ends this goroutine.
+		select {}
+	}
 	store, err := openStore(dir)
 	if err != nil {
 		return nil, err
@@ -40,12 +50,6 @@ func openCache(dir string) (Cache, error) {
 	}
 	// A test binary and a `go run` program are started with the environment this command was started with, rather than with this process's own.
 	goCfg.OrigEnv = append(goCfg.OrigEnv[:len(goCfg.OrigEnv):len(goCfg.OrigEnv)], cacheclient.BrokerEnviron()...)
-	// A go command that never runs a build still opens the cache, and a failing
-	// one exits through base.Exit without returning.
-	base.AtExit(func() {
-		cacheclient.CloseStore()
-		cacheclient.Exit()
-	})
 	return cache, nil
 }
 
@@ -244,6 +248,7 @@ func MissNotice(format string, args ...any) {
 	if !MissNotices() {
 		return
 	}
+
 	cacheNotice(format, args...)
 }
 

@@ -3,6 +3,8 @@
 
 package ld
 
+import _ "embed"
+
 import (
 	"internal/buildcfg"
 	"internal/testenv"
@@ -69,32 +71,8 @@ func main() {
 	_ = pid + r + rr
 }
 `)
-	write("sys_arm64.s", `//go:build gc
-
-#include "textflag.h"
-
-TEXT ·Syscall(SB),NOSPLIT,$0-56
-	B	syscall·Syscall(SB)
-
-TEXT ·Syscall6(SB),NOSPLIT,$0-80
-	B	syscall·Syscall6(SB)
-
-TEXT ·RawSyscall(SB),NOSPLIT,$0-56
-	B	syscall·RawSyscall(SB)
-`)
-	write("sys_amd64.s", `//go:build gc
-
-#include "textflag.h"
-
-TEXT ·Syscall(SB),NOSPLIT,$0-56
-	JMP	syscall·Syscall(SB)
-
-TEXT ·Syscall6(SB),NOSPLIT,$0-80
-	JMP	syscall·Syscall6(SB)
-
-TEXT ·RawSyscall(SB),NOSPLIT,$0-56
-	JMP	syscall·RawSyscall(SB)
-`)
+	write("sys_arm64.s", testAPECosmoNosplitABI0SyscallChainC)
+	write("sys_amd64.s", testAPECosmoNosplitABI0SyscallChainC2)
 
 	// The fat build links both architectures; arm64 has the deeper frames and is where the budget overflowed.
 	cmd := testenv.Command(t, testenv.GoToolPath(t), "build", "-o", filepath.Join(dir, "probe.com"), ".")
@@ -109,3 +87,9 @@ TEXT ·RawSyscall(SB),NOSPLIT,$0-56
 		t.Fatalf("go build: %v\n%s", err, msg)
 	}
 }
+
+//go:embed testdata/test-ape-cosmo-nosplit-abi0-syscall-chain.c
+var testAPECosmoNosplitABI0SyscallChainC string
+
+//go:embed testdata/test-ape-cosmo-nosplit-abi0-syscall-chain-2.c
+var testAPECosmoNosplitABI0SyscallChainC2 string

@@ -27,8 +27,18 @@ import (
 // osArchInit on NT hosts, before any user code runs.
 func ntSetSyscallFns() {
 	cosmo.SetWindowsFns(&cosmo.WindowsFns{
-		Emulate: ntSyscallEmulate,
-		Spawn:   ntSpawn,
+		Emulate:      ntSyscallEmulate,
+		Spawn:        ntSpawn,
+		FinalPath:    ntFinalPath,
+		SocketUnread: ntSocketUnread,
+		SocketPair:   ntWatchPair,
+		WatchPort:    ntWatchPort,
+		WatchOpen:    ntWatchOpen,
+		WatchRead:    ntWatchRead,
+		WatchWait:    ntWatchWait,
+		WatchWake:    ntWatchWake,
+		WatchCancel:  ntWatchCancel,
+		WatchClose:   ntWatchClose,
 	})
 }
 
@@ -37,88 +47,88 @@ func ntSetSyscallFns() {
 // the few overlapping values avoids importing more of that package's
 // namespace into the runtime).
 const (
-	ntSysRead         = 0
-	ntSysWrite        = 1
-	ntSysMmap         = 9
-	ntSysMunmap       = 11
-	ntSysMsync        = 26
-	ntSysMadvise      = 28
-	ntSysMlock        = 149
-	ntSysMunlock      = 150
-	ntSysClose        = 3
-	ntSysStat         = 4
-	ntSysFstat        = 5
-	ntSysLstat        = 6
-	ntSysLseek        = 8
-	ntSysPread64      = 17
-	ntSysPwrite64     = 18
-	ntSysReadv        = 19
-	ntSysWritev       = 20
-	ntSysDup          = 32
-	ntSysGetpid       = 39
-	ntSysSendfile     = 40
-	ntSysSocket       = 41
-	ntSysConnect      = 42
-	ntSysSendto       = 44
-	ntSysRecvfrom     = 45
-	ntSysSendmsg      = 46
-	ntSysRecvmsg      = 47
-	ntSysShutdown     = 48
-	ntSysBind         = 49
-	ntSysListen       = 50
-	ntSysGetsockNm    = 51
-	ntSysGetpeerNm    = 52
-	ntSysSocketpair   = 53
-	ntSysSetsockopt   = 54
-	ntSysGetsockopt   = 55
-	ntSysExit         = 60
-	ntSysWait4        = 61
-	ntSysKill         = 62
-	ntSysFcntl        = 72
-	ntSysFlock        = 73
-	ntSysSync         = 162
-	ntSysUname        = 63
-	ntSysStatfs       = 137
-	ntSysFstatfs      = 138
-	ntSysFsync        = 74
-	ntSysFdatasync    = 75
-	ntSysTruncate     = 76
-	ntSysFtruncate    = 77
-	ntSysGetcwd       = 79
-	ntSysChdir        = 80
-	ntSysFchdir       = 81
-	ntSysFchmod       = 91
-	ntSysUmask        = 95
-	ntSysGettimeofday = 96
-	ntSysGetrusage    = 98
+	ntSysRead          = 0
+	ntSysWrite         = 1
+	ntSysMmap          = 9
+	ntSysMunmap        = 11
+	ntSysMsync         = 26
+	ntSysMadvise       = 28
+	ntSysMlock         = 149
+	ntSysMunlock       = 150
+	ntSysClose         = 3
+	ntSysStat          = 4
+	ntSysFstat         = 5
+	ntSysLstat         = 6
+	ntSysLseek         = 8
+	ntSysPread64       = 17
+	ntSysPwrite64      = 18
+	ntSysReadv         = 19
+	ntSysWritev        = 20
+	ntSysDup           = 32
+	ntSysGetpid        = 39
+	ntSysSendfile      = 40
+	ntSysSocket        = 41
+	ntSysConnect       = 42
+	ntSysSendto        = 44
+	ntSysRecvfrom      = 45
+	ntSysSendmsg       = 46
+	ntSysRecvmsg       = 47
+	ntSysShutdown      = 48
+	ntSysBind          = 49
+	ntSysListen        = 50
+	ntSysGetsockNm     = 51
+	ntSysGetpeerNm     = 52
+	ntSysSocketpair    = 53
+	ntSysSetsockopt    = 54
+	ntSysGetsockopt    = 55
+	ntSysExit          = 60
+	ntSysWait4         = 61
+	ntSysKill          = 62
+	ntSysFcntl         = 72
+	ntSysFlock         = 73
+	ntSysSync          = 162
+	ntSysUname         = 63
+	ntSysStatfs        = 137
+	ntSysFstatfs       = 138
+	ntSysFsync         = 74
+	ntSysFdatasync     = 75
+	ntSysTruncate      = 76
+	ntSysFtruncate     = 77
+	ntSysGetcwd        = 79
+	ntSysChdir         = 80
+	ntSysFchdir        = 81
+	ntSysFchmod        = 91
+	ntSysUmask         = 95
+	ntSysGettimeofday  = 96
+	ntSysGetrusage     = 98
 	ntSysGetpriority   = 140
 	ntSysSetpriority   = 141
 	ntSysSchedSetaffin = 203
 	ntSysSchedGetaffin = 204
-	ntSysGetuid       = 102
-	ntSysGetgid       = 104
-	ntSysGeteuid      = 107
-	ntSysGetegid      = 108
-	ntSysGetppid      = 110
-	ntSysGetpgrp      = 111
-	ntSysGettid       = 186
-	ntSysTkill        = 200
-	ntSysGetdents64   = 217
-	ntSysExitGroup    = 231
-	ntSysTgkill       = 234
-	ntSysOpenat       = 257
-	ntSysMkdirat      = 258
-	ntSysNewfstatat   = 262
-	ntSysUnlinkat     = 263
-	ntSysRenameat     = 264
-	ntSysReadlinkat   = 267
-	ntSysAccept4      = 288
-	ntSysLinkat       = 265
-	ntSysFchmodat     = 268
-	ntSysFaccessat    = 269
-	ntSysUtimensat    = 280
-	ntSysPipe2        = 293
-	ntSysGetrandom    = 318
+	ntSysGetuid        = 102
+	ntSysGetgid        = 104
+	ntSysGeteuid       = 107
+	ntSysGetegid       = 108
+	ntSysGetppid       = 110
+	ntSysGetpgrp       = 111
+	ntSysGettid        = 186
+	ntSysTkill         = 200
+	ntSysGetdents64    = 217
+	ntSysExitGroup     = 231
+	ntSysTgkill        = 234
+	ntSysOpenat        = 257
+	ntSysMkdirat       = 258
+	ntSysNewfstatat    = 262
+	ntSysUnlinkat      = 263
+	ntSysRenameat      = 264
+	ntSysReadlinkat    = 267
+	ntSysAccept4       = 288
+	ntSysLinkat        = 265
+	ntSysFchmodat      = 268
+	ntSysFaccessat     = 269
+	ntSysUtimensat     = 280
+	ntSysPipe2         = 293
+	ntSysGetrandom     = 318
 )
 
 // Linux errno values produced by the emulation.
@@ -473,7 +483,7 @@ func ntSyscallEmulate(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uintpt
 	case ntSysRecvmsg:
 		return ntEmuRecvmsg(int32(a1), (*ntLinuxMsghdr)(unsafe.Pointer(a2)), int32(a3))
 	case ntSysSocketpair:
-		return ntEmuSocketpair(int32(a1), int32(a2), int32(a3), (*[2]int32)(unsafe.Pointer(a4)))
+		return ntEmuSocketpair(int32(a1), int32(a2), int32(a3), (*[2]int32)(unsafe.Pointer(a4)), 0)
 	case ntSysDup:
 		return ntEmuDup(int32(a1))
 	case ntSysDup2:
@@ -831,7 +841,7 @@ func ntFiletimeToTimespec(lo, hi uint32) ntLinuxTimespec {
 //     os.SameFile works across path spellings (/tmp vs /c/...).
 //   - Modes are synthetic:, or when the READONLY attribute
 //     is set, for files and directories alike; a symlink is. The
-//     owner's write bit is the one real bit (ntChmodW carries it the
+//     owner's write bit is the real bit (ntChmodW carries it the
 //     other way). Everything stays "executable" because NT has no x
 //     bit and path-based lookups (exec.LookPath) gate on.
 //   - ctime is filled from the CreationTime (NT has no status-change

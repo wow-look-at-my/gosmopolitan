@@ -3,6 +3,8 @@
 
 //go:build (dragonfly || freebsd || linux || netbsd || openbsd || solaris) && !cosmo
 
+// forkExecPipe atomically opens a pipe with O_CLOEXEC set on both file descriptors.
+
 package syscall
 
 // forkExecPipe atomically opens a pipe with O_CLOEXEC set on both file

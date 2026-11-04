@@ -56,7 +56,7 @@ var (
 
 // Issue 9370
 func TestCmpIfaceConcreteAlloc(t *testing.T) {
-	t.Serial() // AllocsPerRun measures the whole process.
+	t.Serial("comparing an interface against a concrete value must not allocate, and the counter sees the whole heap")
 	if runtime.Compiler != "gc" {
 		t.Skip("skipping on non-gc compiler")
 	}
@@ -251,7 +251,7 @@ func BenchmarkAssertE2E2Blank(b *testing.B) {
 }
 
 func TestNonEscapingConvT2E(t *testing.T) {
-	t.Serial() // AllocsPerRun measures the whole process.
+	t.Serial("a conversion to an empty interface that stays on the stack reads as zero only when nothing else allocates")
 	m := make(map[any]bool)
 	m[42] = true
 	if !m[42] {
@@ -272,7 +272,7 @@ func TestNonEscapingConvT2E(t *testing.T) {
 }
 
 func TestNonEscapingConvT2I(t *testing.T) {
-	t.Serial() // AllocsPerRun measures the whole process.
+	t.Serial("a non-escaping conversion to a non-empty interface is measured here, and the heap counter is process-wide")
 	m := make(map[I1]bool)
 	m[TM(42)] = true
 	if !m[TM(42)] {
@@ -315,7 +315,7 @@ func TestZeroConvT2x(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			t.Serial() // AllocsPerRun measures the whole process.
+			t.Serial("each zero-value conversion in this table must cost nothing, which a parallel allocation would hide")
 			n := testing.AllocsPerRun(1000, test.fn)
 			if n != 0 {
 				t.Errorf("want zero allocs, got %v", n)
