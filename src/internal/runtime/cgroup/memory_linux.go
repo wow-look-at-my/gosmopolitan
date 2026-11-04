@@ -65,6 +65,12 @@ func readMemoryLimit(fd int) (uint64, bool, error) {
 	return parseMemoryLimit(b[:n])
 }
 
+// FindMemory finds the path to the memory cgroup of this process. It is
+// findMemory for internal/cgrouptest.
+func FindMemory(out []byte, scratch []byte) (int, Version, error) {
+	return findMemory(out, scratch)
+}
+
 // findMemory finds the path to the memory cgroup that this process is a member
 // of and places it in out. scratch is a scratch buffer for internal use.
 //
