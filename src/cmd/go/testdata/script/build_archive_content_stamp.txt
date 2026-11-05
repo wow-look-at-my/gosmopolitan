@@ -4,8 +4,6 @@
 # An installed archive names its action, so a later build reads it as
 # up to date.
 
-[short] skip
-
 env GOCACHE=$WORK/gocache
 mkdir $GOCACHE
 
