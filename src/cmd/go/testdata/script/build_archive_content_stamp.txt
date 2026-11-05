@@ -1,0 +1,37 @@
+# A package archive carries contentID/contentID, so two compiles whose
+# inputs differ and whose output does not store one archive. The cache
+# names an output by its content, so both list the same export file.
+# An installed archive names its action, so a later build reads it as
+# up to date.
+
+[short] skip
+
+env GOCACHE=$WORK/gocache
+mkdir $GOCACHE
+
+# -gcflags=-e changes the action ID and not the object code.
+go list -export -f '{{.BuildID}}' m/b
+cp stdout plain-id.txt
+go list -export -f '{{.Export}}' m/b
+cp stdout plain-export.txt
+go list -export -gcflags=-e -f '{{.BuildID}}' m/b
+cp stdout flag-id.txt
+go list -export -gcflags=-e -f '{{.Export}}' m/b
+cp stdout flag-export.txt
+! cmp plain-id.txt flag-id.txt
+cmp plain-export.txt flag-export.txt
+
+# The install writes the full build ID into its copy.
+go build -o $WORK/b.a m/b
+go tool buildid $WORK/b.a
+cp stdout stamp.txt
+cmp plain-id.txt stamp.txt
+
+-- go.mod --
+module m
+
+go 1.23
+-- b/b.go --
+package b
+
+func B() int { return 1 }

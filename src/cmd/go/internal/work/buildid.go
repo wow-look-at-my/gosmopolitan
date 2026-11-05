@@ -118,6 +118,64 @@ func contentID(buildID string) string {
 	return buildID[strings.LastIndex(buildID, buildIDSeparator)+1:]
 }
 
+// Archive stamps
+//
+// A package archive this toolchain compiles carries contentID/contentID, not
+// actionID/contentID. The action ID names the inputs of one compile. Two
+// compiles with different inputs and the same output, a -gcflags that
+// changed nothing for one, then produce one archive, byte for byte. The
+// build cache stores the bytes under each action ID, and a store that
+// addresses its objects by content keeps one copy. An installed archive is
+// the exception: useCache reads its action ID from the file to decide that
+// the install is up to date, so an install writes the full build ID back.
+// A build ID the go command holds in memory is always actionID/contentID.
+
+// archiveStamp is the stamp a package archive carries for build ID buildID.
+func archiveStamp(buildID string) string {
+	content := contentID(buildID)
+	return content + buildIDSeparator + content
+}
+
+// archiveBuildID is the build ID of an archive whose stamp is stamp, when
+// actionID is the action that produced it. It takes a content stamp and the
+// full build ID an installed archive carries.
+func archiveBuildID(actionID, stamp string) string {
+	return actionID + buildIDSeparator + contentID(stamp)
+}
+
+// restampArchive writes buildID into the archive at file, which carries a
+// content stamp. An installed archive is the one place a file stamp must
+// name its action.
+func restampArchive(file, buildID string) error {
+	stamp, err := buildid.ReadFile(file)
+	if err != nil {
+		return err
+	}
+	if stamp != archiveStamp(buildID) {
+		// Either the file names its action already, or a -buildid flag chose
+		// the stamp, and then no hit reads it.
+		return nil
+	}
+	r, err := os.Open(file)
+	if err != nil {
+		return err
+	}
+	matches, _, err := buildid.FindAndHash(r, stamp, 0)
+	r.Close()
+	if err != nil {
+		return err
+	}
+	w, err := os.OpenFile(file, os.O_RDWR, 0)
+	if err != nil {
+		return err
+	}
+	if err := buildid.Rewrite(w, matches, buildID); err != nil {
+		w.Close()
+		return err
+	}
+	return w.Close()
+}
+
 // Export IDs
 //
 // A compile reads nothing of an imported package but its export data: the
@@ -825,6 +883,10 @@ func (b *Builder) useCache(a *Action, actionHash cache.ActionID, target string, 
 			}
 			a.built = file
 			a.Target = "DO NOT USE - using cache"
+			if a.Mode == "build" {
+				// The file carries a content stamp. See "Archive stamps" above.
+				buildID = archiveBuildID(actionID, buildID)
+			}
 			a.buildID = buildID
 			if b.lazyEnabled(a) {
 				// The lazy record is missing, or the hit above would have used it. The next build then reads no archive.
@@ -961,11 +1023,16 @@ func (b *Builder) updateBuildID(a *Action, target string) error {
 	if len(newID) != len(a.buildID) {
 		return fmt.Errorf("internal error: build ID length mismatch %q vs %q", a.buildID, newID)
 	}
+	// The archive on disk gets the content stamp. The action knows its own
+	// action ID, and the file stamp is where the action half differs from one
+	// archive to the next. See archiveStamp.
+	fileID := newID
 	if a.Mode == "build" && cfg.BuildToolchainName == "gc" {
 		if a.exportID, err = exportID(target, a.buildID); err != nil {
 			return err
 		}
 		cache.PutBytes(c, exportKey(a.actionID), []byte(a.exportID))
+		fileID = archiveStamp(newID)
 	}
 
 	// Replace with new content-based ID.
@@ -988,7 +1055,7 @@ func (b *Builder) updateBuildID(a *Action, target string) error {
 	if err != nil {
 		return err
 	}
-	err = buildid.Rewrite(w, matches, newID)
+	err = buildid.Rewrite(w, matches, fileID)
 	if err != nil {
 		w.Close()
 		return err
