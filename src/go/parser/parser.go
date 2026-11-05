@@ -129,9 +129,17 @@ const maxNestLev int = 1e5
 // encoding/asn1 and encoding/xml carry a wasm depth limit (go.dev/issue/56498).
 const maxNestLevWasm int = 5000
 
+// nestLevLimit is the nesting limit this build enforces.
+var nestLevLimit = func() int {
+	if runtime.GOARCH == "wasm" {
+		return maxNestLevWasm
+	}
+	return maxNestLev
+}()
+
 func incNestLev(p *parser) *parser {
 	p.nestLev++
-	if p.nestLev > maxNestLev || runtime.GOARCH == "wasm" && p.nestLev > maxNestLevWasm {
+	if p.nestLev > nestLevLimit {
 		p.error(p.pos, "exceeded max nesting depth")
 		panic(bailout{})
 	}
