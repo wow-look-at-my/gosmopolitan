@@ -130,6 +130,10 @@ func contentID(buildID string) string {
 // the install is up to date, so an install writes the full build ID back.
 // A build ID the go command holds in memory is always actionID/contentID.
 
+// archiveStampScheme names the stamp archiveStamp writes. A compile's action
+// ID includes it. Change it when archiveStamp changes.
+const archiveStampScheme = "content/content"
+
 // archiveStamp is the stamp a package archive carries for build ID buildID.
 func archiveStamp(buildID string) string {
 	content := contentID(buildID)
