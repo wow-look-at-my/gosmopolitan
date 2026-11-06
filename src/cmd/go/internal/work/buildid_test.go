@@ -208,3 +208,15 @@ func TestCosmoToolIDNamesTheToolNotTheBinary(t *testing.T) {
 		t.Errorf("the compiler's tool ID %q is part of the binary's own build ID", id1)
 	}
 }
+
+// A compile's key names the stamp scheme. The scheme must describe the stamp
+// that archiveStamp writes. Otherwise a go command that stamps another way
+// shares keys with this, and a rebuild misses the output a lazy record names.
+func TestArchiveStampScheme(t *testing.T) {
+	if stamp := archiveStamp("actionAAAA/contentBBB"); stamp != "contentBBB/contentBBB" {
+		t.Fatalf("archiveStamp wrote %q; change archiveStampScheme (%q) with it", stamp, archiveStampScheme)
+	}
+	if archiveStampScheme != "content/content" {
+		t.Fatalf("archiveStampScheme is %q, but archiveStamp writes content/content", archiveStampScheme)
+	}
+}
