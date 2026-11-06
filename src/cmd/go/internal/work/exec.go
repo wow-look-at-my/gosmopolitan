@@ -2282,7 +2282,16 @@ func BuildInstallFunc(b *Builder, ctx context.Context, a *Action) (err error) {
 	if err := b.fetchLazy(a1.built); err != nil {
 		return err
 	}
-	return sh.moveOrCopyFile(a.Target, a1.built, perm, false)
+	if err := sh.moveOrCopyFile(a.Target, a1.built, perm, false); err != nil {
+		return err
+	}
+	if a1.Mode == "build" && cfg.BuildToolchainName == "gc" && !cfg.BuildN {
+		// The archive carries a content stamp. An installed one names its
+		// action, so useCache can read the install as up to date. See
+		// "Archive stamps" in buildid.go.
+		return restampArchive(a.Target, a1.buildID)
+	}
+	return nil
 }
 
 // AllowInstall returns a non-nil error if this invocation of the go command is

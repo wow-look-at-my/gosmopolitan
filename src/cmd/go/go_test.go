@@ -1142,10 +1142,13 @@ func TestGoListExport(t *testing.T) {
 		t.Fatalf(".BuildID with -export was empty")
 	}
 
+	// The archive carries contentID/contentID. See "Archive stamps" in
+	// internal/work/buildid.go.
 	tg.run("tool", "buildid", file)
 	toolBuildID := strings.TrimSpace(tg.stdout.String())
-	if buildID != toolBuildID {
-		t.Fatalf(".BuildID with -export %q disagrees with 'go tool buildid' %q", buildID, toolBuildID)
+	content := buildID[strings.LastIndex(buildID, "/")+1:]
+	if want := content + "/" + content; toolBuildID != want {
+		t.Fatalf("'go tool buildid' %q is not the content stamp %q of .BuildID %q", toolBuildID, want, buildID)
 	}
 }
 
