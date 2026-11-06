@@ -363,6 +363,25 @@ func packageOriginKey(pkg *load.Package, trimpath bool, workDir string) string {
 	return fmt.Sprintf("dir %s\n", pkg.Dir)
 }
 
+// trimsModuleCachePath reports whether the compile of p names its source as
+// module@version without -trimpath. The source of a package in the module
+// cache is fixed by its module version. A key that named the cache directory
+// would make each GOMODCACHE location compile the same source again, under a
+// key no other location asks for. A package with cgo or SWIG keeps its
+// directory: the C compiler and the cgo tool write that path too.
+func trimsModuleCachePath(pkg *load.Package) bool {
+	if cfg.BuildTrimpath || pkg == nil || pkg.Goroot || pkg.Module == nil || pkg.Module.Version == "" {
+		return false
+	}
+	if len(pkg.CgoFiles)+len(pkg.SwigFiles)+len(pkg.SwigCXXFiles) > 0 {
+		return false
+	}
+	if replace := pkg.Module.Replace; replace != nil && replace.Version == "" {
+		return false
+	}
+	return cfg.GOMODCACHE != "" && str.HasFilePathPrefix(pkg.Dir, cfg.GOMODCACHE)
+}
+
 // writesSSADump reports whether compiling p writes an SSA dump into GOSSADIR.
 // GOSSAFUNC asks every compile for one, and an ssa/<phase>/dump debug flag
 // asks this package's compile.
@@ -398,7 +417,7 @@ func (b *Builder) buildActionID(a *Action) cache.ActionID {
 
 	// Include information about the origin of the package that
 	// may be embedded in the debug info for the object file.
-	fmt.Fprint(h, packageOriginKey(p, cfg.BuildTrimpath, b.WorkDir))
+	fmt.Fprint(h, packageOriginKey(p, cfg.BuildTrimpath || trimsModuleCachePath(p), b.WorkDir))
 
 	if p.Module != nil {
 		fmt.Fprintf(h, "go %s\n", p.Module.GoVersion)

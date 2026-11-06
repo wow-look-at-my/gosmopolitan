@@ -1,0 +1,41 @@
+# A package from the module cache compiles under the same key wherever
+# GOMODCACHE is. Its source is fixed by its module version, and its compile
+# names that source as module@version.
+
+env GOCACHE=$WORK/gocache
+mkdir $GOCACHE
+
+env GOMODCACHE=$WORK/cacheA
+go get rsc.io/quote@v1.5.2
+go list -export -deps -f '{{if .Module}}{{if .Module.Version}}{{.ImportPath}} {{.BuildID}}{{end}}{{end}}' m
+stdout '^rsc.io/quote '
+cp stdout first.txt
+
+env GOMODCACHE=$WORK/cacheB
+go mod download rsc.io/quote
+go list -export -deps -f '{{if .Module}}{{if .Module.Version}}{{.ImportPath}} {{.BuildID}}{{end}}{{end}}' m
+cp stdout second.txt
+cmp first.txt second.txt
+
+# The main module still keys on its directory: its compile names the
+# absolute path, so a stack trace leads to the file on this machine.
+go list -export -f '{{.BuildID}}' m
+cp stdout main-first.txt
+mkdir $WORK/elsewhere
+cp go.mod $WORK/elsewhere/go.mod
+cp go.sum $WORK/elsewhere/go.sum
+cp m.go $WORK/elsewhere/m.go
+cd $WORK/elsewhere
+go list -export -f '{{.BuildID}}' m
+cp stdout $WORK/gopath/src/main-second.txt
+cd $WORK/gopath/src
+! cmp main-first.txt main-second.txt
+
+-- go.mod --
+module m
+
+go 1.20
+-- m.go --
+package m
+
+import _ "rsc.io/quote"
