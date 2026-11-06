@@ -137,12 +137,15 @@ func (b *Builder) fetchLazy(file string) error {
 
 // rebuiltLazy records the archive a compile wrote in place of one the cache
 // could not supply. got keeps its own name, and buildIDCache names it as the
-// action's build ID. A list of files built before the fetch, a vet config for
-// one, still names file, and fetchLeft answers the move.
+// action's build ID. The action names got from then on, so the dependent
+// compile, the link and the install, which read built file after the fetch,
+// read the archive that exists. A list of files built before the fetch, a vet
+// config for one, still names file, and fetchLeft answers the move.
 func (b *Builder) rebuiltLazy(file, got string, a *Action) {
 	if got == file {
 		return
 	}
+	a.built = got
 	b.id.Lock()
 	delete(b.buildIDCache, file)
 	b.buildIDCache[got] = a.buildID
