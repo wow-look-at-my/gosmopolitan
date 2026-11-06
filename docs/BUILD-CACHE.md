@@ -72,6 +72,14 @@ A build compiles in parallel, so its replies come back in whatever order the own
 
 A caller holding an open file names that file. One holding anything else spills to a temporary file first. The bytes have to reach another process. A path is what this protocol carries.
 
+## An archive is stamped with its content, not its action
+
+Upstream stamps `actionID/contentID` into every package archive. The action ID names the inputs of one compile, so a compile with a different flag and the same object code writes a different file. Every key then holds its own bytes, and a store that addresses objects by content keeps a copy per key.
+
+This toolchain stamps `contentID/contentID` into the archive. The go command keeps `actionID/contentID` in memory, in `a.buildID`, and a cache hit puts the action ID back from the key it asked for. Compiles whose output is the same now store one archive, and the dashboard's content-id comparison reads it as unchanged. The installed archive is the exception: `useCache` reads its action ID from the file. An install writes the full build ID into its copy. Depth: "Archive stamps" in `src/cmd/go/internal/work/buildid.go`.
+
+The store's upload guard accepts both stamps. It checks the content half against the body, and the `action-id` metadata against the key.
+
 ## Tiers, and which one answered
 
 `storeTier` puts the store under the disk cache. Disk stays authoritative. A hit there answers with no request at all. A body the store serves is written to disk before it is handed back. So a caller reads a file either way.
