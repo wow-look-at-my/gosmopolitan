@@ -379,7 +379,9 @@ func trimsModuleCachePath(pkg *load.Package) bool {
 	if replace := pkg.Module.Replace; replace != nil && replace.Version == "" {
 		return false
 	}
-	return cfg.GOMODCACHE != "" && str.HasFilePathPrefix(pkg.Dir, cfg.GOMODCACHE)
+	// pkg.Dir is clean. GOMODCACHE is as the user set it, and on Windows
+	// "$WORK/cache" mixes the two separators.
+	return cfg.GOMODCACHE != "" && str.HasFilePathPrefix(pkg.Dir, filepath.Clean(cfg.GOMODCACHE))
 }
 
 // writesSSADump reports whether compiling p writes an SSA dump into GOSSADIR.
@@ -501,6 +503,10 @@ func (b *Builder) buildActionID(a *Action) cache.ActionID {
 		base.Fatalf("buildActionID: unknown build toolchain %q", cfg.BuildToolchainName)
 	case "gc":
 		fmt.Fprintf(h, "compile %s %q %q\n", b.toolID("compile"), forcedGcflags, p.Internal.Gcflags)
+		// The cached archive carries archiveStampScheme. A go command that
+		// stamps another way writes other bytes under the same inputs, so its
+		// entries must not share this key.
+		fmt.Fprintf(h, "stamp %s\n", archiveStampScheme)
 		if len(p.SFiles) > 0 {
 			fmt.Fprintf(h, "asm %q %q %q\n", b.toolID("asm"), forcedAsmflags, p.Internal.Asmflags)
 		}
