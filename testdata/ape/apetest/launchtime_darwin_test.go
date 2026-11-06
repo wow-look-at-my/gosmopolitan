@@ -58,8 +58,8 @@ func oldDarwinBoot(t *testing.T, ape string) string {
 }
 
 // The darwin boot runs the loader from a per-user cache, so that XNU names
-// the process after the program. The rounds alternate the boots, so a busy
-// host slows each of them alike.
+// the process after the program. A busy host only adds time to a launch, so
+// each boot is judged by its fastest launch over the rounds.
 func TestDarwinLaunchIsNoSlowerThanTheOldBoot(t *testing.T) {
 	if loader := residentLoader(t); loader != "" {
 		t.Fatalf("%s is on this host: the old boot would exec it and never unpack", loader)
@@ -117,7 +117,7 @@ func TestDarwinLaunchIsNoSlowerThanTheOldBoot(t *testing.T) {
 		}},
 	}
 
-	// One runner's launches vary by more than the limit, so the median needs many rounds.
+	// One runner's launches vary by more than the limit, so each mode needs many rounds.
 	const rounds = 150
 	times := make([][]time.Duration, len(modes))
 	for round := range rounds {
@@ -134,22 +134,28 @@ func TestDarwinLaunchIsNoSlowerThanTheOldBoot(t *testing.T) {
 		}
 	}
 	median := make([]time.Duration, len(modes))
+	fastest := make([]time.Duration, len(modes))
 	for idx := range modes {
 		sorted := slices.Clone(times[idx])
 		slices.Sort(sorted)
 		median[idx] = sorted[rounds/2]
+		fastest[idx] = sorted[0]
 	}
 
 	millis := func(took time.Duration) float64 { return float64(took.Microseconds()) / 1000 }
 	t.Logf("median per launch of %d rounds: old boot %.1f ms, cache wiped %.1f ms, cache warm %.1f ms",
 		rounds, millis(median[0]), millis(median[1]), millis(median[2]))
+	t.Logf("fastest launch of %d rounds: old boot %.1f ms, cache wiped %.1f ms, cache warm %.1f ms",
+		rounds, millis(fastest[0]), millis(fastest[1]), millis(fastest[2]))
 	for idx := 1; idx < len(modes); idx++ {
 		slices.Sort(ratios[idx])
-		change := 100 * (ratios[idx][rounds/2] - 1)
-		t.Logf("%s against the old boot of the same round, median of %d rounds: %+.1f%%", modes[idx].name, rounds, change)
+		t.Logf("%s against the old boot of the same round, median of %d rounds: %+.1f%%",
+			modes[idx].name, rounds, 100*(ratios[idx][rounds/2]-1))
+		// The fastest launch is what the boot costs, since a busy host only adds time.
+		change := 100 * (float64(fastest[idx])/float64(fastest[0]) - 1)
 		if change > 5 {
-			t.Errorf("a launch with the %s takes %.1f ms, %+.1f%% against the old boot's %.1f ms: the limit is +5%%",
-				modes[idx].name, millis(median[idx]), change, millis(median[0]))
+			t.Errorf("a launch with the %s takes %.1f ms at its fastest, %+.1f%% against the old boot's fastest %.1f ms: the limit is +5%%",
+				modes[idx].name, millis(fastest[idx]), change, millis(fastest[0]))
 		}
 	}
 }

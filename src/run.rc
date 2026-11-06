@@ -19,3 +19,4 @@ GOARCH=$GOHOSTARCH
 
 # dist test sets GOPATH and PATH itself.
 exec ../bin/go tool dist test $*
+
