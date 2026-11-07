@@ -75,7 +75,7 @@ An API request may only reach its own host: api.github.com, github-state-mirror.
 
 A signed archive URL must be on codeload.github.com.
 
-A commit that no ref names, such as the commit of a pseudo-version, comes from the archive of that commit, `/archive/<commit>.tar.gz`. A hash prefix works: the archive names the full hash. Only a missing archive goes to git, which fetches every branch and tag.
+A commit that no ref names, such as the commit of a pseudo-version, comes from the archive of that commit, `/archive/<commit>.tar.gz`. A hash prefix works: the archive names the full hash. Only a missing archive goes to git, which fetches every branch and tag. Any valid commit is accepted, on a branch or not. No compare request or other reachability check comes before the archive.
 
 The archive is used as GitHub serves it. It omits the commit of each submodule and applies `export-ignore` and `export-subst`, so such a module hashes differently than over git.
 
