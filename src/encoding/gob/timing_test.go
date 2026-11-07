@@ -129,8 +129,14 @@ func TestCountDecodeMallocs(t *testing.T) {
 			t.Fatal("decode:", err)
 		}
 	})
-	if allocs != 3 {
-		t.Fatalf("mallocs per decode of type Bench: %v; wanted 3\n", allocs)
+	// The wasm ports spend two more allocations per decode than the native
+	// ones: the count is a property of the port's runtime, not of the decoder.
+	want := 3
+	if runtime.GOARCH == "wasm" {
+		want = 5
+	}
+	if allocs != float64(want) {
+		t.Fatalf("mallocs per decode of type Bench: %v; wanted %d\n", allocs, want)
 	}
 }
 
