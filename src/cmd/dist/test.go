@@ -99,6 +99,11 @@ type tester struct {
 	testNames    map[string]bool
 	timeoutScale int // a non-negative integer factor to scale test timeout by; defaults to 1
 
+	// short runs every test binary's short paths: -short goes on every go
+	// test command line, and -test.short on every shared test binary it
+	// starts. $GO_TEST_SHORT sets it.
+	short bool
+
 	// timings collects every test's duration, which names the slow test
 	// inside a slow package. progress writes that while the run continues.
 	timings  testTimings
@@ -317,6 +322,13 @@ func (t *tester) run() {
 			fatalf("failed to parse $GO_TEST_TIMEOUT_SCALE = %q as integer: %v", s, err)
 		}
 	}
+
+	// $GO_TEST_SHORT runs every test binary's short paths, as `go test
+	// -short` does. A runner has neither the time, the network nor the second
+	// host a package's long paths ask for, so the suite the runners run is
+	// the short one, and every command line says so instead of leaving
+	// testing.Short() to answer for it.
+	t.short = isEnvSet("GO_TEST_SHORT")
 
 	if t.runRxStr != "" {
 		if t.runRxStr[0] == '!' {
@@ -858,6 +870,11 @@ func (opts *goTest) sharedCommand(t *tester) *exec.Cmd {
 		timeout = 10 * time.Minute // Default value of go test -timeout flag.
 	}
 	args = append(args, "-test.paniconexit0", "-test.timeout="+(timeout*time.Duration(t.timeoutScale)).String())
+	// A shared binary is started the way go test would start it, so a short
+	// run has to hand it -test.short itself.
+	if t.short {
+		args = append(args, "-test.short")
+	}
 	// A per-test duration exists only in verbose output, and test2json is the
 	// form both readers of this stream take.
 	args = append(args, "-test.v=test2json")
@@ -933,6 +950,12 @@ func (opts *goTest) buildArgs(t *tester) (build, run, pkgs, testFlags []string, 
 	} else if t.timeoutScale != 1 {
 		const goTestDefaultTimeout = 10 * time.Minute // Default value of go test -timeout flag.
 		run = append(run, "-timeout="+(goTestDefaultTimeout*time.Duration(t.timeoutScale)).String())
+	}
+	// A short run is a flag of go test itself, so it goes with the other run
+	// flags and ahead of the packages. A benchmark test measures the same
+	// work either way.
+	if t.short && !opts.bench {
+		run = append(run, "-short")
 	}
 	var tags []string
 	if noOpt {

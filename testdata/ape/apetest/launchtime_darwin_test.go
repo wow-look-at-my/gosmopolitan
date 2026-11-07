@@ -58,8 +58,9 @@ func oldDarwinBoot(t *testing.T, ape string) string {
 }
 
 // The darwin boot runs the loader from a per-user cache, so that XNU names
-// the process after the program. A busy host only adds time to a launch, so
-// each boot is judged by its fastest launch over the rounds.
+// the process after the program. A launch is a fixed amount of work and a busy
+// host only adds to it, so each boot is judged by its fastest launch over many
+// rounds, and the medians of those rounds are logged beside it.
 func TestDarwinLaunchIsNoSlowerThanTheOldBoot(t *testing.T) {
 	if loader := residentLoader(t); loader != "" {
 		t.Fatalf("%s is on this host: the old boot would exec it and never unpack", loader)
@@ -151,7 +152,10 @@ func TestDarwinLaunchIsNoSlowerThanTheOldBoot(t *testing.T) {
 		slices.Sort(ratios[idx])
 		t.Logf("%s against the old boot of the same round, median of %d rounds: %+.1f%%",
 			modes[idx].name, rounds, 100*(ratios[idx][rounds/2]-1))
-		// The fastest launch is what the boot costs, since a busy host only adds time.
+		// A launch is a fixed amount of work, and a busy host only ever adds time to
+		// it: no neighbour on the runner makes one faster than its work. The fastest
+		// launch of a mode is therefore what that boot costs, while the median of a
+		// shared runner carries the neighbours, which is several times the limit here.
 		change := 100 * (float64(fastest[idx])/float64(fastest[0]) - 1)
 		if change > 5 {
 			t.Errorf("a launch with the %s takes %.1f ms at its fastest, %+.1f%% against the old boot's fastest %.1f ms: the limit is +5%%",
