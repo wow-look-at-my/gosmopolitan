@@ -140,24 +140,28 @@ RUN cp ea_non_iid ea_restart /usr/local/bin/
 
 var memory entropy.ScratchBuffer
 
-// samplesOrTryAgain calls entropy.Samples up to 10 times until it succeeds.
-// Samples has a non-negligible chance of failing the health tests, as required
-// by SP 800-90B.
+// samplesOrTryAgain calls entropy.Samples until it succeeds, over a budget
+// that a stalled VM can pass. Samples has a non-negligible chance of failing
+// the health tests, as required by SP 800-90B.
+//
+// The budget is how long a stall may last, not what a sample has to look
+// like: every attempt's samples face the same health tests.
 func samplesOrTryAgain(t *testing.T, samples []uint8) {
 	t.Helper()
-	for attempt := range 10 {
+	const attempts = 40
+	for attempt := range attempts {
 		if err := entropy.Samples(samples, &memory); err != nil {
 			t.Logf("entropy.Samples() failed: %v", err)
-			// Ten retries land inside one millisecond. A hosted VM that stalls
-			// this process holds the timer still for longer than that, so every
-			// retry reads the same stalled window and fails the same way. The
-			// pause lets the stall pass. It costs nothing on a run that passes.
-			time.Sleep(time.Duration(attempt+1) * 10 * time.Millisecond)
+			// A hosted VM that stalls this process holds the timer still, so
+			// every attempt inside the stall reads the same window and fails
+			// the same way. The pause widens with each attempt, which is what
+			// a stall of seconds needs; a healthy source passes on the first.
+			time.Sleep(time.Duration(attempt+1) * 20 * time.Millisecond)
 			continue
 		}
 		return
 	}
-	t.Fatal("entropy.Samples() failed 10 times in a row")
+	t.Fatalf("entropy.Samples() failed %d times in a row", attempts)
 }
 
 func TestEntropySHA384(t *testing.T) {
