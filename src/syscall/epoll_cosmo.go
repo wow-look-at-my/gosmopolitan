@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// epoll on a macOS host, kept here and waited on with select, since kqueue cannot watch a terminal there.
+
 package syscall
 
 import (

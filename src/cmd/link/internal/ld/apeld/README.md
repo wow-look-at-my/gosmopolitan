@@ -1,13 +1,15 @@
 # apeld: the native APE loaders the linker embeds
 
-One loader per platform, each a single C file. A loader takes the APE's path, boots the payload from memory, and writes nothing to disk. `docs/APE-BOOT.md` describes how an APE finds one.
+One loader per platform, each a single C file. A loader takes the APE's path and boots the payload from memory. `docs/APE-BOOT.md` describes how an APE finds one.
+
+Each loader puts the program's argv where ps and htop read it, in place of the loader's own. On darwin the boot script execs the loader from a per-user cache under the program's name. Top, Activity Monitor and btop show the program: `docs/APE-BOOT.md`, "What it costs the program".
 
 Upstream is [wow-look-at-my/ape-research](https://github.com/wow-look-at-my/ape-research). Its `LOG.txt` records the measurements behind each link pipeline.
 
 | loader | how it boots the payload |
 |---|---|
 | `bin/apeld-linux-amd64`, `bin/apeld-linux-arm64` | maps the payload's segments straight from the APE file, builds the start stack with `AT_EXECFD` naming the APE, jumps. A mount that refuses an executable mapping gets a sparse memfd of the payload's PT_LOAD ranges instead |
-| `bin/apeld-darwin-arm64` | maps the arm64 ELF payload itself, builds the SysV stack and auxv, hands over a Syslib table of libSystem entry points, jumps |
+| `bin/apeld-darwin-arm64` | runs from a per-user cache under the program's name, maps the arm64 ELF payload itself, builds the SysV stack and auxv, hands over a Syslib table of libSystem entry points, jumps |
 
 windows/amd64 has no loader. The APE is a valid PE and the OS maps the payload straight from the file, read-only path or not.
 

@@ -92,18 +92,20 @@ func fullyCached(a *Action) bool {
 	return false
 }
 
+// closeCache settles the store's uploads and trims the cache. A test replaces it.
+var closeCache = func() {
+	if err := cache.Default().Close(); err != nil {
+		base.Fatalf("go: failed to trim cache: %v", err)
+	}
+}
+
 func (b *Builder) Do(ctx context.Context, root *Action) {
 	ctx, span := trace.StartSpan(ctx, "exec.Builder.Do ("+root.Mode+" "+root.Target+")")
 	defer span.Done()
 
-	if !b.IsCmdList {
+	if !b.IsCmdList && !b.HoldCache {
 		// If we're doing real work, take time at the end to trim the cache.
-		c := cache.Default()
-		defer func() {
-			if err := c.Close(); err != nil {
-				base.Fatalf("go: failed to trim cache: %v", err)
-			}
-		}()
+		defer closeCache()
 	}
 
 	// Build list of all actions, assigning depth-first post-order priority.
@@ -361,6 +363,27 @@ func packageOriginKey(pkg *load.Package, trimpath bool, workDir string) string {
 	return fmt.Sprintf("dir %s\n", pkg.Dir)
 }
 
+// trimsModuleCachePath reports whether the compile of p names its source as
+// module@version without -trimpath. The source of a package in the module
+// cache is fixed by its module version. A key that named the cache directory
+// would make each GOMODCACHE location compile the same source again, under a
+// key no other location asks for. A package with cgo or SWIG keeps its
+// directory: the C compiler and the cgo tool write that path too.
+func trimsModuleCachePath(pkg *load.Package) bool {
+	if cfg.BuildTrimpath || pkg == nil || pkg.Goroot || pkg.Module == nil || pkg.Module.Version == "" {
+		return false
+	}
+	if len(pkg.CgoFiles)+len(pkg.SwigFiles)+len(pkg.SwigCXXFiles) > 0 {
+		return false
+	}
+	if replace := pkg.Module.Replace; replace != nil && replace.Version == "" {
+		return false
+	}
+	// pkg.Dir is clean. GOMODCACHE is as the user set it, and on Windows
+	// "$WORK/cache" mixes the two separators.
+	return cfg.GOMODCACHE != "" && str.HasFilePathPrefix(pkg.Dir, filepath.Clean(cfg.GOMODCACHE))
+}
+
 // writesSSADump reports whether compiling p writes an SSA dump into GOSSADIR.
 // GOSSAFUNC asks every compile for one, and an ssa/<phase>/dump debug flag
 // asks this package's compile.
@@ -396,7 +419,7 @@ func (b *Builder) buildActionID(a *Action) cache.ActionID {
 
 	// Include information about the origin of the package that
 	// may be embedded in the debug info for the object file.
-	fmt.Fprint(h, packageOriginKey(p, cfg.BuildTrimpath, b.WorkDir))
+	fmt.Fprint(h, packageOriginKey(p, cfg.BuildTrimpath || trimsModuleCachePath(p), b.WorkDir))
 
 	if p.Module != nil {
 		fmt.Fprintf(h, "go %s\n", p.Module.GoVersion)
@@ -480,6 +503,10 @@ func (b *Builder) buildActionID(a *Action) cache.ActionID {
 		base.Fatalf("buildActionID: unknown build toolchain %q", cfg.BuildToolchainName)
 	case "gc":
 		fmt.Fprintf(h, "compile %s %q %q\n", b.toolID("compile"), forcedGcflags, p.Internal.Gcflags)
+		// The cached archive carries archiveStampScheme. A go command that
+		// stamps another way writes other bytes under the same inputs, so its
+		// entries must not share this key.
+		fmt.Fprintf(h, "stamp %s\n", archiveStampScheme)
 		if len(p.SFiles) > 0 {
 			fmt.Fprintf(h, "asm %q %q %q\n", b.toolID("asm"), forcedAsmflags, p.Internal.Asmflags)
 		}
@@ -1655,6 +1682,12 @@ cachemiss:
 	if err := b.fetchLazyFiles(packageFiles); err != nil {
 		return err
 	}
+	// A fetch that could not supply an archive compiled the package again, and
+	// that compile names its archive itself. The config then reads every file
+	// where the fetch left it. See fetchLazy.
+	for importPath, file := range vcfg.PackageFile {
+		vcfg.PackageFile[importPath] = b.fetchLeft(file)
+	}
 
 	js, err := json.MarshalIndent(vcfg, "", "\t")
 	if err != nil {
@@ -2280,7 +2313,16 @@ func BuildInstallFunc(b *Builder, ctx context.Context, a *Action) (err error) {
 	if err := b.fetchLazy(a1.built); err != nil {
 		return err
 	}
-	return sh.moveOrCopyFile(a.Target, a1.built, perm, false)
+	if err := sh.moveOrCopyFile(a.Target, a1.built, perm, false); err != nil {
+		return err
+	}
+	if a1.Mode == "build" && cfg.BuildToolchainName == "gc" && !cfg.BuildN {
+		// The archive carries a content stamp. An installed one names its
+		// action, so useCache can read the install as up to date. See
+		// "Archive stamps" in buildid.go.
+		return restampArchive(a.Target, a1.buildID)
+	}
+	return nil
 }
 
 // AllowInstall returns a non-nil error if this invocation of the go command is

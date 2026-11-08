@@ -7,6 +7,8 @@ go mod tidy
 ! stderr 'get '$TESTGO_GOPROXY
 
 rm $GOPATH/pkg/mod/cache/download/rsc.io/quote
+# The build cache holds the go.mod files the first tidy fetched. An empty one makes this tidy fetch them.
+env GOCACHE=$WORK/gocache-empty
 go mod tidy -x
 stderr 'get '$TESTGO_GOPROXY
 

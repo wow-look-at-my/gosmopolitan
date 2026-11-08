@@ -21,6 +21,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -132,7 +133,8 @@ The rule for a match in the cache is that the run involves the same
 test binary and the flags on the command line come entirely from a
 restricted set of 'cacheable' test flags, defined as -benchtime,
 -coverprofile, -cpu, -failfast, -fullpath, -list, -outputdir, -parallel,
--run, -short, -skip, -timeout and -v.
+-run, -short, -skip, -timeout and -v, plus the -target argument that cmd/dist
+gives a test that runs on the host.
 If a run of go test has any test or non-test flags outside this set,
 the result is not cached. The -count flag is accepted and has no effect:
 it is not passed to the test binary, it is not part of the cache key, and
@@ -2289,6 +2291,12 @@ func (c *runCache) tryCacheWithID(b *work.Builder, a *work.Action, id string) bo
 	var cacheArgs []string
 	for _, arg := range testArgs {
 		i := strings.Index(arg, "=")
+		// cmd/dist names the port of a test that runs on the host with -target.
+		// The test ID holds its value.
+		if strings.HasPrefix(arg, "-target=") {
+			cacheArgs = append(cacheArgs, arg)
+			continue
+		}
 		if i < 0 || !strings.HasPrefix(arg, "-test.") {
 			if cache.DebugTest {
 				fmt.Fprintf(os.Stderr, "testcache: caching disabled for test argument: %s\n", arg)
@@ -2482,8 +2490,8 @@ func (c *runCache) tryCacheWithID(b *work.Builder, a *work.Action, id string) bo
 			profile, readErr = os.ReadFile(cpData)
 		}
 		if readErr == nil {
-			saveTestlog(cache.Default(), c.id1, inputList, testlogShape(inputLines))
-			cache.PutNoVerify(cache.Default(), inputLinesKey(c.id1, inputList), bytes.NewReader(inputLines))
+			saveTestlog(cache.Default(), c.id1, inputList, testlogShape(inputLines), currentShape(a))
+			saveInputLines(c.id1, inputList, inputLines)
 			cache.PutNoVerify(cache.Default(), testAndInputKey(c.id1, testInputsID), bytes.NewReader(data))
 			if testCoverProfile != "" || c.covMeta != (cache.ActionID{}) {
 				cache.PutNoVerify(cache.Default(), coverProfileAndInputKey(c.id1, testInputsID, c.covMeta), bytes.NewReader(profile))
@@ -2536,12 +2544,20 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, []byte
 	if cache.DebugTest {
 		fmt.Fprintf(os.Stderr, "testcache: %s: GODEBUG=%q\n", a.Package.ImportPath, os.Getenv("GODEBUG"))
 	}
+	started := time.Now()
 	parsed, err := parsedReads(a.Package.Dir, testlog)
 	if err != nil {
 		return cache.ActionID{}, nil, err
 	}
 	hashes := newFileHashMemo()
 	hashes.prefetch(a.Package.Dir, testlog, parsed)
+	prefetched := time.Since(started)
+	defer func() {
+		if took := time.Since(started); took > slowInputsNotice {
+			opens, stats := hashes.counts()
+			cache.MissNotice("testcache: %s: hashing the inputs took %v (prefetch %v): %d opens, %d stats, %d testlog bytes", a.Package.ImportPath, took.Round(time.Millisecond), prefetched.Round(time.Millisecond), opens, stats, len(testlog))
+		}
+	}()
 	sources := make(map[string][]rootCert)
 	pwd := a.Package.Dir
 	for _, line := range bytes.Split(testlog, []byte("\n")) {
@@ -2563,7 +2579,7 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, []byte
 			}
 			return cache.ActionID{}, nil, fmt.Errorf("%w: %q", errBadTestInputs, line)
 		case "getenv":
-			if slices.Contains(cache.PlumbingEnv, name) {
+			if slices.Contains(cache.PlumbingEnv, name) || slices.Contains(tempDirEnv, name) {
 				break
 			}
 			fmt.Fprintf(h, "env %s %x\n", name, hashGetenv(name))
@@ -2599,7 +2615,7 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, []byte
 				parsed["stat "+name]--
 				break
 			}
-			if hashes.scratch(name) || isProcessLocal(name) {
+			if hashes.scratch(name) || isProcessLocal(name) || isTempAncestor(name) {
 				break
 			}
 			if rel, ok := hashes.modCache(name); ok {
@@ -2615,7 +2631,7 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, []byte
 				parsed["open "+name]--
 				break
 			}
-			if hashes.scratch(name) || isProcessLocal(name) {
+			if hashes.scratch(name) || isProcessLocal(name) || isTempAncestor(name) || isSystemListing(name) {
 				break
 			}
 			if rel, ok := hashes.modCache(name); ok {
@@ -2882,11 +2898,23 @@ func testlogShape(inputLines []byte) string {
 // saveTestlog keeps testlog under testID, unless a testlog of its shape is
 // kept already. A slot another run took first holds that run's shape, and
 // this testlog goes in the next free slot.
-func saveTestlog(store cache.Cache, testID cache.ActionID, testlog []byte, shape string) {
+//
+// shapeNow, when not nil, answers the shape a kept testlog has on this
+// machine now. A kept testlog can name paths that were scratch when it was
+// saved and are not scratch now, such as an old temporary directory. Its
+// stored shape then matches, but its inputs never do, and every run misses.
+func saveTestlog(store cache.Cache, testID cache.ActionID, testlog []byte, shape string, shapeNow func([]byte) string) {
 	for slot := range maxTestlogs {
 		saved, _, err := cache.GetBytes(store, testlogShapeKey(testID, slot))
 		if err == nil {
-			if string(saved) == shape {
+			if string(saved) != shape {
+				continue
+			}
+			if shapeNow == nil {
+				return
+			}
+			kept, _, keptErr := cache.GetBytes(store, testlogSlotKey(testID, slot))
+			if keptErr == nil && shapeNow(kept) == shape {
 				return
 			}
 			continue
@@ -2894,6 +2922,18 @@ func saveTestlog(store cache.Cache, testID cache.ActionID, testlog []byte, shape
 		cache.PutNoVerify(store, testlogSlotKey(testID, slot), bytes.NewReader(testlog))
 		cache.PutNoVerify(store, testlogShapeKey(testID, slot), strings.NewReader(shape))
 		return
+	}
+}
+
+// currentShape answers the shape of a kept testlog of a's test, as its input
+// lines are computed now. A testlog that cannot be read has no shape.
+func currentShape(a *work.Action) func([]byte) string {
+	return func(kept []byte) string {
+		_, lines, err := computeTestInputsID(a, kept)
+		if err != nil {
+			return ""
+		}
+		return testlogShape(lines)
 	}
 }
 
@@ -2924,6 +2964,37 @@ func inputLinesKey(testID cache.ActionID, testlog []byte) cache.ActionID {
 	return cache.Subkey(testID, fmt.Sprintf("inputlines:%x", sha256.Sum256(testlog)))
 }
 
+// setupLinesKey is where the lines are kept for the runs whose variables
+// read the same values. Another job or branch reads the same testlog with
+// other GOCACHE or GOTMPDIR values. Under inputLinesKey alone, its last run
+// replaces this setup's lines, and an explanation then names variables that
+// did not change here.
+func setupLinesKey(testID cache.ActionID, testlog, lines []byte) cache.ActionID {
+	h := sha256.New()
+	for line := range strings.Lines(string(lines)) {
+		if strings.HasPrefix(line, "env ") {
+			h.Write([]byte(line))
+		}
+	}
+	return cache.Subkey(inputLinesKey(testID, testlog), fmt.Sprintf("setup:%x", h.Sum(nil)))
+}
+
+// saveInputLines keeps lines under both keys that savedInputLines reads.
+func saveInputLines(testID cache.ActionID, testlog, lines []byte) {
+	cache.PutNoVerify(cache.Default(), inputLinesKey(testID, testlog), bytes.NewReader(lines))
+	cache.PutNoVerify(cache.Default(), setupLinesKey(testID, testlog, lines), bytes.NewReader(lines))
+}
+
+// savedInputLines answers the lines saved for testlog by the last run whose
+// variables match now's lines. With none, it answers the last run's of any setup.
+func savedInputLines(testID cache.ActionID, testlog, now []byte) ([]byte, error) {
+	if saved, _, err := cache.GetBytes(cache.Default(), setupLinesKey(testID, testlog, now)); err == nil {
+		return saved, nil
+	}
+	saved, _, err := cache.GetBytes(cache.Default(), inputLinesKey(testID, testlog))
+	return saved, err
+}
+
 // A triedTestlog is a testlog saved under a test ID, and the input lines this
 // run computed from it.
 type triedTestlog struct {
@@ -2942,7 +3013,7 @@ func explainInputsMiss(a *work.Action, testID cache.ActionID, tried []triedTestl
 	var nearest []string
 	var lastErr error
 	for _, candidate := range tried {
-		saved, _, err := cache.GetBytes(cache.Default(), inputLinesKey(testID, candidate.testlog))
+		saved, err := savedInputLines(testID, candidate.testlog, candidate.lines)
 		if err != nil {
 			lastErr = err
 			continue
@@ -2964,6 +3035,21 @@ func explainInputsMiss(a *work.Action, testID cache.ActionID, tried []triedTestl
 	}
 	if len(nearest) == 0 {
 		cache.MissNotice("testcache: %s: every input matches the last run's, and its result is not in the cache", a.Package.ImportPath)
+	}
+	// The nearest testlog can be a stale one from another setup. The newest is
+	// the last run's, and what moved since then is what keeps this run missing.
+	if len(tried) < 2 {
+		return
+	}
+	saved, err := savedInputLines(testID, tried[0].testlog, tried[0].lines)
+	if err != nil {
+		cache.MissNotice("testcache: %s: newest of %d testlogs: no saved inputs: %v", a.Package.ImportPath, len(tried), err)
+		return
+	}
+	newest := movedInputs(inputHashes(saved), inputHashes(tried[0].lines))
+	cache.MissNotice("testcache: %s: newest of %d testlogs: %d inputs moved", a.Package.ImportPath, len(tried), len(newest))
+	for _, line := range newest[:min(len(newest), 20)] {
+		cache.MissNotice("testcache: %s: newest: %s", a.Package.ImportPath, line)
 	}
 }
 
@@ -3009,6 +3095,11 @@ func inputHashes(lines []byte) map[string]string {
 func identityKey(a *work.Action, cacheArgs []string, kind string) cache.ActionID {
 	h := cache.NewHash("testIdentity")
 	fmt.Fprintf(h, "package %s args %q execcmd %q kind %s", a.Package.ImportPath, cacheArgs, work.ExecCmd, kind)
+	// dist runs one package under several GOFIPS140 snapshots and GOFLAGS
+	// hooks. Each one compares with its own last binary, not a sibling's.
+	fmt.Fprintf(h, " gofips140 %q goflags %q goexperiment %q", cfg.Getenv("GOFIPS140"), cfg.Getenv("GOFLAGS"), cfg.RawGOEXPERIMENT)
+	// The store is shared by every CI host, and each host builds another binary.
+	fmt.Fprintf(h, " target %s/%s host %s/%s", cfg.Goos, cfg.Goarch, runtime.GOOS, runtime.GOARCH)
 	return h.Sum()
 }
 
@@ -3064,6 +3155,114 @@ func identityWords(id string) map[string]string {
 	return words
 }
 
+// dropScratch removes from testlog every read of this run's scratch space, and
+// makes each name it keeps absolute. The next run can be on a machine with
+// another temporary directory. There the old run's scratch paths are not
+// scratch, and they would hash as files that are gone.
+func dropScratch(dir string, testlog []byte) []byte {
+	hashes := newFileHashMemo()
+	out := bytes.NewBuffer(make([]byte, 0, len(testlog)))
+	out.Write(testlogMagic)
+	pwd := dir
+	abs := func(name string) string {
+		if filepath.IsAbs(name) {
+			return name
+		}
+		return filepath.Join(pwd, name)
+	}
+	for line := range strings.Lines(string(bytes.TrimPrefix(testlog, testlogMagic))) {
+		op, name, found := strings.Cut(strings.TrimSuffix(line, "\n"), " ")
+		if !found {
+			out.WriteString(line)
+			continue
+		}
+		switch op {
+		case "chdir":
+			pwd = name
+			if hashes.scratch(name) {
+				continue
+			}
+		case "open", "stat":
+			name = abs(name)
+			if hashes.scratch(name) || isTempAncestor(name) || (op == "open" && isSystemListing(name)) {
+				continue
+			}
+			line = op + " " + name + "\n"
+		case "parse":
+			parseOp, file, ok := strings.Cut(name, " ")
+			if !ok {
+				break
+			}
+			file = abs(file)
+			if hashes.scratch(file) {
+				continue
+			}
+			line = op + " " + parseOp + " " + file + "\n"
+		case "lookup":
+			if _, file, _, err := parseLookup(name); err == nil && hashes.scratch(abs(file)) {
+				continue
+			}
+		}
+		out.WriteString(line)
+	}
+	return out.Bytes()
+}
+
+// isTempAncestor reports whether name is a directory above the temporary
+// directory. A path lookup under the temporary directory stats each of them,
+// and on macOS they name the machine's own folder under /var/folders.
+func isTempAncestor(name string) bool {
+	// A lookup can spell an ancestor with "..": /private/../private/var.
+	name = filepath.Clean(name)
+	for _, tmp := range tempDirs() {
+		if rel := str.TrimFilePathPrefix(tmp, name); rel != tmp && rel != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// isSystemListing reports whether name is a directory whose listing the
+// system rewrites as it runs: a volume root, or the Windows directory and its
+// System32. An open of a directory hashes its listing.
+func isSystemListing(name string) bool {
+	if isVolumeRoot(name) {
+		return true
+	}
+	root := os.Getenv("SystemRoot")
+	if root == "" {
+		return false
+	}
+	clean := filepath.Clean(name)
+	return strings.EqualFold(clean, filepath.Clean(root)) || strings.EqualFold(clean, filepath.Join(root, "System32"))
+}
+
+// isVolumeRoot reports whether name is the root of a Windows volume, in any
+// spelling. An open of a directory hashes its listing, and a volume root lists
+// whatever this machine and this run left at the top of the drive.
+func isVolumeRoot(name string) bool {
+	rest, _ := strings.CutPrefix(name, `\\?\`)
+	vol := filepath.VolumeName(rest)
+	if len(vol) != 2 || vol[1] != ':' {
+		return false
+	}
+	return strings.Trim(rest[len(vol):], `\/`) == ""
+}
+
+// tempDirs is the temporary directory as spelled and as resolved.
+var tempDirs = sync.OnceValue(func() []string {
+	tmp := filepath.Clean(os.TempDir())
+	if real, err := filepath.EvalSymlinks(tmp); err == nil && real != tmp {
+		return []string{tmp, real}
+	}
+	return []string{tmp}
+})
+
+// tempDirEnv names the variables os.TempDir reads. Their value only says where
+// the scratch space is, and isRunScratch already leaves that space out. A
+// macOS runner names a different directory on each machine.
+var tempDirEnv = []string{"TMPDIR", "TMP", "TEMP"}
+
 // isRunScratch reports whether name is scratch space this run created, which is
 // the temporary directory and nothing else. Such a path holds no state from an
 // earlier run: t.TempDir names a fresh directory every time, so every test
@@ -3115,6 +3314,14 @@ func isProcessLocal(name string) bool {
 			return true
 		}
 	}
+	if isWindowsLiveState(name) {
+		return true
+	}
+	// A plain prefix test: search.InDir resolves the symlinks of both paths
+	// whenever the name is outside, which is nearly every input line.
+	if dir := ipcRuntimeDir(); dir != "" && str.HasFilePathPrefix(filepath.Clean(name), dir) {
+		return true
+	}
 	rest, ok := strings.CutPrefix(name, "/proc/")
 	if !ok {
 		return false
@@ -3124,6 +3331,41 @@ func isProcessLocal(name string) bool {
 		return true
 	}
 	return procCounters[rest]
+}
+
+// ipcRuntimeDir is where go-ipc keeps the events and life sockets of the
+// processes that run now, on a host with no /dev/shm. The build cache owner of
+// this run keeps its own there. It is the same path as runtimeDir in go-ipc's
+// path_windows.go and path_darwin.go.
+var ipcRuntimeDir = sync.OnceValue(func() string {
+	base, err := os.UserCacheDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(base, "gosmopolitan", "go-ipc")
+})
+
+// isWindowsLiveState reports whether name is Windows state that the system
+// rewrites as it runs: the device namespace, where the named pipes are, and the
+// paging and hibernation files at a volume root. The os tests read both, so
+// without this rule they never hit the cache on Windows.
+func isWindowsLiveState(name string) bool {
+	if strings.HasPrefix(name, `\\.\`) || strings.HasPrefix(name, `//./`) {
+		return true
+	}
+	// A volume GUID names this runner's disk, so the same path spells differently on the next machine.
+	if strings.HasPrefix(strings.ToLower(name), `\\?\volume{`) {
+		return true
+	}
+	vol := filepath.VolumeName(name)
+	if len(vol) != 2 || vol[1] != ':' {
+		return false
+	}
+	switch strings.ToLower(strings.TrimLeft(name[len(vol):], `\/`)) {
+	case "pagefile.sys", "swapfile.sys", "hiberfil.sys":
+		return true
+	}
+	return false
 }
 
 // procCounters are the /proc files whose bytes are the system's running
@@ -3198,22 +3440,13 @@ func hashOpen(name string) (cache.ActionID, error) {
 	} else if info.Mode().IsRegular() {
 		// The content is the input, not the mtime. A fresh checkout gives
 		// every file a new mtime, and a /proc file reports its boot's clock.
-		hashWriteContent(h, name)
+		if sum, err := contentSum(name, info); err != nil {
+			fmt.Fprintf(h, "err %v\n", err)
+		} else {
+			fmt.Fprintf(h, "content %x\n", sum)
+		}
 	}
 	return h.Sum(), nil
-}
-
-// hashWriteContent writes the bytes of the regular file name to h.
-func hashWriteContent(h io.Writer, name string) {
-	file, err := os.Open(name)
-	if err != nil {
-		fmt.Fprintf(h, "err %v\n", err)
-		return
-	}
-	defer file.Close()
-	if _, err := io.Copy(h, file); err != nil {
-		fmt.Fprintf(h, "err %v\n", err)
-	}
 }
 
 func hashStat(name string) cache.ActionID {
@@ -3234,7 +3467,14 @@ func hashStat(name string) cache.ActionID {
 // hashWriteStat writes what a stat says about a file, less its mtime. The
 // mtime records when this checkout was made, not what the file holds.
 func hashWriteStat(h io.Writer, info fs.FileInfo) {
-	fmt.Fprintf(h, "stat %d %x %v\n", info.Size(), uint64(info.Mode()), info.IsDir())
+	size := info.Size()
+	if info.IsDir() {
+		// A directory's size is the file system's, not the test's: APFS grows
+		// it with each entry, so a run that adds one under GOROOT/pkg missed
+		// on macOS. A listing is its own open line.
+		size = 0
+	}
+	fmt.Fprintf(h, "stat %d %x %v\n", size, uint64(info.Mode()), info.IsDir())
 }
 
 // testAndInputKey returns the actual cache key for the pair (testID, testInputsID).
@@ -3276,6 +3516,7 @@ func (c *runCache) saveOutput(a *work.Action) {
 		}
 		return
 	}
+	testlog = dropScratch(a.Package.Dir, testlog)
 	testInputsID, inputLines, err := computeTestInputsID(a, testlog)
 	if err != nil {
 		cache.MissNotice("testcache: %s: result not saved: %v", a.Package.ImportPath, err)
@@ -3295,8 +3536,8 @@ func (c *runCache) saveOutput(a *work.Action) {
 		if cache.DebugTest {
 			fmt.Fprintf(os.Stderr, "testcache: %s: save test ID %x => input ID %x => %x\n", a.Package.ImportPath, c.id1, testInputsID, testAndInputKey(c.id1, testInputsID))
 		}
-		saveTestlog(cache.Default(), c.id1, testlog, testlogShape(inputLines))
-		cache.PutNoVerify(cache.Default(), inputLinesKey(c.id1, testlog), bytes.NewReader(inputLines))
+		saveTestlog(cache.Default(), c.id1, testlog, testlogShape(inputLines), currentShape(a))
+		saveInputLines(c.id1, testlog, inputLines)
 		cache.PutNoVerify(cache.Default(), testAndInputKey(c.id1, testInputsID), bytes.NewReader(a.TestOutput.Bytes()))
 		if coverProfile != nil {
 			cache.PutNoVerify(cache.Default(), coverProfileAndInputKey(c.id1, testInputsID, c.covMeta), bytes.NewReader(coverProfile))
@@ -3310,8 +3551,8 @@ func (c *runCache) saveOutput(a *work.Action) {
 		if cache.DebugTest {
 			fmt.Fprintf(os.Stderr, "testcache: %s: save test ID %x => input ID %x => %x\n", a.Package.ImportPath, c.id2, testInputsID, testAndInputKey(c.id2, testInputsID))
 		}
-		saveTestlog(cache.Default(), c.id2, testlog, testlogShape(inputLines))
-		cache.PutNoVerify(cache.Default(), inputLinesKey(c.id2, testlog), bytes.NewReader(inputLines))
+		saveTestlog(cache.Default(), c.id2, testlog, testlogShape(inputLines), currentShape(a))
+		saveInputLines(c.id2, testlog, inputLines)
 		cache.PutNoVerify(cache.Default(), testAndInputKey(c.id2, testInputsID), bytes.NewReader(a.TestOutput.Bytes()))
 		if coverProfile != nil {
 			cache.PutNoVerify(cache.Default(), coverProfileAndInputKey(c.id2, testInputsID, c.covMeta), bytes.NewReader(coverProfile))

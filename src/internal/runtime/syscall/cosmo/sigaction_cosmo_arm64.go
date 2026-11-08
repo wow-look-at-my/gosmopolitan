@@ -3,6 +3,8 @@
 
 //go:build cosmo && arm64
 
+// rt_sigaction emulation for macOS ARM64 hosts.
+
 package cosmo
 
 import "unsafe"

@@ -71,36 +71,29 @@ func TestTestState(t *T) {
 		},
 	}}
 	for i, tc := range testCases {
-		tstate := &testState{
-			startParallel: make(chan bool),
-			maxParallel:   tc.max,
-		}
+		tstate := &testState{maxParallel: tc.max}
+		// blocked holds the return signal of each add1 that waits, oldest first.
+		var blocked []chan bool
 		for j, call := range tc.run {
-			doCall := func(f func()) chan bool {
-				done := make(chan bool)
-				go func() {
-					f()
-					done <- true
-				}()
-				return done
-			}
 			started := false
 			switch call.typ {
 			case add1:
-				signal := doCall(tstate.waitParallel)
-				select {
-				case <-signal:
-					started = true
-				case tstate.startParallel <- true:
-					<-signal
+				signal := make(chan bool)
+				go func(seq uint64) {
+					tstate.waitParallel(seq)
+					signal <- true
+				}(uint64(j + 1))
+				started = startsOrWaits(tstate, signal, len(blocked))
+				if !started {
+					blocked = append(blocked, signal)
 				}
 			case done:
-				signal := doCall(tstate.release)
-				select {
-				case <-signal:
-				case <-tstate.startParallel:
+				tstate.release()
+				if len(blocked) > waitingCount(tstate) {
+					// The oldest add1 has the lowest seq, so it starts.
+					<-blocked[0]
+					blocked = blocked[1:]
 					started = true
-					<-signal
 				}
 			}
 			if started != call.started {
@@ -109,10 +102,63 @@ func TestTestState(t *T) {
 			if tstate.running != call.running {
 				t.Errorf("%d:%d:running: got %v; want %v", i, j, tstate.running, call.running)
 			}
-			if tstate.numWaiting != call.waiting {
-				t.Errorf("%d:%d:waiting: got %v; want %v", i, j, tstate.numWaiting, call.waiting)
+			if got := waitingCount(tstate); got != call.waiting {
+				t.Errorf("%d:%d:waiting: got %v; want %v", i, j, got, call.waiting)
 			}
 		}
+	}
+}
+
+// waitingCount answers how many tests wait in tstate for a slot.
+func waitingCount(tstate *testState) int {
+	tstate.mu.Lock()
+	defer tstate.mu.Unlock()
+	return len(tstate.waiting)
+}
+
+// startsOrWaits answers true once the waitParallel call behind signal
+// returns, or false once it waits in tstate beside the given count of others.
+func startsOrWaits(tstate *testState, signal chan bool, others int) bool {
+	for {
+		select {
+		case <-signal:
+			return true
+		default:
+		}
+		if waitingCount(tstate) > others {
+			return false
+		}
+		runtime.Gosched()
+	}
+}
+
+// A freed slot goes to the waiting test with the lowest seq, whatever order
+// the tests began to wait in.
+func TestTestStateStartsInSeqOrder(t *T) {
+	tstate := &testState{maxParallel: 1, running: 1}
+	var order []uint64
+	var mu sync.Mutex
+	signals := map[uint64]chan bool{}
+	for _, seq := range []uint64{3, 1, 2} {
+		signal := make(chan bool)
+		signals[seq] = signal
+		go func() {
+			tstate.waitParallel(seq)
+			mu.Lock()
+			order = append(order, seq)
+			mu.Unlock()
+			signal <- true
+		}()
+		if startsOrWaits(tstate, signal, len(signals)-1) {
+			t.Fatalf("waitParallel(%d) took a slot that is full", seq)
+		}
+	}
+	for _, seq := range []uint64{1, 2, 3} {
+		tstate.release()
+		<-signals[seq]
+	}
+	if !slices.Equal(order, []uint64{1, 2, 3}) {
+		t.Errorf("the tests started in seq order %v, want [1 2 3]", order)
 	}
 }
 
@@ -627,8 +673,8 @@ func TestTRun(t *T) {
 			if ok != !root.Failed() {
 				t.Errorf("%s:root failed: got %v; want %v", tc.desc, !ok, root.Failed())
 			}
-			if tstate.running != 0 || tstate.numWaiting != 0 {
-				t.Errorf("%s:running and waiting non-zero: got %d and %d", tc.desc, tstate.running, tstate.numWaiting)
+			if tstate.running != 0 || len(tstate.waiting) != 0 {
+				t.Errorf("%s:running and waiting non-zero: got %d and %d", tc.desc, tstate.running, len(tstate.waiting))
 			}
 			got := strings.TrimSpace(buf.String())
 			want := strings.TrimSpace(tc.output)
@@ -641,7 +687,7 @@ func TestTRun(t *T) {
 }
 
 func TestBRun(t *T) {
-	t.Serial()
+	t.Serial("the benchmark times and the allocation totals below are compared as soon as each run returns")
 	work := func(b *B) {
 		for i := 0; i < b.N; i++ {
 			time.Sleep(time.Nanosecond)
@@ -992,7 +1038,7 @@ func TestBenchmark(t *T) {
 }
 
 func TestCleanup(t *T) {
-	t.Serial() // The cleanup order is checked right after t.Run returns.
+	t.Serial("the ordering of cleanups is checked right after the call that runs the subtest returns")
 	var cleanups []int
 	t.Run("test", func(t *T) {
 		t.Cleanup(func() { cleanups = append(cleanups, 1) })
@@ -1004,7 +1050,7 @@ func TestCleanup(t *T) {
 }
 
 func TestConcurrentCleanup(t *T) {
-	t.Serial() // The cleanup count is checked right after t.Run returns.
+	t.Serial("the cleanup counter is read as soon as the subtests return, so nothing may still be pending")
 	cleanups := 0
 	t.Run("test", func(t *T) {
 		var wg sync.WaitGroup
@@ -1029,7 +1075,7 @@ func TestConcurrentCleanup(t *T) {
 }
 
 func TestCleanupCalledEvenAfterGoexit(t *T) {
-	t.Serial() // The cleanup count is checked right after t.Run returns.
+	t.Serial("the number of cleanups is checked the moment the subtest is gone, with nothing else in flight")
 	cleanups := 0
 	t.Run("test", func(t *T) {
 		t.Cleanup(func() {
@@ -1045,7 +1091,7 @@ func TestCleanupCalledEvenAfterGoexit(t *T) {
 }
 
 func TestRunCleanup(t *T) {
-	t.Serial() // The cleanup counts are checked right after t.Run returns.
+	t.Serial("how many cleanups ran is asserted immediately, so no other subtest may add to the total")
 	outerCleanup := 0
 	innerCleanup := 0
 	t.Run("test", func(t *T) {
@@ -1063,7 +1109,7 @@ func TestRunCleanup(t *T) {
 }
 
 func TestCleanupParallelSubtests(t *T) {
-	t.Serial() // The cleanup count is checked right after t.Run returns.
+	t.Serial("the cleanup count is read once the subtests return, and it counts only the ones started here")
 	ranCleanup := 0
 	t.Run("test", func(t *T) {
 		t.Cleanup(func() { ranCleanup++ })
@@ -1080,7 +1126,7 @@ func TestCleanupParallelSubtests(t *T) {
 }
 
 func TestNestedCleanup(t *T) {
-	t.Serial() // The cleanup count is checked right after t.Run returns.
+	t.Serial("the nested cleanups are counted right after the outer call returns, and their order matters")
 	ranCleanup := 0
 	t.Run("test", func(t *T) {
 		t.Cleanup(func() {
@@ -1286,12 +1332,15 @@ func testOutputEscape(t *T) {
 	// Either order is fine, but not at the same time: the pair works by one of
 	// them storing t and the OTHER logging to it once it is inactive. Run
 	// together, both read a nil global and neither reaches the case under test.
-	t.Serial()
+	t.Serial("both callers share the global below, and the second one logs to a test that must already be done")
 	if global == nil {
 		// Store t in a global, to set up for the second execution.
 		global = t
 	} else {
 		// global is inactive here.
 		global.Log("hello")
+		// Under -count=N the next iteration gets a new root, and a test held
+		// from this one has no incomplete parent left to log to.
+		global = nil
 	}
 }

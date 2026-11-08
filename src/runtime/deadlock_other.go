@@ -3,6 +3,8 @@
 
 //go:build !js
 
+// eventLoopCanWake reports whether the host environment's event loop can still deliver an event that wakes the program.
+
 package runtime
 
 // eventLoopCanWake reports whether the host environment's event loop can still deliver an event that wakes the program.

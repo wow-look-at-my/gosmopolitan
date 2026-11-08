@@ -38,6 +38,9 @@ func RawSyscall6(trap, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2 uintptr, err Errn
 	if darwinEpollTrap(trap) {
 		return darwinEpollSyscall(trap, a1, a2, a3, a4, a5, a6)
 	}
+	if inotifyTrap(trap) {
+		return inotifySyscall(trap, a1, a2, a3)
+	}
 	var errno uintptr
 	if w := cosmo.Windows(); w != nil {
 		// NT host: route through the runtime's emulation table.
@@ -53,6 +56,18 @@ func RawSyscall6(trap, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2 uintptr, err Errn
 //go:nosplit
 //go:linkname Syscall
 func Syscall(trap, a1, a2, a3 uintptr) (r1, r2 uintptr, err Errno) {
+	if inotifyTrap(trap) {
+		return inotifySyscall(trap, a1, a2, a3)
+	}
+	if inotifyDupTrap(trap, a1, a2) {
+		return inotifyDup(trap, a1, a2, a3, 0, 0, 0)
+	}
+	if inotifyFdTrap(trap, a1, a2) {
+		if trap != SYS_CLOSE {
+			return inotifyFdSyscall(trap, a1, a2, a3)
+		}
+		inotifyForget(int(a1))
+	}
 	if w := cosmo.Windows(); w != nil {
 		// NT host: run the emulation WITHOUT entering syscall state.
 		var errno uintptr
@@ -75,6 +90,18 @@ func Syscall(trap, a1, a2, a3 uintptr) (r1, r2 uintptr, err Errno) {
 //go:nosplit
 //go:linkname Syscall6
 func Syscall6(trap, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2 uintptr, err Errno) {
+	if inotifyTrap(trap) {
+		return inotifySyscall(trap, a1, a2, a3)
+	}
+	if inotifyDupTrap(trap, a1, a2) {
+		return inotifyDup(trap, a1, a2, a3, a4, a5, a6)
+	}
+	if inotifyFdTrap(trap, a1, a2) {
+		if trap != SYS_CLOSE {
+			return inotifyFdSyscall(trap, a1, a2, a3)
+		}
+		inotifyForget(int(a1))
+	}
 	if w := cosmo.Windows(); w != nil {
 		// See Syscall for why entersyscall is skipped on NT.
 		var errno uintptr

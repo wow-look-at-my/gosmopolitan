@@ -3,6 +3,8 @@
 
 //go:build !cmd_go_bootstrap
 
+// openCache opens the directory, puts the store under it when one is configured, and serves the result to the go commands this starts.
+
 package cache
 
 import (
@@ -27,6 +29,14 @@ import (
 // openCache opens the directory, puts the store under it when one is
 // configured, and serves the result to the go commands this starts.
 func openCache(dir string) (Cache, error) {
+	// The cleanup is registered before the broker exists. An exit during the open does not wait for it: StopBroker makes the open serve no broker.
+	if !base.OnExit(func() {
+		cacheclient.CloseStore()
+		cacheclient.Exit()
+	}) {
+		// The go command is exiting, and a broker created now would outlive it. os.Exit ends this goroutine.
+		select {}
+	}
 	store, err := openStore(dir)
 	if err != nil {
 		return nil, err
@@ -40,12 +50,6 @@ func openCache(dir string) (Cache, error) {
 	}
 	// A test binary and a `go run` program are started with the environment this command was started with, rather than with this process's own.
 	goCfg.OrigEnv = append(goCfg.OrigEnv[:len(goCfg.OrigEnv):len(goCfg.OrigEnv)], cacheclient.BrokerEnviron()...)
-	// A go command that never runs a build still opens the cache, and a failing
-	// one exits through base.Exit without returning.
-	base.AtExit(func() {
-		cacheclient.CloseStore()
-		cacheclient.Exit()
-	})
 	return cache, nil
 }
 
@@ -74,6 +78,11 @@ func RunUploadSpool() (code int, ran bool) {
 // environment configures none. A CI run with none configured is an error: a
 // build that silently stops sharing is how a cache regression hides.
 func openStore(dir string) (*cacheclient.WebBackend, error) {
+	// A -n command runs no compile and reads no archive. A shared tier would
+	// prefetch archives for it that nothing reads.
+	if goCfg.BuildN {
+		return nil, nil
+	}
 	cfg := cacheclient.ConfigFromEnv()
 	if cfg.Bucket == "" {
 		if os.Getenv("CI") != "" {
@@ -88,8 +97,10 @@ func openStore(dir string) (*cacheclient.WebBackend, error) {
 	cfg.Command = commandDigest()
 	cfg.IndexDir = indexDir(dir)
 	cacheclient.SetLogger(goLogger{})
-	// RunAs serves the spool, so Close need not wait for the uploads.
-	cacheclient.HandOffUploads()
+	// RunAs serves the spool, so Close need not wait for the uploads. A CI runner kills a detached uploader with the job, so on CI Close waits for them.
+	if os.Getenv("CI") == "" {
+		cacheclient.HandOffUploads()
+	}
 	store, err := cacheclient.NewWebBackend(cfg)
 	if err != nil {
 		// A store that cannot be reached is a slower build, not a broken one.
@@ -122,11 +133,45 @@ func publishStore(store *cacheclient.WebBackend) {
 }
 
 // commandDigest names what this go command builds: its arguments and the
-// directory they resolve in. The store keeps one build manifest per command.
+// directory they resolve in.
 func commandDigest() string {
 	wd, _ := os.Getwd()
-	sum := sha256.Sum256([]byte(strings.Join(append([]string{wd}, os.Args[1:]...), "\x00")))
+	return digestArgs(wd, os.Args[1:], os.TempDir())
+}
+
+// digestArgs digests the command line. A path under tmp names this run's
+// scratch space, which is new every run, so it digests as a placeholder. dist
+// runs its go commands in such a directory, and dist test names its output and
+// action graph there.
+func digestArgs(wd string, args []string, tmp string) string {
+	if underDir(wd, tmp) {
+		wd = "$TMP"
+	}
+	parts := []string{wd}
+	for _, arg := range args {
+		flag, value, isFlag := strings.Cut(arg, "=")
+		if !isFlag || !strings.HasPrefix(flag, "-") {
+			flag, value = "", arg
+		}
+		if underDir(value, tmp) {
+			value = "$TMP"
+		}
+		if flag != "" {
+			value = flag + "=" + value
+		}
+		parts = append(parts, value)
+	}
+	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
 	return hex.EncodeToString(sum[:16])
+}
+
+// underDir reports whether path is dir or names something below it.
+func underDir(path, dir string) bool {
+	if dir == "" || !filepath.IsAbs(path) {
+		return false
+	}
+	rel, err := filepath.Rel(filepath.Clean(dir), filepath.Clean(path))
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // liveStore is this command's store, once it has one.
@@ -203,6 +248,7 @@ func MissNotice(format string, args ...any) {
 	if !MissNotices() {
 		return
 	}
+
 	cacheNotice(format, args...)
 }
 

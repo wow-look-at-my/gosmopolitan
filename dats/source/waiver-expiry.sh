@@ -41,37 +41,41 @@ dateNum() {
 	printf '%s%s%s' "${1%%-*}" "${rest%%-*}" "${rest#*-}"
 }
 
-for f in "$@"; do
-	[ -f "$f" ] || continue
-	out=$(
-		num=0
-		prev=""
-		while IFS= read -r text || [ -n "$text" ]; do
-			num=$((num + 1))
-			kind=""
-			case $text in
-			*continue-on-error*) kind="continue-on-error" ;;
-			*)
-				skipBlanks "$text"
-				case $trimmed in
-				"if: false" | "if: false "* | "if: \${{ false }}" | "if: \${{ false }}"*)
-					kind="a job switched off with if: false"
-					;;
-				esac
+# scan prints one line per waiver in $1 that is undated or past its date.
+scan() {
+	name=$1
+	num=0
+	prev=""
+	while IFS= read -r text || [ -n "$text" ]; do
+		num=$((num + 1))
+		kind=""
+		case $text in
+		*continue-on-error*) kind="continue-on-error" ;;
+		*)
+			skipBlanks "$text"
+			case $trimmed in
+			"if: false" | "if: false "* | "if: \${{ false }}" | "if: \${{ false }}"*)
+				kind="a job switched off with if: false"
 				;;
 			esac
-			if [ -n "$kind" ]; then
-				if when=$(waiverDate "$prev $text"); then
-					if [ "$(dateNum "$when")" -lt "$(dateNum "$today")" ]; then
-						printf '%s:%d: waiver expired on %s (today is %s)\n' "$f" "$num" "$when" "$today"
-					fi
-				else
-					printf '%s:%d: %s with no waiver-expires date\n' "$f" "$num" "$kind"
+			;;
+		esac
+		if [ -n "$kind" ]; then
+			if when=$(waiverDate "$prev $text"); then
+				if [ "$(dateNum "$when")" -lt "$(dateNum "$today")" ]; then
+					printf '%s:%d: waiver expired on %s (today is %s)\n' "$name" "$num" "$when" "$today"
 				fi
+			else
+				printf '%s:%d: %s with no waiver-expires date\n' "$name" "$num" "$kind"
 			fi
-			prev=$text
-		done <"$f"
-	)
+		fi
+		prev=$text
+	done <"$name"
+}
+
+for f in "$@"; do
+	[ -f "$f" ] || continue
+	out=$(scan "$f")
 	if [ -n "$out" ]; then
 		printf '%s\n' "$out" >&2
 		rc=2

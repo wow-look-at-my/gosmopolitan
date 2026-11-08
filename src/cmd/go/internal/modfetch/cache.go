@@ -22,6 +22,7 @@ import (
 	"syscall"
 
 	"cmd/go/internal/base"
+	"cmd/go/internal/cache"
 	"cmd/go/internal/cfg"
 	"cmd/go/internal/gover"
 	"cmd/go/internal/lockedfile"
@@ -318,6 +319,9 @@ func (r *cachingRepo) GoMod(ctx context.Context, version string) ([]byte, error)
 			// Note: readDiskGoMod already called checkGoMod.
 			return text, nil
 		}
+		if text, ok := r.fetcher.goModFromCache(ctx, cache.DefaultIfEnabled(), r.path, version, file); ok {
+			return text, nil
+		}
 
 		text, err = r.repo(ctx).GoMod(ctx, version)
 		if err == nil {
@@ -325,6 +329,7 @@ func (r *cachingRepo) GoMod(ctx context.Context, version string) ([]byte, error)
 			if err := checkGoMod(r.fetcher, r.path, version, commit, text); err != nil {
 				return text, err
 			}
+			goModToCache(cache.DefaultIfEnabled(), r.path, version, text)
 			// The commit goes first: a .mod without it is only hashed again.
 			if commit != "" {
 				if err := writeDiskGoModCommit(ctx, r.path, version, commit); err != nil && !isErrReadOnlyFS(err) {
@@ -433,8 +438,12 @@ func (f *Fetcher) GoMod(ctx context.Context, path, rev string) ([]byte, error) {
 		}
 	}
 
-	_, data, err := f.readDiskGoMod(ctx, path, rev)
+	file, data, err := f.readDiskGoMod(ctx, path, rev)
 	if err == nil {
+		return data, nil
+	}
+	// Lookup resolves the path first, and a vanity path costs a request.
+	if data, ok := f.goModFromCache(ctx, cache.DefaultIfEnabled(), path, rev, file); ok {
 		return data, nil
 	}
 

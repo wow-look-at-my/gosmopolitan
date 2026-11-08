@@ -587,7 +587,9 @@ func TestRegexpPrecompileDifferential(t *testing.T) {
 	if err := os.WriteFile(src, writeDifferential(corpus), 0o666); err != nil {
 		t.Fatal(err)
 	}
-	out, err := testenv.Command(t, testenv.GoToolPath(t), "run", src).CombinedOutput()
+	// The program sits in a new directory each run. -trimpath keeps that
+	// directory out of the compile's key, so the cache holds the compile.
+	out, err := testenv.Command(t, testenv.GoToolPath(t), "run", "-trimpath", src).CombinedOutput()
 	t.Logf("%s", out)
 	if err != nil {
 		t.Fatalf("differential program failed: %v", err)

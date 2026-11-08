@@ -33,8 +33,11 @@ func TestReportSlowActionsReadsTheGoCommandGraph(t *testing.T) {
 	var report strings.Builder
 	reportSlowActions(&report, "graph.test", graph)
 	lines := strings.Split(strings.TrimSpace(report.String()), "\n")
-	if len(lines) != slowActionCount {
-		t.Fatalf("got %d lines, want %d (the runtime alone is more actions than that):\n%s", len(lines), slowActionCount, report.String())
+	if len(lines) != slowActionCount+1 {
+		t.Fatalf("got %d lines, want a span line and %d actions (the runtime alone is more actions than that):\n%s", len(lines), slowActionCount, report.String())
+	}
+	if !strings.Contains(lines[0], " span graph.test ") || !strings.HasSuffix(lines[0], " compiles ran") {
+		t.Fatalf("first line %q does not give the step's span and compile count", lines[0])
 	}
 	for _, line := range lines {
 		if !strings.HasPrefix(line, "dist action ") || !strings.Contains(line, " graph.test ") {

@@ -3,6 +3,8 @@
 
 //go:build cosmo && arm64
 
+// iswindows reports whether the host is Windows NT.
+
 package runtime
 
 import _ "unsafe" // for go:linkname
@@ -24,6 +26,9 @@ func iswindows() bool {
 func ntReadRandom(r []byte) int {
 	return 0
 }
+
+// ntResolveWatch has nothing to fill: the inotify table is the amd64 one.
+func ntResolveWatch(k32sym func(*byte) uintptr) {}
 
 // NT netpoller stubs (netpoll_cosmo.go dispatches here only when iswindows(),
 // which is constant false on arm64).

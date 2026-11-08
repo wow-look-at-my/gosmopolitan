@@ -99,12 +99,21 @@ type tester struct {
 	testNames    map[string]bool
 	timeoutScale int // a non-negative integer factor to scale test timeout by; defaults to 1
 
+	// short runs every test binary's short paths: -short goes on every go
+	// test command line, and -test.short on every shared test binary it
+	// starts. $GO_TEST_SHORT sets it.
+	short bool
+
 	// timings collects every test's duration, which names the slow test
 	// inside a slow package. progress writes that while the run continues.
 	timings  testTimings
 	progress *testProgress
 
 	worklist []*work
+
+	// started holds the works of each early dist test, which run from the
+	// start of the run and join the worklist at the test's own turn.
+	started map[string]*earlyTest
 
 	shardStr string          // the -shard flag, K/N
 	shardSet map[string]bool // the tests in part K; nil means every test
@@ -137,6 +146,87 @@ type work struct {
 	// bounds a run that takes most of it, and beside the compiles that fill the
 	// machine later in the list, the run gets too little of the CPU to finish.
 	first bool
+
+	// early is set when the command started ahead of the run's loop. Such a
+	// work holds no slot, and runPending waits for its ended.
+	early bool
+
+	yield bool // see goTest.yield
+}
+
+// runCmd runs cmd, at a lower priority than dist's own when yield is set.
+func runCmd(cmd *exec.Cmd, yield bool) error {
+	if !yield {
+		return cmd.Run()
+	}
+	if err := startYielding(cmd); err != nil {
+		return err
+	}
+	return cmd.Wait()
+}
+
+// earlyTest is what an early dist test queued when the run started it.
+type earlyTest struct {
+	works []*work
+	err   error
+}
+
+// execute runs w's command and records what it cost.
+func (w *work) execute(t *tester) {
+	timelog("start", w.dt.name)
+	w.began = time.Now()
+	w.err = runCmd(w.cmd, w.yield)
+	w.elapsed = time.Since(w.began)
+	if w.flush != nil {
+		w.flush()
+	}
+	if w.err != nil && isUnsupportedVMASize(w) {
+		timelog("skip", w.dt.name)
+		w.out.Reset()
+		w.printSkip(t, "skipped due to unsupported VMA")
+		w.err = nil
+	}
+}
+
+// startEarly starts the command of each early dist test. A long run that
+// uses one CPU then overlaps the package tests in front of it, rather than
+// running at the end of the suite beside little else.
+func (t *tester) startEarly() {
+	var names []string
+	var marks []int
+	for idx := range t.tests {
+		dt := &t.tests[idx]
+		if !dt.early || !t.shouldRunTest(dt.name) {
+			continue
+		}
+		marks = append(marks, len(t.worklist))
+		names = append(names, dt.name)
+		err := dt.fn(dt)
+		if t.started == nil {
+			t.started = map[string]*earlyTest{}
+		}
+		t.started[dt.name] = &earlyTest{err: err}
+	}
+	// Every early test queues before any starts, so a test that waits on
+	// another one finds its work.
+	marks = append(marks, len(t.worklist))
+	queued := t.worklist[marks[0]:]
+	for idx, name := range names {
+		t.started[name].works = slices.Clone(t.worklist[marks[idx]:marks[idx+1]])
+	}
+	t.worklist = slices.Clip(t.worklist[:marks[0]])
+	for _, w := range queued {
+		w.early = true
+		w.ended = make(chan struct{})
+		go func(w *work) {
+			if w.after != nil {
+				<-w.after.ended
+			}
+			w.execute(t)
+			timelog("end", w.dt.name)
+			close(w.ended)
+		}(w)
+	}
 }
 
 // printSkip prints a skip message for all of work.
@@ -154,6 +244,7 @@ type distTest struct {
 	name    string // unique test name; may be filtered with -run flag
 	heading string // group section; this header is printed before the test is run.
 	fn      func(*distTest) error
+	early   bool // fn runs when the run starts (see tester.startEarly)
 }
 
 func (t *tester) run() {
@@ -232,6 +323,13 @@ func (t *tester) run() {
 		}
 	}
 
+	// $GO_TEST_SHORT runs every test binary's short paths, as `go test
+	// -short` does. A runner has neither the time, the network nor the second
+	// host a package's long paths ask for, so the suite the runners run is
+	// the short one, and every command line says so instead of leaving
+	// testing.Short() to answer for it.
+	t.short = isEnvSet("GO_TEST_SHORT")
+
 	if t.runRxStr != "" {
 		if t.runRxStr[0] == '!' {
 			t.runRxWant = false
@@ -296,6 +394,7 @@ func (t *tester) run() {
 		t.progress.start()
 	}
 
+	t.startEarly()
 	for _, dt := range t.tests {
 		if !t.shouldRunTest(dt.name) {
 			someExcluded = true
@@ -304,7 +403,13 @@ func (t *tester) run() {
 		anyIncluded = true
 		dt := dt // dt used in background after this iteration
 		queued := len(t.worklist)
-		err := dt.fn(&dt)
+		var err error
+		if early, ok := t.started[dt.name]; ok {
+			t.worklist = append(t.worklist, early.works...)
+			err = early.err
+		} else {
+			err = dt.fn(&dt)
+		}
 		if len(t.worklist) == queued {
 			// The test ran here and is finished. A queued one counts when its command ends.
 			t.markTestDone(dt.name)
@@ -545,6 +650,14 @@ type goTest struct {
 	// first starts this test ahead of the rest of its worklist (see work.first).
 	first bool
 
+	// early starts this test when the run starts (see tester.startEarly).
+	early bool
+
+	// yield runs this test at a lower priority than dist's. A test that fills
+	// the machine yields, so an early test that runs on one CPU keeps it and
+	// ends inside its deadline.
+	yield bool
+
 	// alone starts this test once every test queued before it has ended. Its
 	// command fills the machine, so a test beside it gets too little of the
 	// CPU to finish inside its deadline.
@@ -643,7 +756,7 @@ func (opts *goTest) run(t *tester) error {
 // runState is run, and also answers what the command cost the machine.
 func (opts *goTest) runState(t *tester) (*os.ProcessState, error) {
 	cmd, flush := opts.bgCommand(t, os.Stdout, os.Stderr)
-	err := cmd.Run()
+	err := runCmd(cmd, opts.yield)
 	flush()
 	return cmd.ProcessState, err
 }
@@ -757,6 +870,11 @@ func (opts *goTest) sharedCommand(t *tester) *exec.Cmd {
 		timeout = 10 * time.Minute // Default value of go test -timeout flag.
 	}
 	args = append(args, "-test.paniconexit0", "-test.timeout="+(timeout*time.Duration(t.timeoutScale)).String())
+	// A shared binary is started the way go test would start it, so a short
+	// run has to hand it -test.short itself.
+	if t.short {
+		args = append(args, "-test.short")
+	}
 	// A per-test duration exists only in verbose output, and test2json is the
 	// form both readers of this stream take.
 	args = append(args, "-test.v=test2json")
@@ -832,6 +950,12 @@ func (opts *goTest) buildArgs(t *tester) (build, run, pkgs, testFlags []string, 
 	} else if t.timeoutScale != 1 {
 		const goTestDefaultTimeout = 10 * time.Minute // Default value of go test -timeout flag.
 		run = append(run, "-timeout="+(goTestDefaultTimeout*time.Duration(t.timeoutScale)).String())
+	}
+	// A short run is a flag of go test itself, so it goes with the other run
+	// flags and ahead of the packages. A benchmark test measures the same
+	// work either way.
+	if t.short && !opts.bench {
+		run = append(run, "-short")
 	}
 	var tags []string
 	if noOpt {
@@ -1002,13 +1126,15 @@ func (t *tester) registerStdTest(pkg string) {
 				timeoutSec = 0
 			}
 		}
-		// cmd/go runs last and alone, because its scripts each build with -p and fill the machine.
+		// cmd/go is a binary of its own, because its scripts each build with -p and fill the machine.
 		rest, alone := withoutCmdGo(stdMatches)
 
 		// One binary holds the tests of every package, is kept, and starts again for the tests that differ from a package's run only in flags.
 		test := oneBinaryTest(rest, goos)
 		test.timeout = timeoutSec
+		test.yield = true
 		test.keep = filepath.Join(workdir, "std.test")
+
 		// One step builds and runs every package here, so its own line is the only thing that accounts for the compile.
 		var err error
 		if len(rest) > 0 {
@@ -1025,6 +1151,12 @@ func (t *tester) registerStdTest(pkg string) {
 			t.recordOneBinary(false, test.keep, rest)
 		}
 
+		// cmd/go has one binary and one deadline, and its scripts each build
+		// with -p and fill the machine. Beside std.test's packages, its
+		// compile and vet actions waited a minute at a time for a worker, and
+		// the run reached its deadline without ending. So it runs after them,
+		// alone, the way its own `alone` flag says a machine-filling test
+		// must.
 		if alone {
 			cmdGo := oneBinaryTest([]string{"cmd/go"}, goos)
 			cmdGo.timeout = timeoutSec
@@ -1032,6 +1164,7 @@ func (t *tester) registerStdTest(pkg string) {
 				cmdGo.actionGraph = filepath.Join(workdir, "cmd-go.test.actions.json")
 			}
 			started := time.Now()
+			var state *os.ProcessState
 			state, errCmdGo := cmdGo.runState(t)
 			if !t.json {
 				reportTestStep("cmd-go.test", time.Since(started), state)
@@ -1346,6 +1479,8 @@ func (t *tester) registerTests() {
 					timeout: 600 * time.Second,
 					env:     []string{"GOFLAGS=" + goFlags},
 					pkgs:    []string{"runtime", "reflect", "sync"},
+					// The hook makes runtime's tests the longest run of the suite, on about one CPU.
+					early: true,
 				})
 		}
 	}
@@ -1524,11 +1659,11 @@ func (t *tester) registerTests() {
 					// The corpus runs as cosmo binaries through the exec
 					// wrapper on a hosted runner, past go test's 10 minutes.
 					timeout: 30 * time.Minute,
-					// Every shard starts the one test binary with its
-					// own -shard.
-					shared: true,
-					// The corpus fills every CPU, the way cmd/go does.
-					alone: true,
+					// It runs through go test, not as a shared binary, so
+					// go test caches its result.
+					// The corpus waits on the cache and on single long programs, and the package tests fill those gaps.
+					early: true,
+					yield: true,
 				},
 			)
 		}
@@ -1613,7 +1748,7 @@ func (t *tester) registerTest(heading string, test *goTest, opts ...registerTest
 				// The package's own run compiles what this test would start.
 				return nil
 			}
-			w := &work{dt: dt, first: test.first, after: t.queued(test.after)}
+			w := &work{dt: dt, first: test.first, after: t.queued(test.after), yield: test.yield}
 			w.cmd, w.flush = test.bgCommand(t, &w.out, &w.out)
 			if test.shared {
 				flush := w.flush
@@ -1625,6 +1760,7 @@ func (t *tester) registerTest(heading string, test *goTest, opts ...registerTest
 			t.queue(w, test.alone)
 			return nil
 		})
+		t.tests[len(t.tests)-1].early = test.early
 	}
 	if test.pkg != "" && len(test.pkgs) == 0 {
 		// Common case. Avoid copying.
@@ -2010,8 +2146,15 @@ func (t *tester) runPending(nextTest *distTest) {
 	})
 
 	for _, w := range worklist {
-		w.start = make(chan bool)
 		w.end = make(chan struct{})
+		if w.early {
+			go func(w *work) {
+				<-w.ended
+				w.end <- struct{}{}
+			}(w)
+			continue
+		}
+		w.start = make(chan bool)
 		w.ended = make(chan struct{})
 		// w.cmd must be set up to write to w.out. We can't check that, but we
 		// can check for easy mistakes.
@@ -2023,21 +2166,7 @@ func (t *tester) runPending(nextTest *distTest) {
 				timelog("skip", w.dt.name)
 				w.printSkip(t, "skipped due to earlier error")
 			} else {
-				timelog("start", w.dt.name)
-				w.began = time.Now()
-				w.err = w.cmd.Run()
-				w.elapsed = time.Since(w.began)
-				if w.flush != nil {
-					w.flush()
-				}
-				if w.err != nil {
-					if isUnsupportedVMASize(w) {
-						timelog("skip", w.dt.name)
-						w.out.Reset()
-						w.printSkip(t, "skipped due to unsupported VMA")
-						w.err = nil
-					}
-				}
+				w.execute(t)
 			}
 			timelog("end", w.dt.name)
 			close(w.ended)
@@ -2054,6 +2183,9 @@ func (t *tester) runPending(nextTest *distTest) {
 	keepGoing := t.keepGoing
 	go func() {
 		for _, w := range worklist {
+			if w.early {
+				continue
+			}
 			if w.after != nil && w.after.ended != nil {
 				// The works behind this one start while it waits.
 				go func(waiting *work) {

@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"internal/byteorder"
+	"internal/goarch"
 	"internal/race"
 	"internal/testenv"
 	"math"
@@ -732,8 +733,9 @@ func TestIssue66841(t *testing.T) {
 	h.check(t)
 }
 
-// size of the hash output (32 or 64 bits)
-const hashSize = 32 + int(^uintptr(0)>>63<<5)
+// size of the hash output. Wasm keeps a 32-bit hash in a 64-bit uintptr, so
+// the port decides the width, not the pointer.
+const hashSize = goarch.PtrBits - 32*goarch.IsWasm
 
 func randBytes(r *rand.Rand, b []byte) {
 	for i := range b {
@@ -757,7 +759,7 @@ func BenchmarkHash1024(b *testing.B)  { benchmarkHash(b, 1024) }
 func BenchmarkHash65536(b *testing.B) { benchmarkHash(b, 65536) }
 
 func TestArrayHash(t *testing.T) {
-	t.Serial() // AllocsPerRun measures the whole process.
+	t.Serial("the hash of an array key is measured against a fixed budget that another goroutine would exceed")
 	// Make sure that "" in arrays hash correctly. The hash
 	// should at least scramble the input seed so that, e.g.,
 	// {"","foo"} and {"foo",""} have different hashes.
@@ -798,7 +800,7 @@ func TestArrayHash(t *testing.T) {
 	}
 }
 func TestStructHash(t *testing.T) {
-	t.Serial() // AllocsPerRun measures the whole process.
+	t.Serial("a struct of eight string fields is hashed under an allocation budget the whole process shares")
 	// See the comment in TestArrayHash.
 	f := func() {
 		type key struct {

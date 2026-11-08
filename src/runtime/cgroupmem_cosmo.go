@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// cgroupHostSupported reports whether this host has cgroups to read.
+
 package runtime
 
 // cgroupHostSupported reports whether this host has cgroups to read.

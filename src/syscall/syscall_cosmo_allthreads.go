@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// The all-threads syscall pair and the credential setters that need it.
+
 package syscall
 
 import "unsafe"

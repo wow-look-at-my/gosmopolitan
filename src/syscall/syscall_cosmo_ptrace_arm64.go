@@ -3,6 +3,8 @@
 
 //go:build cosmo && arm64
 
+// The program counter accessors the linux port declares per architecture, in syscall_linux_arm64.go.
+
 package syscall
 
 // The program counter accessors the linux port declares per architecture, in syscall_linux_arm64.go.

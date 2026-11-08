@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // scratchElsewhere moves the temporary directory away from dir, so the files
@@ -57,6 +58,44 @@ func TestRepeatedInputsKeepTheirLines(t *testing.T) {
 	got := string(lines)
 	if !strings.HasSuffix(got, want.String()) {
 		t.Fatalf("the file lines are not the ones each hash gives on its own\ngot:\n%s\nwant them to end:\n%s", got, want.String())
+	}
+}
+
+// TestRewrittenFileHashesAgain: the process keeps the digest of each file it
+// opened. A file rewritten after that gets the digest of its new bytes.
+func TestRewrittenFileHashesAgain(t *testing.T) {
+	dir := t.TempDir()
+	scratchElsewhere(t, dir)
+	name := filepath.Join(dir, "input.txt")
+	stamp := time.Now().Add(-time.Hour)
+	write := func(content string) {
+		if err := os.WriteFile(name, []byte(content), 0o666); err != nil {
+			t.Fatal(err)
+		}
+		stamp = stamp.Add(time.Second)
+		if err := os.Chtimes(name, stamp, stamp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hash := func() string {
+		id, err := hashOpen(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return fmt.Sprintf("%x", id)
+	}
+	write("first")
+	first := hash()
+	if again := hash(); again != first {
+		t.Fatalf("one file, unchanged, hashed to %s and then %s", first, again)
+	}
+	write("other")
+	if second := hash(); second == first {
+		t.Fatalf("a file rewritten with new bytes of the same size kept its hash %s", first)
+	}
+	write("first")
+	if back := hash(); back != first {
+		t.Fatalf("a file rewritten with its first bytes hashed to %s, not %s", back, first)
 	}
 }
 

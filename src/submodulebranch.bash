@@ -15,6 +15,10 @@ if [[ -z "$here" ]]; then
 	[[ "$here" == HEAD ]] && here=""
 fi
 
+names=()
+paths=()
+urls=()
+missing=()
 while read -r key _; do
 	name=${key#submodule.}
 	name=${name%.path}
@@ -25,7 +29,23 @@ while read -r key _; do
 	*/github.com/wow-look-at-my/*) ;;
 	*) continue ;;
 	esac
+	names+=("$name")
+	paths+=("$path")
+	urls+=("$url")
+	[[ -e "$path/.git" ]] || missing+=("$path")
+done < <(git config -f .gitmodules --get-regexp '^submodule\..*\.path$' || true)
 
+# This call writes .git/config, so it runs before the jobs below start.
+if ((${#missing[@]})); then
+	git submodule update --init --jobs 16 -- "${missing[@]}" >/dev/null 2>&1 || true
+fi
+
+picked=$(mktemp -d)
+trap 'rm -rf "$picked"' EXIT
+
+# Each job touches only its own submodule's repository, so the jobs run at once.
+track() {
+	local idx=$1 name=${names[$1]} path=${paths[$1]} url=${urls[$1]} branch said
 	branch=$(git config -f .gitmodules --get "submodule.$name.branch" || true)
 	if [[ -n "$here" ]]; then
 		# A probe that cannot reach the remote answers the same as one that
@@ -36,18 +56,13 @@ while read -r key _; do
 			echo "submodulebranch: $path cannot ask $url for $here: $said" >&2
 		fi
 	fi
-	[[ -n "$branch" ]] || continue
+	[[ -n "$branch" ]] || return 0
+	echo "$branch" >"$picked/$idx"
 
-	git config "submodule.$name.branch" "$branch"
-	# A checkout clones a submodule shallow, against a refspec holding the commit the gitlink names.
-	git submodule update --init -- "$path" >/dev/null 2>&1 || true
-	if [[ -d "$path/.git" || -f "$path/.git" ]]; then
-		git -C "$path" fetch --depth 1 origin \
-			"+refs/heads/$branch:refs/remotes/origin/$branch" >/dev/null 2>&1 || true
-	fi
 	# git says why it could not update. A build that keeps the gitlink
 	# instead of the branch head is a build compiling a version nobody chose.
-	if said=$(git submodule update --init --remote -- "$path" 2>&1); then
+	if said=$(git -C "$path" fetch --depth 1 origin "+refs/heads/$branch:refs/remotes/origin/$branch" 2>&1) &&
+		said=$(git -C "$path" checkout -q --detach "refs/remotes/origin/$branch" 2>&1); then
 		echo "submodulebranch: $path at $branch $(git -C "$path" rev-parse --short=12 HEAD)" >&2
 	else
 		echo "submodulebranch: $path stays where it is: $url answered:" >&2
@@ -58,4 +73,14 @@ while read -r key _; do
 		echo "submodulebranch: $path cannot check out its own submodules:" >&2
 		echo "$said" >&2
 	fi
-done < <(git config -f .gitmodules --get-regexp '^submodule\..*\.path$' || true)
+}
+
+for idx in "${!names[@]}"; do
+	track "$idx" &
+done
+wait
+
+for idx in "${!names[@]}"; do
+	[[ -f "$picked/$idx" ]] || continue
+	git config "submodule.${names[$idx]}.branch" "$(cat "$picked/$idx")"
+done

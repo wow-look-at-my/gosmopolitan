@@ -97,7 +97,7 @@ type memFile struct {
 }
 
 func (file memFile) Path() string                 { return file.path }
-func (file memFile) Lstat() (fs.FileInfo, error)   { return fs.Stat(file.fsys, file.path) }
+func (file memFile) Lstat() (fs.FileInfo, error)  { return fs.Stat(file.fsys, file.path) }
 func (file memFile) Open() (io.ReadCloser, error) { return file.fsys.Open(file.path) }
 
 func memFiles(contents map[string]string) []modzip.File {

@@ -51,6 +51,8 @@ type Builder struct {
 	NeedExport          bool // list needs p.Export
 	NeedCompiledGoFiles bool // list needs p.CompiledGoFiles
 	AllowErrors         bool // errors don't immediately exit the program
+	// HoldCache keeps the cache open past Do. A fat build sets it, because its sibling and its merge still use the store after Do returns.
+	HoldCache bool
 
 	objdirSeq int // counter for NewObjdir
 	pkgSeq    int
@@ -74,6 +76,7 @@ type Builder struct {
 	pkgConfigCache sync.Map                  // *load.Package -> *pkgConfigResult, so pkg-config runs once per package
 
 	lazy      map[string]lazyOutput          // archive path -> where a lazy hit can fetch it, guarded by id
+	lazyMoved map[string]string              // archive path -> the archive a rebuild wrote in its place, guarded by id
 	lazyFetch par.ErrCache[string, struct{}] // archive path -> its one fetch
 }
 
@@ -362,6 +365,7 @@ func NewBuilder(workDir string, getVendorDir func() string) *Builder {
 	b.gccToolIDCache = make(map[string]string)
 	b.buildIDCache = make(map[string]string)
 	b.lazy = make(map[string]lazyOutput)
+	b.lazyMoved = make(map[string]string)
 
 	printWorkDir := false
 	if workDir != "" {
@@ -564,7 +568,9 @@ type pgoActor struct {
 }
 
 func (p *pgoActor) Act(b *Builder, ctx context.Context, a *Action) error {
-	if b.useCache(a, b.pgoActionID(p.input), a.Target, !b.IsCmdList) || b.IsCmdList {
+	// list -export compiles, so its compiles need the profile a build would use.
+	// Without it they compile under keys no build of the same package computes.
+	if b.useCache(a, b.pgoActionID(p.input), a.Target, !b.IsCmdList) || b.IsCmdList && !b.NeedExport {
 		return nil
 	}
 	defer b.flushOutput(a)

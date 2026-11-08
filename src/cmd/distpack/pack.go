@@ -43,6 +43,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"cmd/internal/telemetry/counter"
@@ -239,14 +240,15 @@ func main() {
 		log.Fatal(err)
 	}
 
-	writeTgz(distpack(version+".src.tar.gz"), srcArch)
-
+	// Each archive compresses on one thread, so the three are written at once.
+	var wg sync.WaitGroup
+	wg.Go(func() { writeTgz(distpack(version+".src.tar.gz"), srcArch) })
 	// Upstream writes a .zip here for windows, which go.dev serves. This fork
 	// publishes to buildhost, which stores the one archive and serves any
 	// format from it, so windows takes the same gzipped tar as every host.
-	writeTgz(distpack(version+"."+goosDashGoarch+".tar.gz"), zipArch)
-
-	writeZip(distpack(modVers+".zip"), modArch)
+	wg.Go(func() { writeTgz(distpack(version+"."+goosDashGoarch+".tar.gz"), zipArch) })
+	wg.Go(func() { writeZip(distpack(modVers+".zip"), modArch) })
+	wg.Wait()
 	writeFile(distpack(modVers+".mod"),
 		[]byte(fmt.Sprintf("module %s\n", modPath)))
 	writeFile(distpack(modVers+".info"),
@@ -344,7 +346,8 @@ func writeTgz(name string, a *Archive) {
 		}
 	}()
 
-	zw := check(gzip.NewWriterLevel(out, gzip.BestCompression))
+	// Best compression costs several times the time of the default for a few percent of size.
+	zw := newParallelGzip(out, gzip.DefaultCompression)
 	tw := tar.NewWriter(zw)
 
 	// Find the mode and mtime to use for directory entries,
@@ -442,9 +445,39 @@ func writeZip(name string, a *Archive) {
 
 	zw := zip.NewWriter(out)
 	zw.RegisterCompressor(zip.Deflate, func(out io.Writer) (io.WriteCloser, error) {
-		return flate.NewWriter(out, flate.BestCompression)
+		return flate.NewWriter(out, flate.DefaultCompression)
 	})
+	// Files deflate on every CPU ahead of the writer. The slots bound how many
+	// compressed files wait in memory.
+	workers := runtime.GOMAXPROCS(0)
+	slots := make(chan struct{}, 2*workers)
+	entries := make(chan *zipEntry, 2*workers)
+	go func() {
+		defer close(entries)
+		for _, file := range a.Files {
+			entry := &zipEntry{ready: make(chan struct{})}
+			if file.Linkname != "" || isLink(file.Src) {
+				close(entry.ready)
+				entries <- entry
+				continue
+			}
+			slots <- struct{}{}
+			entries <- entry
+			go func() {
+				src, err := os.Open(file.Src)
+				if err != nil {
+					entry.err = err
+					close(entry.ready)
+					return
+				}
+				defer src.Close()
+				deflateFile(src, flate.DefaultCompression, entry)
+			}()
+		}
+	}()
 	for _, f = range a.Files {
+		entry := <-entries
+		<-entry.ready
 		h := check(zip.FileInfoHeader(f.Info()))
 		h.Name = f.Name
 		h.Method = zip.Deflate
@@ -464,12 +497,18 @@ func writeZip(name string, a *Archive) {
 			h.UncompressedSize = uint32(len(link))
 			w := check(zw.CreateHeader(h))
 			check(io.WriteString(w, link))
-		} else {
-			w := check(zw.CreateHeader(h))
-			r := check(os.Open(f.Src))
-			check(io.Copy(w, r))
-			check1(r.Close())
+			continue
 		}
+		check1(entry.err)
+		// CreateRaw leaves the versions as given. These are what CreateHeader writes.
+		h.CreatorVersion = h.CreatorVersion&0xff00 | 20
+		h.ReaderVersion = 20
+		h.CRC32 = entry.crc
+		h.CompressedSize64 = uint64(len(entry.data))
+		h.UncompressedSize64 = entry.size
+		w := check(zw.CreateRaw(h))
+		check(w.Write(entry.data))
+		<-slots
 	}
 	f.Name = ""
 	check1(zw.Close())

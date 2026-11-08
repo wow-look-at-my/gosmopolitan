@@ -1,0 +1,3 @@
+embedstd: cosmo/amd64 fmt/doc.go
+embedstd: cosmo/amd64 fmt/print.go
+embedstd: cosmo/amd64 internal/bytealg/compare_amd64.s

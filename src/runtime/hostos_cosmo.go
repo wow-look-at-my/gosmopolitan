@@ -3,6 +3,8 @@
 
 //go:build cosmo
 
+// CosmoHostOS returns the operating system the process is running on: "linux", "darwin", "windows", or "unknown" for a host this runtime has no port for.
+
 package runtime
 
 import "unsafe"
@@ -61,6 +63,11 @@ func CosmoHostRootCerts() [][]byte {
 // CosmoDarwinSysctl issues Apple's sysctl with a numeric MIB and reports how
 // many bytes it wrote.
 //
+//go:linkname syscall_inotifySleep syscall.inotifySleep
+func syscall_inotifySleep(nanos int64) {
+	timeSleep(nanos)
+}
+
 //go:linkname syscall_cosmoDarwinSysctl syscall.cosmoDarwinSysctl
 func syscall_cosmoDarwinSysctl(mib []uint32, out []byte) (int, bool) {
 	return CosmoDarwinSysctl(mib, out)

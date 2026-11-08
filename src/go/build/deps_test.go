@@ -868,7 +868,7 @@ var depsRules = `
 	CGO, internal/syscall/unix
 	< net/internal/cgotest;
 
-	FMT, testing
+	FMT, os/exec, testing
 	< internal/cgrouptest;
 
 	regexp, internal/testenv, internal/trace, internal/trace/raw, internal/txtar, testing

@@ -23,6 +23,7 @@ The Linux build leg also builds the probe and hands it to the test job. `TestCgo
 - A plain `CC` applies to GOARCH only. The fat build's sibling gets `CC_FOR_cosmo_<sibling>` or the default, and the parent's cgo setting (`cosmoSiblingCgoEnv` in `cmd/go/internal/work/cosmofat.go`). A sibling without its compiler fails by name.
 - A go command that carries its standard library (docs/EMBEDDED-STD.md) builds cgo programs when `go tool embedstd` built its blob with cgo on, which is the default. The blob then holds runtime/cgo for both architectures. The cgo tool and the link still run the host's cosmocc at build time.
 - libcosmo's `dlopen`, `dlsym`, `dlclose` and `dlerror` are stubs that always fail. The cosmo link wraps them (`-Wl,--wrap`), and `runtime/cgo/gcc_cosmo.c` sends each one to `cosmo_dlopen` and the rest of that family. So a cgo package that loads a host library works unmodified. The probe checks this with `dlerror` on every host, and with `dlopen libm.so.6 cos` on linux/amd64.
+- On a Linux amd64 host, host code reads its TLS through the FS base that the host's ld.so. That ld.so is set on the thread of the first dlopen. Every other thread's FS is libcosmo's block. So each `dl*` wrapper runs on the host FS, and `dlsym` hands back a thunk for a host function. The thunk goes through `__wrap_foreign_tramp`, which switches to the host FS for the call and back after it. All threads share that one host thread block.
 - A cosmo build always sets the `netgo` and `osusergo` tags. cosmo satisfies the `linux` tag, so their cgo files will otherwise call libcosmo. Then every program that imports `net` will stop on NT.
 
 ## Link
@@ -70,6 +71,6 @@ libcosmo owns the C thread pointer. Go keeps `g` apart from it (`runtime/cgo/gcc
 The NT and macOS rows are also in `docs/STUBS-INVENTORY.md`.
 
 - Wine cannot run any cosmocc program, cgo or not: libcosmo's startup retries one fixed `MapViewOfFileEx` forever there. The windows test leg is the NT proof.
-- macOS Intel: nothing has run there. The amd64 path writes the GS base with `thread_fast_set_cthread_self`.
+- macOS Intel: nothing ran there. The amd64 path writes the GS base with `thread_fast_set_cthread_self`.
 - C's buffered stdio is not flushed when Go exits. That matches upstream cgo: C code calls `fflush`.
 - Only `-buildmode=exe`. No internal link, c-archive, c-shared or plugin.

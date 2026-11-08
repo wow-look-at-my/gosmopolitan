@@ -1,0 +1,14 @@
+# A package of a FIPS snapshot has a root, its module's directory, so go test
+# caches its result like any other package's.
+
+env snap=v1.26.0
+env GOFIPS140=$snap
+env GOFLAGS=-modcacherw
+
+go list -f '{{.Root}}' crypto/internal/fips140/$snap/aes
+stdout 'fips140'
+
+go test crypto/internal/fips140/$snap/aes
+stdout '^ok\s+crypto/internal/fips140/'$snap'/aes\s+[0-9.]+s'
+go test crypto/internal/fips140/$snap/aes
+stdout '^ok\s+crypto/internal/fips140/'$snap'/aes\s+\(cached\)'

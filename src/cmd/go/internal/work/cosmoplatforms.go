@@ -1,6 +1,8 @@
 // Copyright The Go Authors. All rights reserved. Use of this source code is
 // governed by a BSD-style license that can be found in the LICENSE file.
 
+// CosmoPlatformsEnv is the environment variable that restricts which host platforms a GOOS=cosmo build's APE boots on.
+
 package work
 
 import (

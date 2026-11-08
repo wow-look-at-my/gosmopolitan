@@ -6,7 +6,9 @@ Std is built with cgo on for the cosmo targets and off for the wasm targets, whi
 
 ## Storing it
 
-`go tool link -apefat ... -apeappend=blob` appends the blob past both payloads and any compact debug tail, 8-aligned, and closes the file with a trailer. `GOCOSMOAPPEND=blob` on a cosmo `go build` passes that flag to the merge. Nothing maps the blob at run time. The trailer holds a magic, the blob's offset and size, and its SHA-256. `internal/cosmo/embedded` reads the trailer of `os.Executable()` and serves each entry by name. `Verify` hashes the blob against the trailer. A tool opening an entry checks the magic, the bounds and the index only.
+`go tool link -apefat ... -apeappend=blob` appends the blob past both payloads and any compact debug tail, 8-aligned, and closes the file with a trailer. `GOCOSMOAPPEND=blob` on a cosmo `go build` passes that flag to the merge. Nothing maps the blob at run time. The trailer holds a magic, the blob's offset and size, and its SHA-256. `internal/cosmo/embedded` reads the trailer of `os.Executable()` and serves each entry by name. `Verify` hashes the blob against the trailer.
+
+A tool opening an entry checks the magic, the bounds and the index only.
 
 ## Reading it in process
 
@@ -14,7 +16,9 @@ A tool names an entry as `self:<name>`. The compiler's importcfg carries `packag
 
 ## The go command with no GOROOT
 
-The go command enters embedded mode whenever the binary carries a blob. GOROOT then names the executable. Every std package is a leaf action that is always up to date. Its archive is the `self:` name and its build ID comes from the manifest. `go list std` answers from the manifest. A reader outside the process gets a copy in the build cache. That serves `go list -export` and the vet tool's package files.
+The go command enters embedded mode when the binary carries a blob. GOROOT then names the executable. Every std package is a leaf action that is always up to date. Its archive is the `self:` name and its build ID comes from the manifest. `go list std` answers from the manifest. A reader outside the process gets a copy in the build cache.
+
+That serves `go list -export` and the vet tool's package files.
 
 The environment does not select between the carried library and a tree. `GOROOT` from outside is ignored. A binary that ships its own standard library builds against that one. A value from outside can otherwise replace it. A go command with no blob derives its tree from its own path. See `findGOROOT` in `cmd/go/internal/cfg`.
 

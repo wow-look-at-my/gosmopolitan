@@ -39,6 +39,39 @@ echo "== a cosmo go command carrying it"
 GOOS=cosmo GOCOSMOAPPEND="$work/std.blob" go build -trimpath -o "$work/go.com" cmd/go/main
 ls -la "$work/go.com"
 
+# The Linux loader maps only the page span the amd64 payload's program
+# headers reference. The blob must sit past that span, and every embedded
+# run below must still reach it, through the program's on-disk path.
+go_sz=$(wc -c <"$work/go.com")
+trailer=$((go_sz - 64))
+if [ "$(dd if="$work/go.com" bs=1 skip=$trailer count=8 status=none)" != "GOSTDEMB" ]; then
+	echo "go.com carries no blob trailer in its last 64 bytes" >&2
+	exit 1
+fi
+blob_off=$(od -An -tu8 -N8 -j $((trailer + 8)) "$work/go.com" | tr -d ' ')
+phoff=$(od -An -tu8 -N8 -j $((0x10000 + 32)) "$work/go.com" | tr -d ' ')
+phnum=$(od -An -tu2 -N2 -j $((0x10000 + 56)) "$work/go.com" | tr -d ' ')
+phabs=$((0x10000 + phoff))
+span_end=$phabs
+i=0
+while [ "$i" -lt "$phnum" ]; do
+	e=$((phabs + i * 56))
+	if [ "$(od -An -tu4 -N4 -j "$e" "$work/go.com" | tr -d ' ')" = "1" ]; then
+		po=$(od -An -tu8 -N8 -j $((e + 8)) "$work/go.com" | tr -d ' ')
+		pf=$(od -An -tu8 -N8 -j $((e + 32)) "$work/go.com" | tr -d ' ')
+		if [ $((po + pf)) -gt "$span_end" ]; then
+			span_end=$((po + pf))
+		fi
+	fi
+	i=$((i + 1))
+done
+span_end=$(((span_end + 4095) & ~4095))
+if [ "$blob_off" -lt "$span_end" ]; then
+	echo "the blob starts at $blob_off, inside the amd64 boot span that ends at $span_end" >&2
+	exit 1
+fi
+echo "blob offset $blob_off is past the amd64 boot span end $span_end in a $go_sz-byte file"
+
 # embedded runs the go command that carries the blob, with no GOROOT and
 # its own build cache, from the hello module.
 embedded() {

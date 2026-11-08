@@ -3,12 +3,38 @@
 
 //go:build cosmo && arm64
 
+// sigctxt is HOST-AWARE: one cosmo binary runs on Linux and macOS.
+
 package runtime
 
 import (
 	"internal/goarch"
+	"internal/runtime/sys"
 	"unsafe"
 )
+
+// cosmoSigG finds g for a signal that interrupted C on an XNU host. The g
+// register is callee-saved there, so a library is free to hold its own value
+// in it for the length of a call. minit keeps the thread's g0 at the bottom
+// of its signal stack, and C runs on g0's stack. That is the g the signal
+// stopped.
+//
+//go:nosplit
+func cosmoSigG(pc uintptr) (*g, bool) {
+	if iscgo || !isdarwin() {
+		return nil, false
+	}
+	sp := sys.GetCallerSP()
+	s := spanOf(sp)
+	if s == nil || s.state.get() != mSpanManual || sp <= s.base() || sp >= s.limit {
+		// A thread the runtime did not start has no g. An efence stack sits outside the spans.
+		return nil, debug.efence == 0
+	}
+	if firstmoduledata.text <= pc && pc < firstmoduledata.etext {
+		return nil, false
+	}
+	return *(**g)(unsafe.Pointer(s.base())), true
+}
 
 // sigctxt is HOST-AWARE: one cosmo binary runs on Linux and macOS.
 

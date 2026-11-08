@@ -1675,7 +1675,8 @@
 // test binary and the flags on the command line come entirely from a
 // restricted set of 'cacheable' test flags, defined as -benchtime,
 // -coverprofile, -cpu, -failfast, -fullpath, -list, -outputdir, -parallel,
-// -run, -short, -skip, -timeout and -v.
+// -run, -short, -skip, -timeout and -v, plus the -target argument that cmd/dist
+// gives a test that runs on the host.
 // If a run of go test has any test or non-test flags outside this set,
 // the result is not cached. The -count flag is accepted and has no effect:
 // it is not passed to the test binary, it is not part of the cache key, and

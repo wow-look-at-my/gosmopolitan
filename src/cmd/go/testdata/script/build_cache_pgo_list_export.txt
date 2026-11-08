@@ -1,0 +1,26 @@
+# go list -export of a main package with a default.pgo compiles its packages
+# with that profile, so a build afterwards reuses every compile.
+
+[short] skip
+
+env GOCACHE=$WORK/gocache
+mkdir $GOCACHE
+
+go list -export -deps -f '{{if false}}{{end}}' m/a
+go build -x -o $WORK/a.exe m/a
+! stderr '-p m/b '
+! stderr '-p m/a '
+
+-- go.mod --
+module m
+
+go 1.23
+-- a/a.go --
+package main
+
+import _ "m/b"
+
+func main() {}
+-- a/default.pgo --
+-- b/b.go --
+package b

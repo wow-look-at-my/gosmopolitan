@@ -1,6 +1,8 @@
 // Copyright The Go Authors. All rights reserved. Use of this source code is
 // governed by a BSD-style license that can be found in the LICENSE file.
 
+// A Fetch records the route that served one module version, and the bytes and time summed over each attempt that received data.
+
 package codehost
 
 import (

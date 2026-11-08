@@ -3,6 +3,8 @@
 
 //go:build !cosmo
 
+// cosmoStacksAreSystemAllocated is a stub for non-cosmo systems.
+
 package runtime
 
 // cosmoStacksAreSystemAllocated is a stub for non-cosmo systems.
@@ -15,6 +17,14 @@ func cosmoStacksAreSystemAllocated() bool {
 //go:nosplit
 func cosmoHostIsWindows() bool {
 	return false
+}
+
+// cosmoSigG is a stub for non-cosmo systems; see sigFetchG in signal_unix.go
+// and the GOOS=cosmo implementation in signal_cosmo_arm64.go.
+//
+//go:nosplit
+func cosmoSigG(pc uintptr) (*g, bool) {
+	return nil, false
 }
 
 // cosmoNTGoargs is a stub for non-cosmo systems; see goargs in
