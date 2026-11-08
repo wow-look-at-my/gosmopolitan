@@ -291,7 +291,8 @@ func TestDebugCallUnsafePoint(t *testing.T) {
 }
 
 func TestDebugCallPanic(t *testing.T) {
-	t.Serial("GOMAXPROCS is the whole process, so a call injection needs this test to have it alone")
+	// GOMAXPROCS is the whole process, so this test needs it to itself.
+	t.Serial()
 	skipUnderDebugger(t)
 
 	// This can deadlock if there aren't enough threads.
