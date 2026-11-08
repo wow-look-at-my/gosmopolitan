@@ -216,6 +216,8 @@ jobs:
     env:
       # cmd/go's script suite runs in full now that the linked tools resolve, and the darwin runner needs the longer package deadline.
       GO_TEST_TIMEOUT_SCALE: 2
+      # The short paths every package ran while testing.Short() answered true to every caller. Now that Short() honors -test.short, the suite asks for them. A long path wants the network, a second host and hours a runner does not have.
+      GO_TEST_SHORT: 1
 
     steps:
       # dist test links one APE per test package, and C: has too little room for that. D: holds the workspace and RUNNER_TEMP with room to spare, so the temp files and the Go caches go there too.
@@ -825,6 +827,8 @@ jobs:
     env:
       # A wasm test binary runs under node or wasmtime. A package takes about twice as long as the same package on a host. The hook variants run runtime, reflect and sync again with every stack move checked. maymorestack=mayMoreStackMove needs 408s of runtime on js and just over the 10-minute package deadline on wasip1. This port gets the doubled deadline the host suite already uses.
       GO_TEST_TIMEOUT_SCALE: 2
+      # The same short suite the host legs run, for the same reason: Short() answers for the flag now. A wasm package's long paths are ones this port cannot take. The Zip64 goldens replay multi-GiB writes wasm32 cannot address, and verylongtest's scripts reach for the network.
+      GO_TEST_SHORT: 1
     strategy:
       fail-fast: true
       matrix:

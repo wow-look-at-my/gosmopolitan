@@ -76,6 +76,7 @@ type Builder struct {
 	pkgConfigCache sync.Map                  // *load.Package -> *pkgConfigResult, so pkg-config runs once per package
 
 	lazy      map[string]lazyOutput          // archive path -> where a lazy hit can fetch it, guarded by id
+	lazyMoved map[string]string              // archive path -> the archive a rebuild wrote in its place, guarded by id
 	lazyFetch par.ErrCache[string, struct{}] // archive path -> its one fetch
 }
 
@@ -364,6 +365,7 @@ func NewBuilder(workDir string, getVendorDir func() string) *Builder {
 	b.gccToolIDCache = make(map[string]string)
 	b.buildIDCache = make(map[string]string)
 	b.lazy = make(map[string]lazyOutput)
+	b.lazyMoved = make(map[string]string)
 
 	printWorkDir := false
 	if workDir != "" {

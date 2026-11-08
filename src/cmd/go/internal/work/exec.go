@@ -1682,6 +1682,12 @@ cachemiss:
 	if err := b.fetchLazyFiles(packageFiles); err != nil {
 		return err
 	}
+	// A fetch that could not supply an archive compiled the package again, and
+	// that compile names its archive itself. The config then reads every file
+	// where the fetch left it. See fetchLazy.
+	for importPath, file := range vcfg.PackageFile {
+		vcfg.PackageFile[importPath] = b.fetchLeft(file)
+	}
 
 	js, err := json.MarshalIndent(vcfg, "", "\t")
 	if err != nil {
