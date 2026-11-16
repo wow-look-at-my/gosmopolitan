@@ -14,11 +14,7 @@ import (
 // We can't allocate during early initialization when we need to find the cgroup. use a fixed global.
 var cgroupScratch [cgroup.ScratchSize]byte
 
-// cgroupMemoryLimit returns the memory limit of the cgroup containing this
-// process, for use as the default GOMEMLIMIT. ok is false when there is no
-// cgroup, no limit, or the limit cannot be read.
-//
-// Called from gcinit, before the heap is in use, so it must not allocate.
+// ok is false when there is no cgroup, no limit, or the limit cannot be read.
 func cgroupMemoryLimit() (int64, bool) {
 	if !cgroupHostSupported() {
 		return 0, false
@@ -29,9 +25,15 @@ func cgroupMemoryLimit() (int64, bool) {
 		// Likely cgroup.ErrNoCgroup.
 		return 0, false
 	}
+	return cgroupMemoryLimitToGOMEMLIMIT(limit), true
+}
+
+// A soft limit equal to the hard limit lets the kernel kill the process
+// first.
+func cgroupMemoryLimitToGOMEMLIMIT(limit uint64) int64 {
 	const maxLimit = 1<<63 - 1
 	if limit > maxLimit {
-		return maxLimit, true
+		limit = maxLimit
 	}
-	return int64(limit), true
+	return int64(limit - limit/10)
 }

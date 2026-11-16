@@ -17,6 +17,11 @@
 # GO_TEST_TIMEOUT_SCALE: a non-negative integer factor to scale test timeout by.
 # Defaults to 1.
 #
+# GO_TEST_SHORT: when set, every test binary runs its short paths, as
+# `go test -short` does. The suite this repository's runners run sets it, so
+# that a package's long paths -- which want the network, a second host and
+# hours -- stay out of a runner's budget.
+#
 # GO_TEST_ASMFLAGS: Additional go tool asm arguments to use when running the tests.
 # This environment variable is an internal implementation detail between the
 # Go build system (x/build) and cmd/dist to enable builders that need to control this,

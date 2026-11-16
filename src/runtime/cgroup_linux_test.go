@@ -308,7 +308,7 @@ func mustSetMemoryMax(t *testing.T, c *cgrouptest.CgroupV2, limit int64) {
 	}
 }
 
-// An unset GOMEMLIMIT takes the cgroup's memory limit.
+// An unset GOMEMLIMIT takes nine tenths of the cgroup's memory limit.
 func TestCgroupMemoryLimit(t *testing.T) {
 	exe, err := buildTestProg(t, "testprog")
 	if err != nil {
@@ -321,7 +321,7 @@ func TestCgroupMemoryLimit(t *testing.T) {
 		mustSetMemoryMax(t, c, limit)
 
 		got := runBuiltTestProg(t, exe, "PrintMemoryLimit")
-		want := fmt.Sprintf("%d\n", int64(limit))
+		want := fmt.Sprintf("%d\n", int64(limit-limit/10))
 		if got != want {
 			t.Fatalf("output got %q want %q", got, want)
 		}

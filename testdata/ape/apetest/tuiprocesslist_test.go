@@ -65,13 +65,13 @@ func TestTUIProcessListsShowTheProgram(t *testing.T) {
 				"btop": "env LANG=" + utf8 + " LC_ALL=" + utf8 + " " + path,
 			}[tool]
 			require.NotEmpty(t, run, "no way to run %s", tool)
-			screen := captureScreen(t, run)
-			var rows []string
-			for _, row := range strings.Split(screen, "\n") {
-				fields := strings.Fields(row)
-				if slices.Contains(fields, pid) {
-					rows = append(rows, strings.Join(fields, " "))
-				}
+			screen := captureScreen(t, run, 4*time.Second)
+			rows := pidRows(screen, pid)
+			if len(rows) == 0 {
+				// btop draws its layout first and fills the process list on a later
+				// frame, which a loaded runner reaches after the short window.
+				screen = captureScreen(t, run, 20*time.Second)
+				rows = pidRows(screen, pid)
 			}
 			for _, row := range rows {
 				t.Logf("%s: %s", tool, row)
@@ -90,13 +90,25 @@ func TestTUIProcessListsShowTheProgram(t *testing.T) {
 	}
 }
 
-// captureScreen runs command in a 50x220 pseudo-terminal for a few seconds
+// pidRows returns the screen's rows that name pid, one joined line each.
+func pidRows(screen, pid string) []string {
+	var rows []string
+	for _, row := range strings.Split(screen, "\n") {
+		fields := strings.Fields(row)
+		if slices.Contains(fields, pid) {
+			rows = append(rows, strings.Join(fields, " "))
+		}
+	}
+	return rows
+}
+
+// captureScreen runs command in a 50x220 pseudo-terminal for the window
 // and returns what it drew, with the control sequences removed.
-func captureScreen(t *testing.T, command string) string {
+func captureScreen(t *testing.T, command string, window time.Duration) string {
 	t.Helper()
 	out := filepath.Join(t.TempDir(), "screen")
 	shell := "stty rows 50 cols 220; exec " + command
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), window)
 	defer cancel()
 	var cmd *exec.Cmd
 	// -F on macOS and -f on Linux flush each write, so a stopped script still holds the screen.

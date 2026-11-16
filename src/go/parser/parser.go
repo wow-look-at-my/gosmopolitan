@@ -30,6 +30,7 @@ import (
 	"go/build/constraint"
 	"go/scanner"
 	"go/token"
+	"runtime"
 	"strings"
 )
 
@@ -123,9 +124,22 @@ func un(p *parser) {
 // maxNestLev is the deepest we're willing to recurse during parsing
 const maxNestLev int = 1e5
 
+// maxNestLevWasm is maxNestLev on the wasm ports. Their call stack belongs to
+// the engine, and it runs out before this limit does: the same reason
+// encoding/asn1 and encoding/xml carry a wasm depth limit (go.dev/issue/56498).
+const maxNestLevWasm int = 5000
+
+// nestLevLimit is the nesting limit this build enforces.
+var nestLevLimit = func() int {
+	if runtime.GOARCH == "wasm" {
+		return maxNestLevWasm
+	}
+	return maxNestLev
+}()
+
 func incNestLev(p *parser) *parser {
 	p.nestLev++
-	if p.nestLev > maxNestLev {
+	if p.nestLev > nestLevLimit {
 		p.error(p.pos, "exceeded max nesting depth")
 		panic(bailout{})
 	}

@@ -104,17 +104,27 @@ func (b *Builder) fetchLazy(file string) error {
 	_, err := b.lazyFetch.Do(file, func() (struct{}, error) {
 		got, _, err := cache.FetchFile(lazy.c, lazy.action)
 		if err != nil {
-			// The store's index can name an entry the server has evicted. The
-			// package compiles again, and a reproducible compile lands at file.
+			// The store's index can name an entry the store can no longer
+			// supply. The package compiles again, and the archive that compile
+			// writes is the one an action reads. It is file when the compile
+			// wrote the bytes the record named, and another file when it wrote
+			// different ones: the store can hold an archive under a stamp this
+			// toolchain no longer writes. See "Archive stamps" in buildid.go.
 			if rebuildErr := b.rebuildLazy(lazy.a); rebuildErr != nil {
 				return struct{}{}, fmt.Errorf("the build cache named %s for a hit but cannot supply it: %w; compiling it again failed: %v", file, err, rebuildErr)
 			}
-			got = file
-			if _, statErr := os.Stat(file); statErr != nil {
-				return struct{}{}, fmt.Errorf("the build cache named %s for a hit but cannot supply it: %w; compiling it again wrote %s", file, err, lazy.a.built)
+			got = lazy.a.built
+			if _, statErr := os.Stat(file); statErr == nil {
+				got = file
 			}
-		}
-		if got != file {
+			if got == "" {
+				return struct{}{}, fmt.Errorf("the build cache named %s for a hit but cannot supply it: %w; compiling it again wrote no archive", file, err)
+			}
+			if _, statErr := os.Stat(got); statErr != nil {
+				return struct{}{}, fmt.Errorf("the build cache named %s for a hit but cannot supply it: %w; compiling it again wrote %s", file, err, got)
+			}
+			b.rebuiltLazy(file, got, lazy.a)
+		} else if got != file {
 			return struct{}{}, fmt.Errorf("the build cache supplied %s for a hit that named %s", got, file)
 		}
 		b.id.Lock()
@@ -123,6 +133,36 @@ func (b *Builder) fetchLazy(file string) error {
 		return struct{}{}, nil
 	})
 	return err
+}
+
+// rebuiltLazy records the archive a compile wrote in place of one the cache
+// could not supply. got keeps its own name, and buildIDCache names it as the
+// action's build ID. The action names got from then on, so the dependent
+// compile, the link and the install, which read built file after the fetch,
+// read the archive that exists. A list of files built before the fetch, a vet
+// config for one, still names file, and fetchLeft answers the move.
+func (b *Builder) rebuiltLazy(file, got string, a *Action) {
+	if got == file {
+		return
+	}
+	a.built = got
+	b.id.Lock()
+	delete(b.buildIDCache, file)
+	b.buildIDCache[got] = a.buildID
+	b.lazyMoved[file] = got
+	b.id.Unlock()
+}
+
+// fetchLeft answers where a lazy fetch left the archive it was asked for: the
+// file itself, or the one a compile wrote in its place.
+func (b *Builder) fetchLeft(file string) string {
+	b.id.Lock()
+	moved := b.lazyMoved[file]
+	b.id.Unlock()
+	if moved != "" {
+		return moved
+	}
+	return file
 }
 
 // rebuildLazy compiles a again, after a lazy hit named an archive the cache

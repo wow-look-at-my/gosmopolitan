@@ -653,7 +653,7 @@ func TestParseDepthLimit(t *testing.T) {
 	for _, tt := range parseDepthTests {
 		for _, size := range []string{"small", "big"} {
 			t.Run(tt.name+"/"+size, func(t *testing.T) {
-				n := maxNestLev + 1
+				n := nestLevLimit + 1
 				if tt.parseMultiplier > 0 {
 					n /= tt.parseMultiplier
 				}

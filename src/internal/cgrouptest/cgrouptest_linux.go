@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"internal/runtime/cgroup"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -109,6 +110,52 @@ func InCgroupV2(t *testing.T, fn func(*CgroupV2)) {
 		path: path,
 	}
 	fn(c)
+}
+
+// MemoryCgroupV1 creates a child of the current v1 memory cgroup with the
+// memory limit set to limit, and returns its path. The test cleanup removes
+// the child. Start a process in it with CommandInCgroup. The current process
+// stays where it is, so the limit charges only that process.
+//
+// If the process is not in a v1 memory cgroup, or a child cannot be created,
+// the test is skipped.
+func MemoryCgroupV1(t *testing.T, limit int64) string {
+	var scratch [cgroup.ParseSize]byte
+	buf := make([]byte, cgroup.PathSize)
+	size, ver, err := cgroup.FindMemory(buf, scratch[:])
+	if err != nil {
+		t.Skipf("cgroup: unable to find current memory cgroup: %v", err)
+	}
+	if ver != cgroup.V1 {
+		t.Skipf("cgroup: running on cgroup v%d want v1", ver)
+	}
+	orig := string(buf[:size])
+
+	// cgroup v1 allows processes in a cgroup that has children, so the
+	// child can live under the current cgroup.
+	path, err := os.MkdirTemp(orig, "go-cgrouptest")
+	if err != nil {
+		t.Skipf("unable to create cgroup directory: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Remove(path); err != nil {
+			t.Errorf("Error removing cgroup directory: %v", err)
+		}
+	})
+
+	value := []byte(strconv.FormatInt(limit, 10))
+	if err := os.WriteFile(filepath.Join(path, "memory.limit_in_bytes"), value, 0); err != nil {
+		t.Skipf("unable to set memory limit: %v", err)
+	}
+	return path
+}
+
+// CommandInCgroup returns a command that runs name with args in the cgroup
+// at path. A shell joins the cgroup and then execs name, so the program is in
+// the cgroup from its first instruction.
+func CommandInCgroup(path, name string, args ...string) *exec.Cmd {
+	const script = `echo $$ > "$0/cgroup.procs" && exec "$@"`
+	return exec.Command("/bin/sh", append([]string{"-c", script, path, name}, args...)...)
 }
 
 // Returns the filesystem path to the current cgroup the process is in.

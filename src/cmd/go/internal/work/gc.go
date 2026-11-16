@@ -299,7 +299,7 @@ func (a *Action) trimpath() string {
 	rewrite := ""
 
 	rewriteDir := a.Package.Dir
-	if cfg.BuildTrimpath {
+	if cfg.BuildTrimpath || trimsModuleCachePath(a.Package) {
 		importPath := a.Package.Internal.OrigImportPath
 		if m := a.Package.Module; m != nil && m.Version != "" {
 			rewriteDir = m.Path + "@" + m.Version + strings.TrimPrefix(importPath, m.Path)

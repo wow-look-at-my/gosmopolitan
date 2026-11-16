@@ -154,7 +154,7 @@ func TestGolden(t *testing.T) {
 			// UTF8 sequences are not broken up.
 			for b := 5; b <= 8; b++ {
 				t.Run(fmt.Sprintf("tiny%d", b), func(t *testing.T) {
-					t.Serial()
+					t.Serial("the subtest rewrites the package-level inBuffer and outBuffer that every other case in this file reads")
 					oldIn := inBuffer
 					oldOut := outBuffer
 					defer func() {
