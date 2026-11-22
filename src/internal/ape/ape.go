@@ -56,8 +56,6 @@ func assimilated(r io.ReaderAt, head *[ehdrSize]byte) bool {
 	if string(payload[:4]) != elfMagic {
 		return false
 	}
-	// e_ident's class and data, e_type, e_machine and e_entry are the
-	// fields the loader's header takes from the payload.
 	return payload[4] == head[4] && payload[5] == head[5] &&
 		u16(payload[16:]) == u16(head[16:]) &&
 		u16(payload[18:]) == u16(head[18:]) &&

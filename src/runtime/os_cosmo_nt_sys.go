@@ -259,11 +259,11 @@ const (
 // (cosmo libc keeps an equivalent __dosemapping table).
 func ntErrno(werr uintptr) uintptr {
 	switch werr {
-	case 2, 3, 123, 161: // FILE_NOT_FOUND, PATH_NOT_FOUND, INVALID_NAME, BAD_PATHNAME
+	case 2, 3, 123, 161:
 		return ntENOENT
 	case 267: // ERROR_DIRECTORY ("the directory name is invalid")
 		return ntENOTDIR
-	case 5, 32, 33: // ACCESS_DENIED, SHARING_VIOLATION, LOCK_VIOLATION
+	case 5, 32, 33:
 		return ntEACCES
 	case 80, 183: // FILE_EXISTS, ALREADY_EXISTS
 		return ntEEXIST

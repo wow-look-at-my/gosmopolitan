@@ -24,7 +24,7 @@ What Windows cannot serve, all of it absent from upstream's own windows port as 
 
 inotify is served over `ReadDirectoryChangesW` in `src/syscall/inotify_nt_cosmo.go`, so fsnotify's inotify backend works unchanged. One goroutine takes every directory's changes from a completion port. A watch on a file reads its parent directory, because NT reports changes only to a directory. Every host reports the same events: docs/INOTIFY.md.
 
-**The binaries the NT suite starts are not APEs.** `run.bash` and `run.bat` pin `GOOS` and `GOARCH` to the host values. So `dist test` on each leg tests that host's own port. The windows leg tests `GOOS=windows`. The binaries it builds, copies and starts are native PEs from this fork's linker. `os/exec`'s TestCommand comes from `lp_windows_test.go`.
+**The binaries the NT suite starts are not APEs.** So `dist test` on each leg tests that host's own port. The windows leg tests `GOOS=windows`. The binaries it builds, copies and starts are native PEs from this fork's linker. `os/exec`'s TestCommand comes from `lp_windows_test.go`.
 
 A cosmo build does not compile that file at all. The cosmo port's own coverage is `dats/checks/cosmo-tests.dats`, on the ubuntu leg.
 
@@ -92,7 +92,7 @@ File metadata and system information followed (2026-09-02, the metadata wave): f
 
 `Syscall` converts the struct before it enters the syscall.
 
-What Apple cannot serve: `Setresuid`, `Setresgid`, `Setfsuid`, `Setfsgid` and `mknodat` with a directory descriptor are ENOSYS, because Apple has no counterpart. `Fchmodat` reports `EOPNOTSUPP` for `AT_SYMLINK_NOFOLLOW` on every host: the Linux syscall takes no flags, and one APE must not answer one call multiple ways. Linux `Statfs_t` fields have no Apple source - `Type` carries Apple's own filesystem-type number, and `Namelen` stays zero rather than carrying a guess. `Utsname.Domainname` stays empty for the same reason.
+What Apple cannot serve. `Fchmodat` reports `EOPNOTSUPP` for `AT_SYMLINK_NOFOLLOW` on every host: the Linux syscall takes no flags, and one APE must not answer one call multiple ways. Linux `Statfs_t` fields have no Apple source - `Type` carries Apple's own filesystem-type number, and `Namelen` stays zero rather than carrying a guess. `Utsname.Domainname` stays empty for the same reason.
 
 inotify is served over FSEvents in `src/syscall/inotify_fsevents_cosmo_arm64.go`, so fsnotify's inotify backend works unchanged and a watched directory costs no descriptor per child. Every host reports the same events: docs/INOTIFY.md.
 

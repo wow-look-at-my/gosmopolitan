@@ -82,7 +82,7 @@ CPU profiling (ebf7b6a5, round 3) samples from the same loop-preemption gate, so
 ## Using wasm on this fork
 
 - This fork's `bin/go` DEFAULTS TO GOOS=cosmo. Always pin the target: `GOOS=js GOARCH=wasm go build .` or `GOOS=wasip1 GOARCH=wasm go build .` (and `GOOS=linux GOARCH=amd64` when rebuilding host tools).
-- Exec wrappers live in `lib/wasm/` (not misc/wasm): go_js_wasm_exec, go_wasip1_wasm_exec, wasm_exec.js, wasm_exec_node.js. Put `lib/wasm` on PATH and `GOOS=js GOARCH=wasm go test <pkg>` / `go run .` just work.
+- Exec wrappers live. Put `lib/wasm` on PATH and `GOOS=js GOARCH=wasm go test <pkg>` / `go run .` just work.
 - js/wasm needs Node.js 18 or newer (checked at startup). wasip1 needs a WASI preview 1 runtime. Wasmtime is the wrapper default, wazero works via `GOWASIRUNTIME=wazero`.
 - argv+env budget on js is now many bytes (was 8KB) - normal CI environments fit without trimming.
 - HTTP under node: `GODEBUG=jsfetchnode=1` enables the real Fetch transport. Default remains the fake network (tests depend on it). Since round 6, unknown-length request bodies (ContentLength < 0, or 0 with a non-nil Body) stream instead of buffering wherever a one-time probe shows the runtime's fetch supports upload streaming (Node.js 18+. Everything else keeps the buffered path). Known-length bodies always stay buffered so Content-Length stays on the wire.
@@ -90,7 +90,6 @@ CPU profiling (ebf7b6a5, round 3) samples from the same loop-preemption gate, so
 - The fake network is still the default on both ports: no external connectivity without the escape hatches above.
 - Tight loops are preemptible by default. Opt out with GOEXPERIMENT=nopreemptibleloops if you need to compare against upstream behavior.
 - CPU profiling works on both ports (round 3): pprof.StartCPUProfile and `go test -cpuprofile` produce real 100Hz profiles. Heap/goroutine/ block/mutex profiles already worked. See the sampling-bias notes above.
-- `go tool objdump`, `go tool nm`, and `go tool addr2line` understand linked wasm binaries (round 3), including -ldflags=-s stripped ones.
 - Frame-driven js apps (round 5): call the `go_gc_mark_step(budgetMs)` wasm export with the leftover frame budget between frames. The runtime performs up to that much GC mark work off the frame's critical path (no-op when no cycle is active) and returns whether work remains. The pacer detects the donations and keeps background marking out of frames. See `testdata/framebench` for a complete Node.js harness and measured numbers.
 - stdout/stderr writes are synchronous under node (round 3). Printing returns immediately and keeps program order even while another goroutine is CPU-busy, and an os.Exit after.
 - GOWASM=tailcall emits return_call for compiler-generated tail calls - js/node only: wazero rejects the output, so leave it unset (the default) for wasip1.

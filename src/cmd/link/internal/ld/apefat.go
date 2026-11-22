@@ -237,8 +237,8 @@ func payloadExtent(elf []byte) uint64 {
 }
 
 // stripPayload cuts p's ELF image down to the span its program headers
-// reference and zeroes the ELF header's section fields (e_shoff, e_shnum,
-// e_shstrndx), which no longer. Point at anything.
+// reference and zeroes the ELF header's section fields, which no longer.
+// Point at anything.
 func stripPayload(p *apePayload) {
 	extent := payloadExtent(p.elf)
 	if extent > uint64(len(p.elf)) {
