@@ -74,7 +74,7 @@ func payloadFromELF(elf []byte) (*apePayload, error) {
 	default:
 		return nil, fmt.Errorf("unsupported ELF machine type %#x", m)
 	}
-	// Validate the program header table up front: shiftPOffsets, makeEmbeddedElfHeader, makeMachoHeader, payloadExtent, stripPayload.
+	// Validate the program header table up front.
 	phoff := binary.LittleEndian.Uint64(elf[32:40])
 	phentsize := binary.LittleEndian.Uint16(elf[54:56])
 	phnum := binary.LittleEndian.Uint16(elf[56:58])

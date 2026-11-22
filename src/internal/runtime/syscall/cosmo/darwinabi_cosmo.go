@@ -63,8 +63,7 @@ type DarwinFlock struct {
 	Whence int16
 }
 
-// Apple's lock types. Whence needs no translation: SEEK_SET, SEEK_CUR
-// and SEEK_END agree.
+// Apple's lock types. Whence needs no translation.
 const (
 	linuxF_RDLCK  = 0
 	linuxF_WRLCK  = 1

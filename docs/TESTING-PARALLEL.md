@@ -10,13 +10,13 @@ A test failing only under this fork's `go test` is almost always one of these.
 
 ## t.Serial
 
-A test that mutates process-wide state - a package global, the environment, the working directory, `GOMAXPROCS` - calls `t.Serial(reason string = "")`. This waits for every other test to stop and then runs the caller alone until it returns. The reason carries a default, so `t.Serial()` compiles and runs, and warns. `t.Fork`, `t.Setenv` and `t.Chdir` take the same barrier and need no reason: each names the process-wide state it touches in its own documentation. `testing.AllocsPerRun` panics unless the caller did. A serial test's subtests run under its hold and take none of their own.
+A test that mutates process-wide state - a package global, the environment, the working directory, `GOMAXPROCS` - calls `t.Serial(reason string = "")`. This waits for every other test to stop and then runs the caller alone until it returns. The reason carries a default, so `t.Serial()` compiles and runs, and warns. `testing.AllocsPerRun` panics unless the caller did. A serial test's subtests run under its hold and take none of their own.
 
 The hold never covers a wait. `t.Run` drops the caller's hold while it waits, then takes it back. `t.Parallel()` drops one before it waits for a slot. Two holds in one line of descent deadlock. Go queues a new reader behind a waiting writer. So the inner test blocks on a pending `t.Serial()`, and the outer test waits for the inner one.
 
-`t.Setenv`, `t.Chdir` and `cryptotest.SetGlobalRandom` do NOT take the barrier where a child is available: each changes state the child gets its own copy of. One test setting an environment variable is no reason to stop every other test in the binary.
+One test setting an environment variable is no reason to stop every other test in the binary.
 
-They fall back to the barrier on `js`, `wasip1` and `ios`, which cannot start a child process at all - wasm has no process creation. The isolation is the same either way. Only the price changes. An EXPLICIT `t.Fork()` on those platforms still fails, because the test asked for its own copy of the process state and cannot be given.
+They fall back to the barrier, which cannot start a child process at all - wasm has no process creation. The isolation is the same either way. Only the price changes. An EXPLICIT `t.Fork()` on those platforms still fails, because the test asked for its own copy of the process state and cannot be given.
 
 A COVERED run takes the barrier for the same reason. The child inherits `-test.gocoverdir` and `-test.coverprofile`. It writes its own report into the parent's directory, and the two race. The parent's rename of the meta file then finds it gone. The package fails with `error generating coverage report`. The barrier keeps the counters in the run that reports them.
 
@@ -79,8 +79,8 @@ Mechanics:
 
 A forked child measures in place only when the tests in flight are the target's own ancestors. A parent stays counted while it waits for the subtest it started. The bound is the number of elements in the target's name. Anything above that is a sibling, whose allocations can land in the count, and the subtest forks a child of its own instead. A test that IS the target and still shares the process fails, because a second child reaches the same place.
 
-On `js`, `wasip1` and `ios` there is no child to measure in. That panic fails the test with a message naming `t.Serial()` - the. No runner executes that path, since every host this fork builds on can start a process. It exists so the failure names the remedy instead of a pipe the host was never going to open.
+there is no child to measure in. That panic fails the test with a message naming `t.Serial()` - the. No runner executes that path, since every host this fork builds on can start a process. It exists so the failure names the remedy instead of a pipe the host was never going to open.
 
 It is fork+exec, not `fork(2)`: the child is a fresh process re-running the test binary. A bare `fork(2)` is not safe in Go - the child can inherit only the calling thread, with the runtime's other threads gone and any.
 
-Implementation: `Fork`, `runForked` and `forkRunPattern` in `src/testing/testing.go`. Tests in `src/testing/fork_test.go`.
+Implementation. Tests in `src/testing/fork_test.go`.

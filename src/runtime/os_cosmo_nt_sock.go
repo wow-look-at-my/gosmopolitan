@@ -336,8 +336,6 @@ func ntWSAToLinux(werr uintptr) uintptr {
 	return ntErrno(werr)
 }
 
-// ---- sockaddr translation ---- AF_UNSPEC, AF_UNIX and AF_INET share Linux's numbers.
-
 const ntSockaddrBufMax = 112 // sizeof(syscall.RawSockaddrAny)
 
 // Returns the winsock namelen, the LINUX family, and - for AF_UNIX - the

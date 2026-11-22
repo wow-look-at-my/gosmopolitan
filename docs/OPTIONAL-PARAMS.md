@@ -33,7 +33,6 @@ This removes the pattern the feature exists for: an API whose every production c
 | Check the constant and enforce trailing | `cmd/compile/internal/types2` | done |
 | Record it on the parameter (`Var.Default`) | `cmd/compile/internal/types2` | done |
 | Accept a call that omits a defaulted suffix, and fill it | `cmd/compile/internal/types2` | done |
-| Parse `= expr`, carry it on `ast.Field.Default`, print it again | `go/ast`, `go/parser`, `go/printer` | done |
 | The same checks, and a fill the call does not see | `go/types` | done |
 | Carry it through export data | `cmd/compile/internal/noder`, both importers | done |
 

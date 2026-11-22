@@ -231,7 +231,7 @@ The ARM64 code in actually portable executables use the `x28` register to store 
 
 The runtime library for an actually portable executables MAY choose to use `tpidr_el0` instead, if OSes like MacOS are not being targeted. For example, if the goal is to create a Linux-only fat binary linker program for Musl Libc, then choosing to use the existing `tpidr_el0`.
 
-It is not possible for an APE runtime that targets the full range of OSes to use the `tpidr_el0` register for TLS because Apple. On MacOS ARM64 systems. This register can only be used by a runtime to implement the `sched_getcpu()` system call. MacOS reserves it.
+It is not possible for an APE runtime that targets the full range of OSes to use the `tpidr_el0` register for TLS because Apple. On MacOS ARM64 systems. A runtime to implement the `sched_getcpu()` system call can only use this register. MacOS reserves it.
 
 #### x86-64
 
@@ -267,39 +267,6 @@ Here is a breakdown on how much power is granted to userspace runtimes by each O
 Therefore, regardless of which register one we choose, some OSes goes to be incompatible.
 
 APE binaries are always built with a Linux compiler. So another issue arises in the fact that our Linux-flavored GCC and Clang toolchains (which are used to produce cross-OS binaries) are also only capable of producing TLS instructions that.
-
-To solve these challenges, the `cosmocc` compiler rewrites GCC generated assembly so that the `%fs` referencing instructions created by GCC when using the `-mno-tls-direct-seg-refs`.
-
-- `__get_tls_rax`
-- `__get_tls_rbx`
-- `__get_tls_rcx`
-- `__get_tls_rdx`
-- `__get_tls_rdi`
-- `__get_tls_rsi`
-- `__get_tls_rbp`
-- `__get_tls_r8`
-- `__get_tls_r9`
-- `__get_tls_r10`
-- `__get_tls_r11`
-- `__get_tls_r12`
-- `__get_tls_r13`
-- `__get_tls_r14`
-- `__get_tls_r15`
-- `__add_tls_rax`
-- `__add_tls_rbx`
-- `__add_tls_rcx`
-- `__add_tls_rdx`
-- `__add_tls_rdi`
-- `__add_tls_rsi`
-- `__add_tls_rbp`
-- `__add_tls_r8`
-- `__add_tls_r9`
-- `__add_tls_r10`
-- `__add_tls_r11`
-- `__add_tls_r12`
-- `__add_tls_r13`
-- `__add_tls_r14`
-- `__add_tls_r15`
 
 The `cosmocc` script internally uses a tool named `tlscc` which wraps a gcc or clang compilation so it generates intermediate assembly code that it. In the process, it also adds the `-mno-tls-direct-seg-refs` and `-mno-red-zone` flags to the compile command to ensure the compiler only generates TLS assembly instructions.
 

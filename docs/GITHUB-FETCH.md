@@ -23,12 +23,6 @@ An archive can hash differently from the module zip: `export-ignore` and `export
 
 ## Which URLs
 
-| Ref | Archive path |
-|---|---|
-| `refs/tags/v1.2.3` | `archive/refs/tags/v1.2.3.tar.gz` |
-| `refs/heads/master` | `archive/refs/heads/master.tar.gz` |
-| `HEAD` | `archive/<commit hash>.tar.gz` |
-
 ## Tags, branches and commits without git
 
 A version tag such as `v1.2.3` needs no ref list. Its archive is fetched first. The commit comes out of the archive: the tar.gz pax `comment` record, or the zip comment.
@@ -42,15 +36,13 @@ Everything else needs the ref list. It comes over plain HTTP, from the first sou
 
 Git never lists the refs of a github.com repository. When no source answers, the error names each one with its status, as `listing the refs of <url> over HTTP: ...`. A `git ls-remote` will cost a process per lookup and will hide which source refused.
 
-The REST steps read `/repos/<owner>/<repo>/tags` and `/branches` page by page, and `/repos/<owner>/<repo>` for `default_branch`, which is `HEAD`.
-
 A request through proxy.pazer.ai carries the GOAUTH credential of the github.com URL it wraps, and the proxy forwards it. A request to github-state-mirror carries the credential for api.github.com. A netrc entry for api.github.com therefore covers the mirror, the API and the proxied API.
 
 ## Private repositories
 
 github.com answers nothing about a private repository without a credential. GOAUTH usually has none for it. The direct `info/refs` advertisement carries the credential git's own helpers hold for github.com (`git credential fill`), presented as HTTP basic authentication. That credential is resolved once per process. A build then pays for one helper run, however many origins it resolves. On a machine whose git has one, a private repository's ref list therefore costs one GET.
 
-A machine with no git credential sends the request anonymously. The advertisement is then asked once with each GitHub token the environment holds. That advertisement is as HTTP basic authentication with the user `x-access-token`, the form GitHub pairs a token with. The tokens are those in `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`, `GITHUB_TOKEN` and `GH_TOKEN`, in that order. After those, each other environment value that starts like a GitHub token is tried, in the order of the variable names. The prefixes are `ghp_`, `github_pat_`, `gho_`, `ghu_` and `ghs_`.
+A machine with no git credential sends the request anonymously. The advertisement is then asked once with each GitHub token the environment holds. That advertisement is as HTTP basic authentication with the user `x-access-token`, the form GitHub pairs a token with. The tokens are those, in that order. After those, each other environment value that starts like a GitHub token is tried, in the order of the variable names.
 
 A CI job that holds the org read token in `PRIVATE_ORG_REPO_READ` resolves a private repository this way, with no git configuration.
 
@@ -95,6 +87,6 @@ Each fetched module gets one line when it is complete, for every route:
 go: downloading github.com/jbenet/go-context v0.0.0-20150711004518-d14ea06fba99: tar.gz archive, 1.2 MB in 0.40s (3.0 MB/s), 0.62s total
 ```
 
-The route is the module proxy, a `tar.gz` or `zip` archive (direct or `via proxy.pazer.ai`), or `git`. When an earlier source failed, `because` follows the route and names each one with its HTTP status or error, as in `tar.gz archive via proxy.pazer.ai, because github.com tar.gz: 403 Forbidden`. The size is the bytes of every try that received data. The git size is the growth of the object store. The total adds the part of a transfer that `Stat` ran before the download began. A module already in the module cache prints nothing.
+When an earlier source failed, `because` follows the route and names each one with its HTTP status or error, as in `tar.gz archive via proxy.pazer.ai, because github.com tar.gz: 403 Forbidden`. The size is the bytes of every try that received data. The git size is the growth of the object store. The total adds the part of a transfer that `Stat` ran before the download began. A module already in the module cache prints nothing.
 
 The code is `cmd/go/internal/modfetch/fetchlog.go`.

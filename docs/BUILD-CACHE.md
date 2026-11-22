@@ -13,7 +13,6 @@ The cache is `github.com/wow-look-at-my/go-s3-server/cacheclient`, a submodule u
 | `cachedisk/diskhash.go` | `HashSize`, and the verify-mode record of what produced a key |
 | `cachedisk/tier.go` | `Tiered`, so a trace can name which tier answered |
 | `disk.go` | those names again, for a consumer that holds the whole client |
-| `web.go`, `webget.go`, `webput.go` | the store and its wire protocol |
 | `storetier.go` | the store under the directory, and which one answered |
 | `brokerowner.go` | the owner: the hello queue, and a channel per child |
 | `brokerchild.go` | the cache a child holds, which is its channel to the owner |
