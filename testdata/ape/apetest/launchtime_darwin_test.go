@@ -57,9 +57,9 @@ func oldDarwinBoot(t *testing.T, ape string) string {
 	return script
 }
 
-// The darwin boot runs the loader from a per-user cache, so that XNU names
-// the process after the program. A launch is a fixed amount of work and a busy
-// host only adds to it, so each boot is judged by its fastest launch over many
+// The darwin boot runs the loader from a per-user cache, so that XNU names the
+// process after the program. A launch is a fixed amount of work and a busy
+// host only adds to it. Each boot is judged by its fastest launch over many
 // rounds, and the medians of those rounds are logged beside it.
 func TestDarwinLaunchIsNoSlowerThanTheOldBoot(t *testing.T) {
 	if loader := residentLoader(t); loader != "" {
