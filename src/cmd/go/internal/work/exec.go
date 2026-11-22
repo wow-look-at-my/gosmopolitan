@@ -370,7 +370,15 @@ func packageOriginKey(pkg *load.Package, trimpath bool, workDir string) string {
 // key no other location asks for. A package with cgo or SWIG keeps its
 // directory: the C compiler and the cgo tool write that path too.
 func trimsModuleCachePath(pkg *load.Package) bool {
-	if cfg.BuildTrimpath || pkg == nil || pkg.Goroot || pkg.Module == nil || pkg.Module.Version == "" {
+	return !cfg.BuildTrimpath && compilesFromModuleCache(pkg)
+}
+
+// compilesFromModuleCache reports whether the compile of pkg names its source
+// as module@version whatever -trimpath says. Such a compile is the same with
+// the flag and without it, so the flag stays out of its key. A build with
+// -trimpath and a test without it then share one object for each dependency.
+func compilesFromModuleCache(pkg *load.Package) bool {
+	if pkg == nil || pkg.Goroot || pkg.Module == nil || pkg.Module.Version == "" {
 		return false
 	}
 	if len(pkg.CgoFiles)+len(pkg.SwigFiles)+len(pkg.SwigCXXFiles) > 0 {
@@ -427,7 +435,7 @@ func (b *Builder) buildActionID(a *Action) cache.ActionID {
 	fmt.Fprintf(h, "goos %s goarch %s\n", cfg.Goos, cfg.Goarch)
 	fmt.Fprintf(h, "import %q\n", p.ImportPath)
 	fmt.Fprintf(h, "omitdebug %v standard %v local %v prefix %q\n", p.Internal.OmitDebug, p.Standard, p.Internal.Local, p.Internal.LocalPrefix)
-	if cfg.BuildTrimpath {
+	if cfg.BuildTrimpath && !compilesFromModuleCache(p) {
 		fmt.Fprintln(h, "trimpath")
 	}
 	if p.Internal.ForceLibrary {
