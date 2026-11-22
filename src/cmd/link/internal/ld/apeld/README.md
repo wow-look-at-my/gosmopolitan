@@ -22,6 +22,5 @@ Git does not track `bin/`. `make.bash` and `make.bat` compile the loaders into i
 | tool | where it comes from |
 |---|---|
 | `zig` 0.16.0 | https://ziglang.org/download/ |
-| `ld64.lld` and `llvm-strip` from LLVM 18.1.8 | `lld-18` and `llvm-18` from apt.llvm.org (`/usr/lib/llvm-18/bin`), `brew install llvm@18`, or `LLVM-18.1.8-win64.exe` |
 
 dist refuses any other zig or LLD. ld64.lld writes its own version into the darwin loader, so another LLD makes other bytes. `TestApeLoaderBinariesMatchTheirPins` pins each loader's SHA-256, so a source change that moves a byte updates its pin in the same commit.

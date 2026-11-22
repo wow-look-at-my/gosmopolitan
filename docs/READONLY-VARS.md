@@ -21,7 +21,7 @@ This exists for `runtime.GOOS` and `runtime.GOARCH`. Both are variables on the c
 
 ## Rules
 
-- `readonly` is a keyword only where a top-level declaration starts, and only before `var`. A variable, a field, or a function named `readonly` stays legal. `readonly const`, `readonly type` and `readonly func` are syntax errors.
+- `readonly` is a keyword only where a top-level declaration starts, and only before `var`. A variable, a field, or a function named `readonly` stays legal.
 - A `readonly var` group marks every variable in the group.
 - Only a package-level variable takes it. A local `readonly var` is a syntax error, because a statement never starts with the keyword.
 - Reads are unchanged, and so is a reference in a constant context: `runtime.GOOS` still folds to the build value there (`types2/dynconst.go`).
@@ -32,8 +32,7 @@ This exists for `runtime.GOOS` and `runtime.GOARCH`. Both are variables on the c
 | Step | Package |
 |---|---|
 | Parse the contextual keyword, carry `VarDecl.Readonly`, print it | `cmd/compile/internal/syntax` |
-| Parse, carry `GenDecl.Readonly`, print it | `go/ast`, `go/parser`, `go/printer` |
 | Record `Var.Readonly`, read the variable as a value from another package, name it in the error | `cmd/compile/internal/types2`, `go/types` |
 | Carry the bit through export data (`pkgbits.V6`) | `cmd/compile/internal/noder`, both importers |
 
-Tests: `test/readonly.dir` (the refusal, in another package), `src/internal/types/testdata/check/readonly.go` (the declaring package), and `TestReadonlyVars` in `go/internal/gcimporter` (export data).
+Tests.

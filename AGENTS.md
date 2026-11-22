@@ -252,7 +252,7 @@ The work that is NOT in the conflict list is the class of break that produces **
 
 A small bump also moves internal APIs the fork's own code calls, and those break the BUILD rather than a tag. Build std for every port the fork supports, not just cosmo: `js/wasm`, `wasip1/wasm`, and both under `GOWASM=threads`. Regenerate what upstream generates — `go run -C=_gen .` in `cmd/compile/internal/ssa` — rather than hand-merging opGen.go.
 
-Then sweep the version string (`grep -rn goX.Y '<old>cosmo'` across CLAUDE.md, README.md, docs/INSTALL.md, cosmo-ci.yml).
+Then sweep the version string.
 
 ## CI
 
@@ -321,7 +321,7 @@ The committed VERSION stays `go1.27.0-cosmo`. macOS Intel and linux/arm64 build 
 
 ## Editor tooling (gopls)
 
-gopls parses with the `go/*` packages of the toolchain that builds it. It must therefore be built by THIS one. A stock gopls reads a parameter default as a syntax error. The matching x/tools fork is **wow-look-at-my/gosmopolitan_tools**, which carries the export-data, SSA, inliner and signature changes defaults need. Build it host-side: `GOOS=linux GOARCH=amd64 go build ./gopls`. Depth, including the table of what breaks without each change: docs/GOPLS.md.
+gopls parses with the `go/*` packages of the toolchain that builds it. THIS one must therefore build it. A stock gopls reads a parameter default as a syntax error. The matching x/tools fork is **wow-look-at-my/gosmopolitan_tools**, which carries the export-data, SSA, inliner and signature changes defaults need. Build it host-side: `GOOS=linux GOARCH=amd64 go build ./gopls`. Depth, including the table of what breaks without each change: docs/GOPLS.md.
 
 ## Enum types
 
