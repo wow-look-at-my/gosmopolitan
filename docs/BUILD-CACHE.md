@@ -70,6 +70,8 @@ A request is a record: a correlation ID, the action ID, and a path for a put. A 
 
 A build compiles in parallel, so its replies come back in whatever order the owner finishes. The correlation ID is what puts each reply back in the hand of the caller waiting for it.
 
+Each request has a local form. The owner answers it from the directory alone, and the store never hears of the action. `cache.Local` selects it, in the owner and in a child. The module index goes that way. The store refuses an index. A lookup there is a miss on every fresh machine.
+
 A caller holding an open file names that file. One holding anything else spills to a temporary file first. The bytes have to reach another process. A path is what this protocol carries.
 
 ## An archive is stamped with its content, not its action
