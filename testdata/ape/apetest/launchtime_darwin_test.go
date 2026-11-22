@@ -150,16 +150,13 @@ func TestDarwinLaunchIsNoSlowerThanTheOldBoot(t *testing.T) {
 		rounds, millis(fastest[0]), millis(fastest[1]), millis(fastest[2]))
 	for idx := 1; idx < len(modes); idx++ {
 		slices.Sort(ratios[idx])
-		// Every mode launches once in each round, one after another, so a round's
-		// ratio holds the host of that moment, and the median of the rounds is what
-		// a launch of the mode costs against the old boot on this host. Two fastest
-		// launches are not comparable: a busy runner's low tail goes below a boot's
-		// own work by a different amount for each boot, and comparing them failed
-		// here on a boot whose median was faster than the old boot's.
-		change := 100 * (ratios[idx][rounds/2] - 1)
+		t.Logf("%s against the old boot of the same round, median of %d rounds: %+.1f%%",
+			modes[idx].name, rounds, 100*(ratios[idx][rounds/2]-1))
+		// A launch is a fixed amount of work, and a busy host only ever adds time to it.
+		change := 100 * (float64(fastest[idx])/float64(fastest[0]) - 1)
 		if change > 5 {
-			t.Errorf("a launch with the %s takes %+.1f%% against the old boot of the same round, median of %d rounds: the limit is +5%%",
-				modes[idx].name, change, rounds)
+			t.Errorf("a launch with the %s takes %.1f ms at its fastest, %+.1f%% against the old boot's fastest %.1f ms: the limit is +5%%",
+				modes[idx].name, millis(fastest[idx]), change, millis(fastest[0]))
 		}
 	}
 }
