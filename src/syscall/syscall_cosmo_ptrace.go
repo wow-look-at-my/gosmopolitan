@@ -10,10 +10,9 @@ package syscall
 import "unsafe"
 
 // Process tracing. GOOS=cosmo presents the Linux ABI, so a program written
-// against the linux port names these. The linux port declares them in
-// syscall_linux.go, zsyscall_linux_amd64.go and zsyscall_linux_arm64.go,
-// which cosmo does not build. The signatures and the bodies are those
-// files', unchanged.
+// against the linux port names these. The linux port declares them, which
+// cosmo does not build. The signatures and the bodies are those files',
+// unchanged.
 //
 // A Linux kernel is the only host that serves SYS_PTRACE. The macOS
 // emulation (internal/runtime/syscall/cosmo.syscall6SlowDarwin) and the

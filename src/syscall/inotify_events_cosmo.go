@@ -7,8 +7,7 @@
 // have changed. A stat and the last stat of the name decide the events, on
 // every host, so a host cannot report anything another host would not.
 //
-// IN_ACCESS, IN_OPEN and IN_CLOSE_NOWRITE never fire. Neither macOS nor NT
-// tells an unprivileged process about them.
+// Neither macOS nor NT tells an unprivileged process about them.
 //
 // A write is reported when the descriptor that made it closes, as IN_MODIFY
 // then IN_CLOSE_WRITE. Neither macOS nor NT reports one sooner. A truncate, a

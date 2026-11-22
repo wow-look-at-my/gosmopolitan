@@ -22,7 +22,7 @@ The Linux build leg also builds the probe and hands it to the test job. `TestCgo
 - `CGO_ENABLED=1` with no compiler fails and names it: `cgo: C compiler "x86_64-unknown-cosmo-cc" not found`.
 - A plain `CC` applies to GOARCH only. The fat build's sibling gets `CC_FOR_cosmo_<sibling>` or the default, and the parent's cgo setting (`cosmoSiblingCgoEnv` in `cmd/go/internal/work/cosmofat.go`). A sibling without its compiler fails by name.
 - A go command that carries its standard library (docs/EMBEDDED-STD.md) builds cgo programs when `go tool embedstd` built its blob with cgo on, which is the default. The blob then holds runtime/cgo for both architectures. The cgo tool and the link still run the host's cosmocc at build time.
-- libcosmo's `dlopen`, `dlsym`, `dlclose` and `dlerror` are stubs that always fail. The cosmo link wraps them (`-Wl,--wrap`), and `runtime/cgo/gcc_cosmo.c` sends each one to `cosmo_dlopen` and the rest of that family. So a cgo package that loads a host library works unmodified. The probe checks this with `dlerror` on every host, and with `dlopen libm.so.6 cos` on linux/amd64.
+- The cosmo link wraps them (`-Wl,--wrap`), and `runtime/cgo/gcc_cosmo.c` sends each one to `cosmo_dlopen` and the rest of that family. So a cgo package that loads a host library works unmodified. The probe checks this with `dlerror` on every host, and with `dlopen libm.so.6 cos` on linux/amd64.
 - On a Linux amd64 host, host code reads its TLS through the FS base that the host's ld.so. That ld.so is set on the thread of the first dlopen. Every other thread's FS is libcosmo's block. So each `dl*` wrapper runs on the host FS, and `dlsym` hands back a thunk for a host function. The thunk goes through `__wrap_foreign_tramp`, which switches to the host FS for the call and back after it. All threads share that one host thread block.
 - A cosmo build always sets the `netgo` and `osusergo` tags. cosmo satisfies the `linux` tag, so their cgo files will otherwise call libcosmo. Then every program that imports `net` will stop on NT.
 
@@ -43,7 +43,7 @@ cgo forces an external link (`internal/platform.MustLinkExternal`). `cmd/link` r
 The PE header of a cgo image takes its entry and its imports from libcosmo (`cosmoNTBoot` in `cosmolink.go`). A pure-Go image keeps `_rt0_cosmo_nt` and `runtime.ntidata`.
 
 - AddressOfEntryPoint is libcosmo's `WinMain`. The script pulls it in with `EXTERN(WinMain)`. WinMain starts libcosmo on NT and calls `main`, as `_start` does on Unix.
-- The import directory is libcosmo's. Each `__imp_` object carries its own `.idata.ro.*` descriptor, lookup and name sections and a `.piro.data.sort.iat.*` slot. The script bounds them with `ape_idata_idt`, `ape_idata_idtend`, `ape_idata_iat` and `ape_idata_iatend`, and writes the zero descriptor itself. Its relocations are RVAs against `0x400000`, the amd64 cgo base.
+- The import directory is libcosmo's. Each `__imp_` object carries its own `.idata.ro.*` descriptor, lookup and name sections and a `.piro.data.sort.iat.*` slot. The script bounds them, and writes the zero descriptor itself. Its relocations are RVAs against `0x400000`, the amd64 cgo base.
 - `x_cgo_init` copies `__imp_GetProcAddress` and `__imp_LoadLibraryA` into `runtime.ntiat`. The Go NT layer resolves everything else through those two, as on the pure-Go path.
 - WinMain passes `main` no auxv, so `sysargs` takes a 4 KiB page on NT. `startupRand` stays empty and `randinit` reads `ProcessPrng`.
 - Threads come from libcosmo's `pthread_create`, which calls `CreateThread`.
@@ -63,7 +63,7 @@ libcosmo owns the C thread pointer. Go keeps `g` apart from it (`runtime/cgo/gcc
 - `x_cgo_init` binds the main thread and copies `__hostos` and `__syslib` from libcosmo, because the APE boot hands them to libcosmo's `_start`.
 - The pthread_create wrapper binds every other thread before its start routine runs. A thread that C starts therefore reads a nil `g`, and `needm` gives it an M.
 - arm64 `asmcgocall` loads `x28` through `runtime.cosmoCTP` before it calls C and restores `g` after. `main` saves libcosmo's `x28` in `cosmoMainTP` before `rt0_go` reuses R28, and the call to `x_cgo_init` uses it.
-- XNU writes `TPIDR_EL0` at every context switch: it carries the CPU number. So on macOS `x_cgo_init` makes Apple pthread keys through the Syslib's `dlsym`, as upstream's darwin `tlsinit` does. It stores their offsets in `cosmoHostSlots`, which `load_g`, `save_g` and `cosmoCTP` read.
+- XNU writes `TPIDR_EL0` at every context switch: it carries the CPU number. So on macOS `x_cgo_init` makes Apple pthread keys through the Syslib's `dlsym`, as upstream's darwin `tlsinit` does.
 - `runtime/cgo` leaves out its mmap and sigaction hooks on cosmo, as the runtime already does.
 
 ## Not done

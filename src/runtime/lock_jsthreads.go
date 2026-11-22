@@ -43,8 +43,6 @@ func lock(l *mutex) {
 	lockWithRank(l, getLockRank(l))
 }
 
-// This is the classic futex mutex (see lock_futex.go's ancestry): possible
-// lock states are mutex_unlocked, mutex_locked and mutex_sleeping.
 // mutex_sleeping means that there is presumably at least one sleeping thread.
 // A waiter never spins: it marks the lock mutex_sleeping and waits in the
 // futex until unlock2 wakes it.

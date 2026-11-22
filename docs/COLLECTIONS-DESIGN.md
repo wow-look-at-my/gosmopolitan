@@ -34,7 +34,7 @@ func init() { image.Register(pngLoader{}) }
 import _ "image/png" // without this line, png does not exist
 ```
 
-The standard library does this in `image.RegisterFormat`, `database/sql.Register`, and `encoding/gob.Register`.
+The standard library does this.
 
 ## Problems with the pattern today
 

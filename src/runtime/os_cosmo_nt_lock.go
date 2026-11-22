@@ -102,7 +102,6 @@ func ntLockRange(handle uintptr, start, end int64, take, write bool) bool {
 	return ret != 0
 }
 
-// ntEmuFcntlLock implements F_GETLK, F_SETLK and F_SETLKW.
 func ntEmuFcntlLock(fd, cmd int32, flk *ntLinuxFlock) (r1, r2, errno uintptr) {
 	entry, ok := ntFDLookup(fd)
 	if !ok {
