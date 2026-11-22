@@ -32,7 +32,7 @@ Do not retry or re-run it. Do not widen a timeout or mark a check flaky. Do not 
 
 So a version rewrite stripped the leading tab from a couple of `go.mod` require lines, and nothing failed. The shell reads a line and puts back every part of it untouched. Use it, or use the file's own tool.
 
-**A name is a word, not a letter.** Every identifier is a few characters. There is no carve-out for a loop counter: write `idx`, `row`, `col` or `num`. This binds every line this fork adds. Do not rename upstream's receivers in a file you are not otherwise rewriting. That diff hides the change it travels with.
+**A name is a word, not a letter.** Every identifier is a few characters. There is no carve-out for a loop counter. This binds every line this fork adds. Do not rename upstream's receivers in a file you are not otherwise rewriting. That diff hides the change it travels with.
 
 **A module zip carries `.gitmodules` and every gitlink.** `git archive` writes an empty directory for a submodule. It drops the commit that submodule points at. A fetched module then names which submodules exist and not which commit each one is. A gitlink is a content address the author already chose. Keep it.
 
@@ -46,10 +46,10 @@ CI builds one fat APE per platform. No GOARCH pin. The output contains cosmo amd
 
 **Every step dist runs names itself and what it cost.** `dist build <secs> <name>` and `dist test <secs> <name>`, one line each, on stdout. A suite's own `ok pkg 1.23s` times the RUN of a test binary, not the build of one. The binary every package's tests compile into runs no test at all. Without these lines the largest compile in a leg answers to nothing. `make.bash` gets the same line for each toolchain phase.
 
-The suite-leg summary totals them into the step summary, which is how a leg that overran its budget names what overran. After `std.test` and `cmd-go.test`, `dist action <secs> wait <secs>` lines name the slowest actions of that step from go test's `-debug-actiongraph`. `cmd/go` is its own `cmd-go.test` step, because its scripts each build with `-p`. One binary carries one deadline, and beside `std.test`'s packages its actions waited a minute at a time for a worker. The deadline ran out. It runs after `std.test`, alone.
+The suite-leg summary totals them into the step summary, which is how a leg that overran its budget names what overran. `cmd/go` is its own `cmd-go.test` step, because its scripts each build with `-p`. One binary carries one deadline, and beside `std.test`'s packages its actions waited a minute at a time for a worker. The deadline ran out. It runs after `std.test`, alone.
 
 The `cosmo-checks` job keeps `dats/checks/cosmo-tests.dats`, which runs the GOOS=cosmo package tests through the misc/cosmo wrappers. Internal/runtime/syscall/cosmo (darwin sendmsg/recvmsg cmsg repack, signal translation tables, epoll layout), the runtime's Apple itimerval ABI pins. Those name lists live in the suite, where an engineer can run them, rather than in a workflow step. Every build leg additionally asserts, right after make.bash, a content-derived `buildID=` in `compile -V=full`. That is the cross-build cache-poisoning guard — see the tool-build-ID bullet in Fork Gotchas.
 
 Guard suites, the test programs and the wasm job: docs/CI.md, section "Guard suites, test programs and the wasm job".
 
-The `publish-create`, `publish-upload` and `publish-finish` jobs publish an installable toolchain tarball to buildhost on every push, one leg per platform. They need every other job green: build, cosmo-checks, test, wasm and wasm-suite. Depth: Toolchain Distribution below.
+They need every other job green: build, cosmo-checks, test, wasm and wasm-suite. Depth: Toolchain Distribution below.

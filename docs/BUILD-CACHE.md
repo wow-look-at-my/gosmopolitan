@@ -13,7 +13,6 @@ The cache is `github.com/wow-look-at-my/go-s3-server/cacheclient`, a submodule u
 | `cachedisk/diskhash.go` | `HashSize`, and the verify-mode record of what produced a key |
 | `cachedisk/tier.go` | `Tiered`, so a trace can name which tier answered |
 | `disk.go` | those names again, for a consumer that holds the whole client |
-| `web.go`, `webget.go`, `webput.go` | the store and its wire protocol |
 | `storetier.go` | the store under the directory, and which one answered |
 | `brokerowner.go` | the owner: the hello queue, and a channel per child |
 | `brokerchild.go` | the cache a child holds, which is its channel to the owner |
@@ -69,6 +68,8 @@ The key leaves the map before the channel closes. The next ask therefore starts 
 A request is a record: a correlation ID, the action ID, and a path for a put. A reply is the same ID, the output ID, the size, the mtime and the tier. The bytes are already in the cache directory, under the name the output ID gives them, and both processes can open that directory. A put names its body by path for the same reason. The owner reads that path before it answers. The child may therefore exit the moment `Put` returns.
 
 A build compiles in parallel, so its replies come back in whatever order the owner finishes. The correlation ID is what puts each reply back in the hand of the caller waiting for it.
+
+Each request has a local form. The owner answers it from the directory alone, and the store never hears of the action. `cache.Local` selects it, in the owner and in a child. The module index goes that way. The store refuses an index. A lookup there is a miss on every fresh machine.
 
 A caller holding an open file names that file. One holding anything else spills to a temporary file first. The bytes have to reach another process. A path is what this protocol carries.
 

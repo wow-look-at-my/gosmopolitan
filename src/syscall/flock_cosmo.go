@@ -3,13 +3,10 @@
 
 //go:build cosmo
 
-// FcntlFlock performs a fcntl syscall for the [F_GETLK], [F_SETLK] or [F_SETLKW] command.
-
 package syscall
 
 import "unsafe"
 
-// FcntlFlock performs a fcntl syscall for the [F_GETLK], [F_SETLK] or [F_SETLKW] command.
 func FcntlFlock(fd uintptr, cmd int, lk *Flock_t) error {
 	_, _, errno := Syscall(SYS_FCNTL, fd, uintptr(cmd), uintptr(unsafe.Pointer(lk)))
 	if errno == 0 {

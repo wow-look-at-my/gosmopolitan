@@ -29,7 +29,7 @@ The resulting `.com` file runs natively on Linux, macOS, and Windows. On Windows
 
 Starting the file writes nothing. Linux and macOS hand it to a small native loader. That loader boots the payload from memory, so a read-only path runs it like any other. `docs/APE-BOOT.md` covers where the loader comes from.
 
-Debug with the sidecars: `gdb program.com.dbg`, or `symbol-file` against the running APE. Runtime tracebacks and pprof need no sidecar.
+Debug with the sidecars. Runtime tracebacks and pprof need no sidecar.
 
 Ship release APEs zstd-compressed. The architecture payloads are redundant, so a stdlib-heavy 12.3 MB webserver APE goes over the wire at 3.6 MB.
 
