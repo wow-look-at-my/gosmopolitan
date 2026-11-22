@@ -24,7 +24,7 @@ A new stream can report what happened before it started, and FSEvents can still 
 
 ## What a caller sees
 
-`IN_ACCESS`, `IN_OPEN` and `IN_CLOSE_NOWRITE` are accepted and never fire. Neither macOS nor NT tells an unprivileged process about them. A Linux host can report them and does not, because a program that relied on them will then run on one host only.
+Neither macOS nor NT tells an unprivileged process about them. A Linux host can report them and does not, because a program that relied on them will then run on one host only.
 
 A write is reported when the descriptor that made it closes, as `IN_MODIFY` then `IN_CLOSE_WRITE`. A descriptor older than the watch counts. Neither macOS nor NTFS reports a write sooner, and `fsync` does not change that. A Linux host holds the kernel's `IN_MODIFY` back until the close.
 
@@ -34,7 +34,7 @@ A Linux `IN_MODIFY` means a write or a truncate. The kernel does not say which. 
 
 A rename seen at both ends is `IN_MOVED_FROM` then `IN_MOVED_TO`, with one cookie. A name arriving from an unwatched directory is `IN_CREATE`. A name leaving for one is `IN_DELETE`. NT cannot tell either from a real create or delete, so no host reports them as moves. A deletion that may be half of a rename waits about 30ms for the other half.
 
-A name that arrives with content reports `IN_CREATE`, `IN_MODIFY`, `IN_CLOSE_WRITE`. A name created and deleted before a host looks reports `IN_CREATE` then `IN_DELETE`.
+A name created and deleted before a host looks reports `IN_CREATE` then `IN_DELETE`.
 
 A name replaced by an arrival nobody saw leave reports `IN_DELETE` then `IN_CREATE`.
 
@@ -42,7 +42,7 @@ A watched name that leaves unpaired reports `IN_DELETE_SELF` then `IN_IGNORED`.
 
 `IN_DONT_FOLLOW` on a symlink watches the link, through its parent directory. It never answers ELOOP.
 
-A read returns whole records. It answers EINVAL when the next record does not fit the buffer. `dup`, `dup2`, `dup3`, `fcntl` and `net.FileConn` give another name for the instance, and a read through that name behaves the same.
+A read returns whole records. It answers EINVAL when the next record does not fit the buffer.
 
 ## Limits
 

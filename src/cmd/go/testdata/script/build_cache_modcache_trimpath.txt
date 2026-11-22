@@ -1,0 +1,35 @@
+# A package from the module cache names its source as module@version with
+# -trimpath and without it. Its compile is the same both ways, so the flag is
+# not in its key. A build with -trimpath and a test without it then share one
+# object for the dependency.
+
+env GOCACHE=$WORK/gocache
+mkdir $GOCACHE
+
+go get rsc.io/breaker@v1.0.0
+go list -export -f '{{.BuildID}}' rsc.io/breaker
+cp stdout plain.txt
+go list -trimpath -export -f '{{.BuildID}}' rsc.io/breaker
+cp stdout trimmed.txt
+cmp plain.txt trimmed.txt
+
+# The second compile was a cache hit.
+go build -x -trimpath rsc.io/breaker
+! stderr '(compile|gccgo)( |\.exe)'
+
+# The main module names its absolute directory without -trimpath, so the flag
+# changes its compile and stays in its key.
+go list -export -f '{{.BuildID}}' m
+cp stdout main-plain.txt
+go list -trimpath -export -f '{{.BuildID}}' m
+cp stdout main-trimmed.txt
+! cmp main-plain.txt main-trimmed.txt
+
+-- go.mod --
+module m
+
+go 1.20
+-- m.go --
+package m
+
+import _ "rsc.io/breaker"

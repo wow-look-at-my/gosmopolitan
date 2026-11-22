@@ -4,6 +4,7 @@ import _ "embed"
 
 import (
 	"bytes"
+	"cmp"
 	"compress/gzip"
 	"fmt"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -58,9 +60,9 @@ func oldDarwinBoot(t *testing.T, ape string) string {
 }
 
 // The darwin boot runs the loader from a per-user cache, so that XNU names
-// the process after the program. A launch is a fixed amount of work and a busy
-// host only adds to it, so each boot is judged by its fastest launch over many
-// rounds, and the medians of those rounds are logged beside it.
+// the process after the program. A launch is a fixed amount of work, and a
+// busy host adds waiting to it and not work, so each boot is judged by the CPU
+// time its launch spends over many rounds, and its wall clock is logged beside it.
 func TestDarwinLaunchIsNoSlowerThanTheOldBoot(t *testing.T) {
 	if loader := residentLoader(t); loader != "" {
 		t.Fatalf("%s is on this host: the old boot would exec it and never unpack", loader)
@@ -80,29 +82,38 @@ func TestDarwinLaunchIsNoSlowerThanTheOldBoot(t *testing.T) {
 		require.NoError(t, err)
 		return found
 	}
-	launch := func(script string) time.Duration {
+	// A launch's wall clock carries whatever else the runner had going. The CPU
+	// time of its process tree is the work the boot did: the shell forks dd and
+	// gzip, and the last exec runs the loader in the process the shell left, so
+	// the kernel charges the whole launch to this one.
+	type launchCost struct{ wall, cpu time.Duration }
+	launch := func(script string) launchCost {
 		cmd := exec.Command("/bin/sh", script, "10", "5")
 		cmd.Env = env
 		start := time.Now()
 		out, err := cmd.CombinedOutput()
-		took := time.Since(start)
+		wall := time.Since(start)
 		require.NoError(t, err, "%s: %s", script, out)
 		require.Equal(t, "fizzbuzz", strings.TrimSpace(string(out)), "%s printed the wrong output", script)
-		return took
+		usage, ok := cmd.ProcessState.SysUsage().(*syscall.Rusage)
+		require.True(t, ok, "%s: the host reports no rusage for the launch", script)
+		cpu := time.Duration(usage.Utime.Nano() + usage.Stime.Nano())
+		require.NotZero(t, cpu, "%s: the host reports no CPU time for the launch", script)
+		return launchCost{wall: wall, cpu: cpu}
 	}
 
 	modes := []struct {
 		name string
-		run  func() time.Duration
+		run  func() launchCost
 	}{
-		{"old boot", func() time.Duration {
+		{"old boot", func() launchCost {
 			took := launch(old)
 			copies := matches(unpacked)
 			require.Len(t, copies, 1, "the old boot must unpack the loader")
 			require.NoError(t, os.Remove(copies[0]))
 			return took
 		}},
-		{"cache wiped", func() time.Duration {
+		{"cache wiped", func() launchCost {
 			for _, path := range matches(cache) {
 				require.NoError(t, os.RemoveAll(path))
 			}
@@ -110,7 +121,7 @@ func TestDarwinLaunchIsNoSlowerThanTheOldBoot(t *testing.T) {
 			require.Len(t, matches(entry), 1, "the first launch must put the loader in the cache")
 			return took
 		}},
-		{"cache warm", func() time.Duration {
+		{"cache warm", func() launchCost {
 			if len(matches(entry)) == 0 {
 				launch(ape)
 			}
@@ -120,46 +131,50 @@ func TestDarwinLaunchIsNoSlowerThanTheOldBoot(t *testing.T) {
 
 	// One runner's launches vary by more than the limit, so each mode needs many rounds.
 	const rounds = 150
-	times := make([][]time.Duration, len(modes))
+	costs := make([][]launchCost, len(modes))
 	for round := range rounds {
 		for step := range modes {
 			idx := (round + step) % len(modes)
-			times[idx] = append(times[idx], modes[idx].run())
+			costs[idx] = append(costs[idx], modes[idx].run())
 		}
 	}
-	// The host speed drifts over the rounds.
+	// Every mode launches once in each round, one after another, so a round's
+	// ratio holds the host of that moment, and the median of the rounds is what a
+	// launch of the mode costs against the old boot on this host. The host's speed
+	// drifts and its queue fills, and neither moves this ratio, which is why the
+	// verdict reads it and not one mode's launch against another mode's.
 	ratios := make([][]float64, len(modes))
 	for round := range rounds {
 		for idx := 1; idx < len(modes); idx++ {
-			ratios[idx] = append(ratios[idx], float64(times[idx][round])/float64(times[0][round]))
+			ratios[idx] = append(ratios[idx], float64(costs[idx][round].cpu)/float64(costs[0][round].cpu))
 		}
 	}
-	median := make([]time.Duration, len(modes))
-	fastest := make([]time.Duration, len(modes))
+	cpu := make([]time.Duration, len(modes))
+	wall := make([]time.Duration, len(modes))
+	fastestWall := make([]time.Duration, len(modes))
 	for idx := range modes {
-		sorted := slices.Clone(times[idx])
-		slices.Sort(sorted)
-		median[idx] = sorted[rounds/2]
-		fastest[idx] = sorted[0]
+		byCPU := slices.Clone(costs[idx])
+		slices.SortFunc(byCPU, func(a, b launchCost) int { return cmp.Compare(a.cpu, b.cpu) })
+		cpu[idx] = byCPU[rounds/2].cpu
+		byWall := slices.Clone(costs[idx])
+		slices.SortFunc(byWall, func(a, b launchCost) int { return cmp.Compare(a.wall, b.wall) })
+		fastestWall[idx] = byWall[0].wall
+		wall[idx] = byWall[rounds/2].wall
 	}
 
 	millis := func(took time.Duration) float64 { return float64(took.Microseconds()) / 1000 }
-	t.Logf("median per launch of %d rounds: old boot %.1f ms, cache wiped %.1f ms, cache warm %.1f ms",
-		rounds, millis(median[0]), millis(median[1]), millis(median[2]))
-	t.Logf("fastest launch of %d rounds: old boot %.1f ms, cache wiped %.1f ms, cache warm %.1f ms",
-		rounds, millis(fastest[0]), millis(fastest[1]), millis(fastest[2]))
+	t.Logf("median CPU per launch of %d rounds: old boot %.2f ms, cache wiped %.2f ms, cache warm %.2f ms",
+		rounds, millis(cpu[0]), millis(cpu[1]), millis(cpu[2]))
+	t.Logf("median wall clock per launch of %d rounds: old boot %.1f ms, cache wiped %.1f ms, cache warm %.1f ms",
+		rounds, millis(wall[0]), millis(wall[1]), millis(wall[2]))
+	t.Logf("fastest wall clock launch of %d rounds: old boot %.1f ms, cache wiped %.1f ms, cache warm %.1f ms",
+		rounds, millis(fastestWall[0]), millis(fastestWall[1]), millis(fastestWall[2]))
 	for idx := 1; idx < len(modes); idx++ {
 		slices.Sort(ratios[idx])
-		t.Logf("%s against the old boot of the same round, median of %d rounds: %+.1f%%",
-			modes[idx].name, rounds, 100*(ratios[idx][rounds/2]-1))
-		// A launch is a fixed amount of work, and a busy host only ever adds time to
-		// it: no neighbour on the runner makes one faster than its work. The fastest
-		// launch of a mode is therefore what that boot costs, while the median of a
-		// shared runner carries the neighbours, which is several times the limit here.
-		change := 100 * (float64(fastest[idx])/float64(fastest[0]) - 1)
+		change := 100 * (ratios[idx][rounds/2] - 1)
 		if change > 5 {
-			t.Errorf("a launch with the %s takes %.1f ms at its fastest, %+.1f%% against the old boot's fastest %.1f ms: the limit is +5%%",
-				modes[idx].name, millis(fastest[idx]), change, millis(fastest[0]))
+			t.Errorf("a launch with the %s spends %+.1f%% of the old boot's CPU time, median of %d rounds: the limit is +5%%",
+				modes[idx].name, change, rounds)
 		}
 	}
 }

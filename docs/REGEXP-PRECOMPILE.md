@@ -1,6 +1,6 @@
 # Precompiled regexp patterns
 
-A call to `regexp.MustCompile`, `regexp.MustCompilePOSIX`, `regexp.Compile` or `regexp.CompilePOSIX` with a pattern the compiler can resolve compiles at build time. The program parses nothing and compiles nothing for it at run time:
+A call with a pattern the compiler can resolve compiles at build time. The program parses nothing and compiles nothing for it at run time:
 
 ```go
 var word = regexp.MustCompile(`(?P<word>\w+)\b`) // built by the compiler
@@ -51,11 +51,9 @@ Equal patterns share their data. A hash of the syntax and the pattern names the 
 
 ## The compiler and the target must match
 
-The compiler builds the template with its own copy of `regexp`, `regexp/syntax` and `unicode`. It writes the data with the layout of the target's `regexp.Regexp`. The walk matches each field by name and kind. A layout that differs stops the build with an internal error. A change to `regexp`, `regexp/syntax` or `unicode` therefore needs a toolchain rebuild, which `make.bash` does.
+The compiler builds the template with its own copy. It writes the data with the layout of the target's `regexp.Regexp`. The walk matches each field by name and kind. A layout that differs stops the build with an internal error. A change therefore needs a toolchain rebuild, which `make.bash` does.
 
 The bootstrap compiler, toolchain1, links the bootstrap Go's `regexp` and its older Unicode tables. It does not precompile (`base.CompilerBootstrap`). Every later stage does.
-
-`Compile`, `CompilePOSIX`, `MustCompile` and `MustCompilePOSIX` carry `//go:noinline`, so the pass still finds each call after inlining.
 
 ## Where it lives
 
@@ -95,7 +93,7 @@ go build -gcflags=-d=regexpprecompile=2 ./cmd/app
 ./main.go:28:23: regexp precompile: regexp.Compile stays dynamic: the pattern is invalid, and Compile returns the error at run time
 ```
 
-Each stage is a function of its own. As a result, a CPU profile of the compiler names it: `regexpprecompile.(*pass).scan`, `(*pass).compilePatterns`, `(*pass).emitSites`, and `template` with the `(*emitter)` methods under it.
+Each stage is a function of its own. As a result, a CPU profile of the compiler names it.
 
 ```
 go tool compile -p=main -importcfg=importcfg -o=main.o -cpuprofile=cpu.prof main.go
@@ -153,7 +151,7 @@ Init is many times faster and allocates 98% less. The binary is larger. Each tem
 ## Tests
 
 - `TestRegexpPrecompileDifferential` in `cmd/compile/internal/test` reads the whole regexp test corpus. That is `re2-search.txt`, `re2-exhaustive.txt.bz2`, the Fowler `.dat` files, and the pattern tables of the `regexp` and `regexp/syntax` tests. It builds each one from a constant and from a variable, in both syntaxes. The two must be deeply equal and must give the same answer from every match method on every corpus input, with and without `Longest`.
-- `TestRegexpPrecompileNoRuntimeCompile` builds a program from the constant patterns of the corpus, without the exhaustive file. It checks that `regexp.compile`, `regexp/syntax.parse`, `regexp/syntax.Compile` and `regexp.compileOnePass` are not linked. A program with one variable pattern must link all four, which proves the check can fail.
+- `TestRegexpPrecompileNoRuntimeCompile` builds a program from the constant patterns of the corpus, without the exhaustive file. A program with one variable pattern must link all four, which proves the check can fail.
 - `TestConstantPatternIsPrecompiled` in `regexp` checks that two calls with one constant share one program, which a run-time compile never does.
 - `TestRegexpPrecompileWarning` in `cmd/compile/internal/test` builds a program outside GOROOT. The build must succeed and print the warning at the file and line of each dynamic call, and of no other.
 - `TestRegexpPrecompileInstrumentation` in `cmd/compile/internal/test` compiles a file with each kind of site. It checks the `-bench` phases and their counts, and the lines of `-d=regexpprecompile=1` and `=2`.

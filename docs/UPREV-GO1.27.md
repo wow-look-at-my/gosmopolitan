@@ -20,7 +20,7 @@ An empty result means the fork never edited that file since the tag. It has no s
 git show :3:<file> > <file>   # stage 3 is "theirs"
 ```
 
-29 of the files resolved this way, including all of `crypto/tls`, `internal/poll`, `os/root_openat.go` and the SIMD generator output. Do this pass first. What remains is small enough to read.
+29 of the files resolved this way, including all and the SIMD generator output. Do this pass first. What remains is small enough to read.
 
 ## Resolutions worth knowing about
 
@@ -30,7 +30,7 @@ git show :3:<file> > <file>   # stage 3 is "theirs"
 - **`funcNamePiecesForPrint` returns pieces now**, not three. The fork's `printFuncName` keeps its table-aliasing prefix argument and passes all five.
 - **`adjustframe` moved its dead-frame check** below the frame-pointer adjustment. The fork's non-allocating `funcnamePieces` debug print moves with it: `funcname` allocates in this fork, and allocating during a stack copy is not an option.
 - **`mkinlcall` takes both `loopDepth` and `profile`.** The fork threads the first for loop-aware inlining. Go1.27 added the second.
-- **wasm opcodes are a union.** The fork's threads-proposal atomics (0xFE) and upstream's SIMD (0xFD) both extend the same enum. `a.out.go`, `anames.go` and `writeOpcode`'s range chain must agree on the order. `anames.go` is generated: check the union with `go run ../stringer.go -i a.out.go -o <tmp> -p wasm` and diff.
+- **wasm opcodes are a union.** The fork's threads-proposal atomics (0xFE) and upstream's SIMD (0xFD) both extend the same enum. `anames.go` is generated: check the union with `go run ../stringer.go -i a.out.go -o <tmp> -p wasm` and diff.
 
 ## Internal APIs a minor bump moves under the fork
 
@@ -46,7 +46,7 @@ These break the build rather than a build tag, so `go build std` for cosmo is no
 go1.27's `cmd/link` rejects a reference from one std package's assembly to another package's symbol unless the DEFINING object carries a linkname push. Shapes bit the cosmo port:
 
 1. **A Go var shadowed by an assembly definition.** `runtime.__hostos` and `runtime.__syslib` had a Go `var` carrying `//go:linkname` AND a `DATA`/`GLOBL` pair in the. The assembly definition is what the linker resolves, so the push never reached it. Fix: delete the assembly definitions and let the Go declarations own the symbols. The rt0 stubs still write them.
-2. **Assembly-only helpers.** `cosmoLibcCallVariadic1`, `cosmo_xlat_errno_r0` and `cosmo_xlat_oflags_r2` exist only in `sys_cosmo_arm64.s`. The check's own comment names the remedy: it looks for a linkname on the symbol's ABI wrapper, which a Go declaration creates. The translation helpers take their arguments in registers and are not callable from Go. Their declarations say so, and exist only to carry the push.
+2. **Assembly-only helpers.** The check's own comment names the remedy: it looks for a linkname on the symbol's ABI wrapper, which a Go declaration creates. The translation helpers take their arguments in registers and are not callable from Go. Their declarations say so, and exist only to carry the push.
 
 `grep -rhoE 'runtime·[A-Za-z0-9_]+' --include='*.s' src/syscall src/internal/runtime/syscall` lists every symbol subject to this check.
 
