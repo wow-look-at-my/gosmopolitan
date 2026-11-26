@@ -1,0 +1,153 @@
+# A package of the main module compiles under the same key in every checkout.
+# Its compile names its source by module path, as -trimpath does. The link
+# puts the directory back, so a binary names the files of its own checkout.
+
+env GOCACHE=$WORK/gocache
+mkdir $GOCACHE
+
+go list -export -f '{{.ImportPath}} {{.BuildID}}' ./... other.example/part
+stdout '^m/leaf '
+stdout '^other.example/part '
+cp stdout $WORK/first.txt
+go build -o $WORK/first.exe ./cmd/where
+cd cmd/where
+exec $WORK/first.exe
+cd ../..
+
+# The second checkout holds the same files at another path.
+mkdir $WORK/elsewhere/cmd/where $WORK/elsewhere/leaf $WORK/elsewhere/bare $WORK/elsewhere/other/part
+cp go.mod $WORK/elsewhere/go.mod
+cp cmd/where/main.go $WORK/elsewhere/cmd/where/main.go
+cp leaf/leaf.go $WORK/elsewhere/leaf/leaf.go
+cp bare/bare.go $WORK/elsewhere/bare/bare.go
+cp other/go.mod $WORK/elsewhere/other/go.mod
+cp other/part/part.go $WORK/elsewhere/other/part/part.go
+cd $WORK/elsewhere
+go list -export -f '{{.ImportPath}} {{.BuildID}}' ./... other.example/part
+cmp stdout $WORK/first.txt
+
+# Its vet reads the result the first checkout stored, and runs no tool.
+go vet -x ./leaf
+! stderr 'vet\.cfg'
+
+# Its binary is linked again, and names this checkout.
+go build -o $WORK/second.exe ./cmd/where
+cd cmd/where
+exec $WORK/second.exe
+cd ../..
+
+# A compile with -trimpath is that same compile. This package imports
+# nothing, so no package of the standard library stands between the two keys.
+go list -export -f '{{.BuildID}}' ./bare
+cp stdout $WORK/bare.txt
+go list -export -trimpath -f '{{.BuildID}}' ./bare
+cmp stdout $WORK/bare.txt
+
+# With -trimpath the link leaves the module path in the binary.
+go build -trimpath -o $WORK/trimmed.exe ./cmd/where
+cd cmd/where
+exec $WORK/trimmed.exe -trimmed
+
+-- go.mod --
+module m
+
+go 1.20
+
+require other.example v0.0.0
+
+replace other.example => ./other
+-- cmd/where/main.go --
+package main
+
+import (
+	"flag"
+	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
+
+	"m/leaf"
+	"other.example/part"
+)
+
+var trimmed = flag.Bool("trimmed", false, "expect module paths in place of directories")
+
+func main() {
+	flag.Parse()
+	_, file, _, _ := runtime.Caller(0)
+	if *trimmed {
+		expect(file, "m/cmd/where/main.go")
+		expect(leaf.File(), "m/leaf/leaf.go")
+		expect(part.File(), "other.example@v0.0.0/part/part.go")
+		return
+	}
+	// The test runs this program in the directory of its package.
+	here, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	root := filepath.Join(here, "..", "..")
+	sameFile(file, filepath.Join(here, "main.go"))
+	sameFile(leaf.File(), filepath.Join(root, "leaf", "leaf.go"))
+	sameFile(part.File(), filepath.Join(root, "other", "part", "part.go"))
+}
+
+func expect(got, want string) {
+	if got != want {
+		fmt.Fprintf(os.Stderr, "the binary names %s, want %s\n", got, want)
+		os.Exit(1)
+	}
+}
+
+func sameFile(got, want string) {
+	gotInfo, err := os.Stat(got)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "the binary names %s, want %s: %v\n", got, want, err)
+		os.Exit(1)
+	}
+	wantInfo, err := os.Stat(want)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if !os.SameFile(gotInfo, wantInfo) {
+		fmt.Fprintf(os.Stderr, "the binary names %s, want %s\n", got, want)
+		os.Exit(1)
+	}
+}
+-- leaf/leaf.go --
+package leaf
+
+import (
+	"runtime"
+
+	"m/bare"
+)
+
+// File names the file this package was compiled from, as the binary records it.
+func File() string {
+	_, name, _, _ := runtime.Caller(bare.Zero())
+	return name
+}
+-- bare/bare.go --
+package bare
+
+// Zero answers zero.
+func Zero() int {
+	return 0
+}
+-- other/go.mod --
+module other.example
+
+go 1.20
+-- other/part/part.go --
+package part
+
+import "runtime"
+
+// File names the file this package was compiled from, as the binary records it.
+func File() string {
+	_, name, _, _ := runtime.Caller(0)
+	return name
+}

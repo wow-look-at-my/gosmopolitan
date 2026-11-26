@@ -17,8 +17,8 @@ go list -export -deps -f '{{if .Module}}{{if .Module.Version}}{{.ImportPath}} {{
 cp stdout second.txt
 cmp first.txt second.txt
 
-# The main module still keys on its directory: its compile names the
-# absolute path, so a stack trace leads to the file on this machine.
+# The main module shares one key between checkouts too. The link restores its
+# directory. See build_cache_moduledir_path.txt.
 go list -export -f '{{.BuildID}}' m
 cp stdout main-first.txt
 mkdir $WORK/elsewhere
@@ -29,7 +29,7 @@ cd $WORK/elsewhere
 go list -export -f '{{.BuildID}}' m
 cp stdout $WORK/gopath/src/main-second.txt
 cd $WORK/gopath/src
-! cmp main-first.txt main-second.txt
+cmp main-first.txt main-second.txt
 
 -- go.mod --
 module m

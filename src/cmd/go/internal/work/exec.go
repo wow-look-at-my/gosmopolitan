@@ -1625,10 +1625,10 @@ func (b *Builder) vet(ctx context.Context, a *Action) error {
 	// A checkout at another path asks for the same id. The facts are the same
 	// there. A fix names files of this checkout, and so can the stdout stream.
 	var (
-		id             = cache.ActionID(h.Sum())                           // for .vetx file
-		stdoutKey      = cache.Subkey(id, "stdout")                        // for a .stdout file that names no local directory
-		localStdoutKey = cache.Subkey(id, "stdout in "+a.Package.Dir)      // for one that does
-		fixArchiveKey  = cache.Subkey(id, "fix.zip in "+a.Package.Dir)     // for .fix.zip file
+		id             = cache.ActionID(h.Sum())                       // for .vetx file
+		stdoutKey      = cache.Subkey(id, "stdout")                    // for a .stdout file that names no local directory
+		localStdoutKey = cache.Subkey(id, "stdout in "+a.Package.Dir)  // for one that does
+		fixArchiveKey  = cache.Subkey(id, "fix.zip in "+a.Package.Dir) // for .fix.zip file
 	)
 
 	// Check the cache. The block is bare rather than dedented because
