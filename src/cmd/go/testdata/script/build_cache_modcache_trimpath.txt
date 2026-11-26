@@ -17,13 +17,13 @@ cmp plain.txt trimmed.txt
 go build -x -trimpath rsc.io/breaker
 ! stderr '(compile|gccgo)( |\.exe)'
 
-# The main module names its absolute directory without -trimpath, so the flag
-# changes its compile and stays in its key.
+# The main module names its source by module path without -trimpath too, and
+# takes the key the flag gives it. See build_cache_moduledir_path.txt.
 go list -export -f '{{.BuildID}}' m
 cp stdout main-plain.txt
 go list -trimpath -export -f '{{.BuildID}}' m
 cp stdout main-trimmed.txt
-! cmp main-plain.txt main-trimmed.txt
+cmp main-plain.txt main-trimmed.txt
 
 -- go.mod --
 module m

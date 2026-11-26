@@ -9,6 +9,8 @@ go list -export -f '{{.ImportPath}} {{.BuildID}}' ./... other.example/part
 stdout '^m/leaf '
 stdout '^other.example/part '
 cp stdout $WORK/first.txt
+go vet -x ./leaf
+stderr 'vet\.cfg'
 go build -o $WORK/first.exe ./cmd/where
 cd cmd/where
 exec $WORK/first.exe

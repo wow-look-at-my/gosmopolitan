@@ -32,7 +32,9 @@ func trimsModuleDirPath(pkg *load.Package) bool {
 // outside the module cache: the main module, or a module that a replace
 // directive points at a directory. A package with cgo or SWIG keeps its
 // directory, because the C compiler and the cgo tool write that path too.
-// Only the gc linker reads a sourcedir line, so gccgo keeps the directory.
+// Only the gc linker reads a sourcedir line, so gccgo keeps the directory. A
+// package whose compiler flags carry their own -trimpath keeps it too: those
+// flags name its source, and the caller reads the names they asked for.
 func compilesFromModuleDir(pkg *load.Package) bool {
 	if pkg == nil || pkg.Goroot || compilesFromModuleCache(pkg) || cfg.BuildToolchainName != "gc" {
 		return false
@@ -40,8 +42,24 @@ func compilesFromModuleDir(pkg *load.Package) bool {
 	if len(pkg.CgoFiles)+len(pkg.SwigFiles)+len(pkg.SwigCXXFiles) > 0 {
 		return false
 	}
+	if setsTrimpath(forcedGcflags) || setsTrimpath(pkg.Internal.Gcflags) {
+		return false
+	}
 	_, _, ok := moduleSourceRoot(pkg)
 	return ok
+}
+
+// setsTrimpath reports whether flags hand the compiler a -trimpath of their
+// own.
+func setsTrimpath(flags []string) bool {
+	for _, flag := range flags {
+		// The flag package reads one dash or two, and a value after '='.
+		name, _, _ := strings.Cut(flag, "=")
+		if name == "-trimpath" || name == "--trimpath" {
+			return true
+		}
+	}
+	return false
 }
 
 // moduleSourceRoot answers the name a trimmed compile gives the root of the
@@ -105,13 +123,13 @@ func sourceDirLines(deps []*Action) string {
 	return strings.Join(lines, "")
 }
 
-// SourceDirsID answers a hash of the module directories the link of
-// linkAction writes into its binary. A binary from another checkout names
-// other files, so a result one of them produced is not the result of the
-// other.
-func SourceDirsID(linkAction *Action) string {
+// SourceDirsID answers a hash of the module directories a link writes into
+// its binary for the packages that compiles built. A binary from another
+// checkout names other files for them, so a result one of them produced is
+// not the result of the other.
+func SourceDirsID(compiles []*Action) string {
 	hash := cache.NewHash("sourceDirs")
-	io.WriteString(hash, sourceDirLines(linkAction.Deps))
+	io.WriteString(hash, sourceDirLines(compiles))
 	return fmt.Sprintf("%x", hash.Sum())
 }
 
@@ -137,34 +155,36 @@ func namesLocalDir(text []byte, pkg *load.Package) bool {
 	return false
 }
 
-// trimSourceDir rewrites each file position in a tool's output that names the
-// directory of pkg to name the trimmed directory. The compiler names a file
-// as the go command passed it until it has written its export data. The
-// cache must not keep that name for a checkout at another path.
+// trimSourceDir rewrites each file position in a tool's output that names a
+// file in the module directory of pkg to name it by module path. The compiler
+// names a file as the go command passed it until it has written its export
+// data. The cache must not keep that name for a checkout at another path.
 func trimSourceDir(out string, pkg *load.Package) string {
 	if pkg == nil || !trimsModuleDirPath(pkg) {
 		return out
 	}
-	dir := filepath.Clean(pkg.Dir) + string(filepath.Separator)
-	return rewritePositionDir(out, dir, trimmedSourceDir(pkg)+"/")
+	name, dir, _ := moduleSourceRoot(pkg)
+	return rewritePositionRoot(out, dir+string(filepath.Separator), name+"/", filepath.Separator, '/')
 }
 
 // restoreSourceDir rewrites each file position in a tool's output that names
-// the trimmed directory of pkg to name the directory on disk. It undoes
-// trimSourceDir, and it restores a position the compiler wrote trimmed.
+// a file by the module path of pkg to name the file on disk. It undoes
+// trimSourceDir, and it restores a position the compiler wrote trimmed. A
+// position can be in another package of the module: the compiler reports an
+// inlined call where its body is.
 func restoreSourceDir(out string, pkg *load.Package) string {
 	if pkg == nil || !trimsModuleDirPath(pkg) {
 		return out
 	}
-	dir := filepath.Clean(pkg.Dir) + string(filepath.Separator)
-	return rewritePositionDir(out, trimmedSourceDir(pkg)+"/", dir)
+	name, dir, _ := moduleSourceRoot(pkg)
+	return rewritePositionRoot(out, name+"/", dir+string(filepath.Separator), '/', filepath.Separator)
 }
 
-// rewritePositionDir replaces the directory before in each file position of
-// out with after. Both end in a separator. Text that names the directory and
-// is no position stays as it is: an import path below a package reads the
-// same as its trimmed directory.
-func rewritePositionDir(out, before, after string) string {
+// rewritePositionRoot replaces the root before with after in each file
+// position of out, and the separator of the path below it. Both roots end in
+// their separator. Text that names the root and is no position stays as it
+// is: an import path reads the same as a trimmed directory.
+func rewritePositionRoot(out, before, after string, beforeSeparator, afterSeparator rune) string {
 	if !strings.Contains(out, before) {
 		return out
 	}
@@ -178,38 +198,51 @@ func rewritePositionDir(out, before, after string) string {
 		at += from
 		end := at + len(before)
 		rewritten.WriteString(out[from:at])
-		if startsWord(out, at) && namesFileLine(out[end:]) {
-			rewritten.WriteString(after)
-		} else {
-			rewritten.WriteString(before)
-		}
 		from = end
+		length := positionPathLength(out[end:])
+		if length == 0 || !startsWord(out, at) {
+			rewritten.WriteString(before)
+			continue
+		}
+		rewritten.WriteString(after)
+		for _, char := range out[end : end+length] {
+			if char == beforeSeparator {
+				char = afterSeparator
+			}
+			rewritten.WriteRune(char)
+		}
+		from = end + length
 	}
 	rewritten.WriteString(out[from:])
 	return rewritten.String()
 }
 
 // startsWord reports whether offset at in text begins a line or follows a
-// space or a tab.
+// space, a tab or an opening parenthesis.
 func startsWord(text string, at int) bool {
 	if at == 0 {
 		return true
 	}
 	before := text[at-1]
-	return before == '\n' || before == ' ' || before == '\t'
+	return before == '\n' || before == ' ' || before == '\t' || before == '('
 }
 
-// namesFileLine reports whether text begins with one file name, a colon and
-// a line number: the rest of a position whose directory came before it. An
-// import path that happens to continue the directory has no line number.
-func namesFileLine(text string) bool {
+// positionPathLength answers the length of the file path that text begins
+// with, when a colon and a line number follow it: the rest of a position
+// whose root came before it. It answers zero for anything else. An import
+// path has no line number. A path with an '@' is a module of the module
+// cache that sits under the path of this one.
+func positionPathLength(text string) int {
 	for at := 0; at < len(text); at++ {
 		switch text[at] {
-		case '/', '\\', ' ', '\t', '\n':
-			return false
+		case ' ', '\t', '\n', '@':
+			return 0
 		case ':':
-			return at > 0 && at+1 < len(text) && '0' <= text[at+1] && text[at+1] <= '9'
+			if at > 0 && at+1 < len(text) && '0' <= text[at+1] && text[at+1] <= '9' {
+				return at
+			}
+			return 0
 		}
 	}
-	return false
+	return 0
 }

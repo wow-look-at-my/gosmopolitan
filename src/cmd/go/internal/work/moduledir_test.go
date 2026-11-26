@@ -59,6 +59,11 @@ func TestCompilesFromModuleDirKeepsCgo(t *testing.T) {
 	if compilesFromModuleDir(pkg) {
 		t.Errorf("a cgo package compiles from its module directory: the C compiler writes that path")
 	}
+	pkg.CgoFiles = nil
+	pkg.Internal.Gcflags = []string{"-trimpath", root + "=>elsewhere"}
+	if compilesFromModuleDir(pkg) {
+		t.Errorf("a package whose compiler flags set -trimpath compiles from its module directory: those flags name its source")
+	}
 }
 
 func TestRestoreSourceDir(t *testing.T) {
@@ -76,8 +81,9 @@ func TestRestoreSourceDir(t *testing.T) {
 		{"a position after a tab", "note:\n\texample.com/m/internal/alpha/alpha.go:3: here\n", "note:\n\t" + onDisk + "alpha.go:3: here\n"},
 		{"two positions", "example.com/m/internal/alpha/a.go:1: x example.com/m/internal/alpha/b.go:2: y\n", onDisk + "a.go:1: x " + onDisk + "b.go:2: y\n"},
 		{"an import path below the package", "could not import example.com/m/internal/alpha/sub (no file)\n", "could not import example.com/m/internal/alpha/sub (no file)\n"},
-		{"a file of a package below", "example.com/m/internal/alpha/sub/sub.go:1: x\n", "example.com/m/internal/alpha/sub/sub.go:1: x\n"},
-		{"a quoted import path", "\"example.com/m/internal/alpha/alpha.go:1\" in a string\n", "\"example.com/m/internal/alpha/alpha.go:1\" in a string\n"},
+		{"a file of another package of the module", "example.com/m/beta/beta.go:12:6: moved (inlined into example.com/m/internal/alpha/alpha.go:18)\n", filepath.Join(root, "beta", "beta.go") + ":12:6: moved (inlined into " + onDisk + "alpha.go:18)\n"},
+		{"a module cache module under the path of this one", "example.com/m/v2@v2.0.0/m.go:1: x\n", "example.com/m/v2@v2.0.0/m.go:1: x\n"},
+		{"a quoted position", "\"example.com/m/internal/alpha/alpha.go:1\" in a string\n", "\"example.com/m/internal/alpha/alpha.go:1\" in a string\n"},
 		{"no mention", "plain text\n", "plain text\n"},
 	}
 	for _, test := range tests {
