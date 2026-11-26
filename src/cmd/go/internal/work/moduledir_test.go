@@ -70,7 +70,9 @@ func TestRestoreSourceDir(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "checkout")
 	dir := filepath.Join(root, "internal", "alpha")
 	pkg := modulePackage(&modinfo.ModulePublic{Path: "example.com/m", Dir: root}, "example.com/m/internal/alpha", dir)
-	onDisk := dir + string(filepath.Separator)
+	// A restored position has forward slashes on every host, as the compiler
+	// writes it.
+	onDisk := filepath.ToSlash(dir) + "/"
 
 	tests := []struct {
 		about string
@@ -81,7 +83,7 @@ func TestRestoreSourceDir(t *testing.T) {
 		{"a position after a tab", "note:\n\texample.com/m/internal/alpha/alpha.go:3: here\n", "note:\n\t" + onDisk + "alpha.go:3: here\n"},
 		{"two positions", "example.com/m/internal/alpha/a.go:1: x example.com/m/internal/alpha/b.go:2: y\n", onDisk + "a.go:1: x " + onDisk + "b.go:2: y\n"},
 		{"an import path below the package", "could not import example.com/m/internal/alpha/sub (no file)\n", "could not import example.com/m/internal/alpha/sub (no file)\n"},
-		{"a file of another package of the module", "example.com/m/beta/beta.go:12:6: moved (inlined into example.com/m/internal/alpha/alpha.go:18)\n", filepath.Join(root, "beta", "beta.go") + ":12:6: moved (inlined into " + onDisk + "alpha.go:18)\n"},
+		{"a file of another package of the module", "example.com/m/beta/beta.go:12:6: moved (inlined into example.com/m/internal/alpha/alpha.go:18)\n", filepath.ToSlash(root) + "/beta/beta.go:12:6: moved (inlined into " + onDisk + "alpha.go:18)\n"},
 		{"a module cache module under the path of this one", "example.com/m/v2@v2.0.0/m.go:1: x\n", "example.com/m/v2@v2.0.0/m.go:1: x\n"},
 		{"a quoted position", "\"example.com/m/internal/alpha/alpha.go:1\" in a string\n", "\"example.com/m/internal/alpha/alpha.go:1\" in a string\n"},
 		{"no mention", "plain text\n", "plain text\n"},
@@ -92,19 +94,24 @@ func TestRestoreSourceDir(t *testing.T) {
 		}
 	}
 
-	// The cache keeps the trimmed text, and a print restores it.
-	live := onDisk + "alpha.go:8:27: warning\n"
-	kept := trimSourceDir(live, pkg)
-	if want := "example.com/m/internal/alpha/alpha.go:8:27: warning\n"; kept != want {
-		t.Errorf("trimSourceDir(%q) = %q, want %q", live, kept, want)
+	// The cache keeps the trimmed text, and a print restores it. The compiler
+	// writes the host's separator for a name the go command passed it.
+	const kept = "example.com/m/internal/alpha/alpha.go:8:27: warning\n"
+	for _, live := range []string{
+		dir + string(filepath.Separator) + "alpha.go:8:27: warning\n",
+		onDisk + "alpha.go:8:27: warning\n",
+	} {
+		if got := trimSourceDir(live, pkg); got != kept {
+			t.Errorf("trimSourceDir(%q) = %q, want %q", live, got, kept)
+		}
 	}
-	if got := restoreSourceDir(kept, pkg); got != live {
-		t.Errorf("restoreSourceDir(trimSourceDir(%q)) = %q", live, got)
+	if got, want := restoreSourceDir(kept, pkg), onDisk+"alpha.go:8:27: warning\n"; got != want {
+		t.Errorf("restoreSourceDir(%q) = %q, want %q", kept, got, want)
 	}
 
 	// Text that names the directory and is no position stays as written, so
 	// the restore has nothing it could get wrong.
-	note := "wrote " + onDisk + "\n"
+	note := "wrote " + dir + string(filepath.Separator) + "\n"
 	if got := trimSourceDir(note, pkg); got != note {
 		t.Errorf("trimSourceDir(%q) = %q, want it unchanged", note, got)
 	}

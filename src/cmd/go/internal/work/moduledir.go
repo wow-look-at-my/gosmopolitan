@@ -164,7 +164,11 @@ func trimSourceDir(out string, pkg *load.Package) string {
 		return out
 	}
 	name, dir, _ := moduleSourceRoot(pkg)
-	return rewritePositionRoot(out, dir+string(filepath.Separator), name+"/", filepath.Separator, '/')
+	out = rewritePositionRoot(out, dir+string(filepath.Separator), name+"/", filepath.Separator, '/')
+	if slashed := filepath.ToSlash(dir); slashed != dir {
+		out = rewritePositionRoot(out, slashed+"/", name+"/", '/', '/')
+	}
+	return out
 }
 
 // restoreSourceDir rewrites each file position in a tool's output that names
@@ -172,12 +176,16 @@ func trimSourceDir(out string, pkg *load.Package) string {
 // trimSourceDir, and it restores a position the compiler wrote trimmed. A
 // position can be in another package of the module: the compiler reports an
 // inlined call where its body is.
+//
+// The restored name has forward slashes on every host. That is the name the
+// compiler wrote for such a position before its source was trimmed, and
+// formatToolOutput shortens it the same way.
 func restoreSourceDir(out string, pkg *load.Package) string {
 	if pkg == nil || !trimsModuleDirPath(pkg) {
 		return out
 	}
 	name, dir, _ := moduleSourceRoot(pkg)
-	return rewritePositionRoot(out, name+"/", dir+string(filepath.Separator), '/', filepath.Separator)
+	return rewritePositionRoot(out, name+"/", filepath.ToSlash(dir)+"/", '/', '/')
 }
 
 // rewritePositionRoot replaces the root before with after in each file
