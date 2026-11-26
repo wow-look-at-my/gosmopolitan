@@ -32,8 +32,9 @@ func trimsModuleDirPath(pkg *load.Package) bool {
 // outside the module cache: the main module, or a module that a replace
 // directive points at a directory. A package with cgo or SWIG keeps its
 // directory, because the C compiler and the cgo tool write that path too.
+// Only the gc linker reads a sourcedir line, so gccgo keeps the directory.
 func compilesFromModuleDir(pkg *load.Package) bool {
-	if pkg == nil || pkg.Goroot || compilesFromModuleCache(pkg) {
+	if pkg == nil || pkg.Goroot || compilesFromModuleCache(pkg) || cfg.BuildToolchainName != "gc" {
 		return false
 	}
 	if len(pkg.CgoFiles)+len(pkg.SwigFiles)+len(pkg.SwigCXXFiles) > 0 {
