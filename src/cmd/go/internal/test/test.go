@@ -2186,7 +2186,14 @@ func testIdentity(builder *work.Builder, runAct *work.Action, linkAction *work.A
 		base.Fatalf("go: internal error: no generated main was recorded for %s", tested)
 	}
 	slices.Sort(codes)
-	return strings.Join(codes, " ") + " main " + digest + " " + builder.LinkConfigID(linkAction.Package)
+	return strings.Join(codes, " ") + " main " + digest + " " + builder.LinkConfigID(linkAction.Package) + checkoutWord(linkAction)
+}
+
+// checkoutWord names the module directories the test binary is linked to
+// report. The compiles are the same in every checkout, and the binary is not:
+// it names the files of this one, and a test can open what it names.
+func checkoutWord(linkAction *work.Action) string {
+	return " checkout=" + work.SourceDirsID(linkAction)
 }
 
 // testReachIdentity keys a test result on the code the package's tests reach,
@@ -2202,7 +2209,7 @@ func testReachIdentity(builder *work.Builder, runAct *work.Action, linkAction *w
 	if reach == "" || digest == "" {
 		return ""
 	}
-	return "reach " + reach + " main " + digest + " " + builder.LinkConfigID(linkAction.Package)
+	return "reach " + reach + " main " + digest + " " + builder.LinkConfigID(linkAction.Package) + checkoutWord(linkAction)
 }
 
 var reachCache struct {
