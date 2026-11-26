@@ -137,49 +137,56 @@ func namesLocalDir(text []byte, pkg *load.Package) bool {
 	return false
 }
 
-// trimSourceDir rewrites each mention of the directory of pkg in a tool's
-// output to the trimmed directory. The compiler names a file as the go
-// command passed it until it has written its export data. The cache must not
-// keep that name for a checkout at another path.
+// trimSourceDir rewrites each file position in a tool's output that names the
+// directory of pkg to name the trimmed directory. The compiler names a file
+// as the go command passed it until it has written its export data. The
+// cache must not keep that name for a checkout at another path.
 func trimSourceDir(out string, pkg *load.Package) string {
 	if pkg == nil || !trimsModuleDirPath(pkg) {
 		return out
 	}
 	dir := filepath.Clean(pkg.Dir) + string(filepath.Separator)
-	return replacePrefix(out, dir, trimmedSourceDir(pkg)+"/")
+	return rewritePositionDir(out, dir, trimmedSourceDir(pkg)+"/")
 }
 
 // restoreSourceDir rewrites each file position in a tool's output that names
-// the trimmed directory of pkg to name the directory on disk. The cache keeps
-// the output as the tool wrote it, which is the same text in every checkout.
+// the trimmed directory of pkg to name the directory on disk. It undoes
+// trimSourceDir, and it restores a position the compiler wrote trimmed.
 func restoreSourceDir(out string, pkg *load.Package) string {
 	if pkg == nil || !trimsModuleDirPath(pkg) {
 		return out
 	}
-	trimmed := trimmedSourceDir(pkg) + "/"
-	if !strings.Contains(out, trimmed) {
+	dir := filepath.Clean(pkg.Dir) + string(filepath.Separator)
+	return rewritePositionDir(out, trimmedSourceDir(pkg)+"/", dir)
+}
+
+// rewritePositionDir replaces the directory before in each file position of
+// out with after. Both end in a separator. Text that names the directory and
+// is no position stays as it is: an import path below a package reads the
+// same as its trimmed directory.
+func rewritePositionDir(out, before, after string) string {
+	if !strings.Contains(out, before) {
 		return out
 	}
-	dir := filepath.Clean(pkg.Dir) + string(filepath.Separator)
-	var restored strings.Builder
+	var rewritten strings.Builder
 	from := 0
 	for {
-		at := strings.Index(out[from:], trimmed)
+		at := strings.Index(out[from:], before)
 		if at < 0 {
 			break
 		}
 		at += from
-		end := at + len(trimmed)
-		restored.WriteString(out[from:at])
+		end := at + len(before)
+		rewritten.WriteString(out[from:at])
 		if startsWord(out, at) && namesFileLine(out[end:]) {
-			restored.WriteString(dir)
+			rewritten.WriteString(after)
 		} else {
-			restored.WriteString(trimmed)
+			rewritten.WriteString(before)
 		}
 		from = end
 	}
-	restored.WriteString(out[from:])
-	return restored.String()
+	rewritten.WriteString(out[from:])
+	return rewritten.String()
 }
 
 // startsWord reports whether offset at in text begins a line or follows a

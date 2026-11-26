@@ -95,6 +95,13 @@ func TestRestoreSourceDir(t *testing.T) {
 	if got := restoreSourceDir(kept, pkg); got != live {
 		t.Errorf("restoreSourceDir(trimSourceDir(%q)) = %q", live, got)
 	}
+
+	// Text that names the directory and is no position stays as written, so
+	// the restore has nothing it could get wrong.
+	note := "wrote " + onDisk + "\n"
+	if got := trimSourceDir(note, pkg); got != note {
+		t.Errorf("trimSourceDir(%q) = %q, want it unchanged", note, got)
+	}
 }
 
 func TestNamesLocalDir(t *testing.T) {
