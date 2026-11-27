@@ -1,0 +1,106 @@
+# GOORGPIN fixes an org module's version for a whole CI run. Only CI may set
+# it. The unit tests in orgpin_test.go cover the pinned path, because this
+# test cannot prove it is outside a coding agent.
+
+[short] skip 'constructs local git repositories'
+[!git] skip
+
+env GIT_CONFIG_GLOBAL=$WORK${/}home${/}gopher${/}.gitconfig
+env HOME=$WORK${/}home${/}gopher
+env GIT_ALLOW_PROTOCOL=file
+env GOPRIVATE=github.com/wow-look-at-my
+[!GOOS:windows] exec git config --global 'url.file://'$WORK'/alpha.insteadOf' 'https://github.com/wow-look-at-my/alpha'
+[GOOS:windows]  exec git config --global 'url.file:///'$WORK'/alpha.insteadOf' 'https://github.com/wow-look-at-my/alpha'
+
+env GIT_AUTHOR_NAME='Go Gopher'
+env GIT_AUTHOR_EMAIL='gopher@golang.org'
+env GIT_COMMITTER_NAME=$GIT_AUTHOR_NAME
+env GIT_COMMITTER_EMAIL=$GIT_AUTHOR_EMAIL
+
+# This first commit matches the one in org_branch_head.txt, so its
+# pseudo-version is known.
+cd $WORK/alpha
+exec git init
+env GIT_AUTHOR_DATE=2026-01-02T03:04:05Z
+env GIT_COMMITTER_DATE=2026-01-02T03:04:05Z
+exec git add -A
+exec git commit -m 'alpha main'
+exec git branch -m main
+
+cd $WORK/m
+go list -m github.com/wow-look-at-my/alpha
+stdout '^github.com/wow-look-at-my/alpha v0\.0\.0-20260102030405-0f69f837cebe$'
+
+# The branch moves on after the run resolved it.
+cd $WORK/alpha
+cp $WORK${/}alpha-next${/}alpha.go alpha.go
+env GIT_AUTHOR_DATE=2026-01-03T04:05:06Z
+env GIT_COMMITTER_DATE=2026-01-03T04:05:06Z
+exec git commit -am 'alpha next'
+
+# Without a pin, the next command sees the new head.
+cd $WORK/m
+go run .
+stdout '^alpha-next$'
+
+# Only CI may pin. Outside CI a pin is an error, never a quiet no-op, so it
+# cannot hold alpha at an old commit.
+env GOORGPIN='github.com/wow-look-at-my/alpha=v0.0.0-20260102030405-0f69f837cebe'
+! go list -m github.com/wow-look-at-my/alpha
+stderr 'GOORGPIN: honored only in CI'
+! go run .
+stderr 'GOORGPIN: honored only in CI'
+
+# A coding agent inside CI may not pin either.
+env GITHUB_ACTIONS=true
+env CLAUDECODE=1
+! go list -m github.com/wow-look-at-my/alpha
+stderr 'GOORGPIN: refused under a coding agent'
+
+# With no pin set, the command resolves the branch head as before.
+env GOORGPIN=
+env GITHUB_ACTIONS=
+env CLAUDECODE=
+go run .
+stdout '^alpha-next$'
+
+-- $WORK/home/gopher/.gitconfig --
+[user]
+	name = Go Gopher
+	email = gopher@golang.org
+-- $WORK/alpha/go.mod --
+module github.com/wow-look-at-my/alpha
+
+go 1.21
+-- $WORK/alpha/alpha.go --
+package alpha
+
+func Name() string { return "alpha-main" }
+-- $WORK/alpha/sub/go.mod --
+module github.com/wow-look-at-my/alpha/sub
+
+go 1.21
+-- $WORK/alpha/sub/sub.go --
+package sub
+
+func Name() string { return "sub-main" }
+-- $WORK/alpha-next/alpha.go --
+package alpha
+
+func Name() string { return "alpha-next" }
+-- $WORK/m/go.mod --
+module example.com/consumer
+
+go 1.21
+
+require github.com/wow-look-at-my/alpha v0.0.0
+-- $WORK/m/main.go --
+package main
+
+import (
+	"fmt"
+
+	"github.com/wow-look-at-my/alpha"
+)
+
+func main() { fmt.Println(alpha.Name()) }

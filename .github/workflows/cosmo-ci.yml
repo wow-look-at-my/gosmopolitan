@@ -67,9 +67,14 @@ jobs:
       # Every org submodule lands on its branch head at the commit this run locked. Without the ones under src/cmd/vendor, cmd/go cannot build.
       - uses: wow-look-at-my/actions@parallel-checkout#latest
         with:
-          lfs: true
+          # The action's LFS step starts before its worktree write ends, so it fails when that write is slow. The step below pulls the same objects.
+          lfs: false
           submodule-branch: ${{ github.ref_name }}
           submodule-branch-lock: https://pazer.build
+      # git lfs cannot see the commit while parallel-checkout still writes the worktree, and exits 2 with "Invalid ref argument" (job 140275514909). Pull once the worktree exists.
+      - name: Fetch the LFS files the build reads
+        shell: bash
+        run: git lfs pull
       - uses: wow-look-at-my/actions@disable-windows-defender#latest
       - uses: wow-look-at-my/actions@secret-server#latest
 
@@ -237,9 +242,14 @@ jobs:
       # run.bash rebuilds the cmd packages from this tree, so the suite tests the client source the build leg linked in.
       - uses: wow-look-at-my/actions@parallel-checkout#latest
         with:
-          lfs: true
+          # The action's LFS step starts before its worktree write ends, so it fails when that write is slow. The step below pulls the same objects.
+          lfs: false
           submodule-branch: ${{ github.ref_name }}
           submodule-branch-lock: https://pazer.build
+      # git lfs cannot see the commit while parallel-checkout still writes the worktree, and exits 2 with "Invalid ref argument" (job 140281387405). Pull once the worktree exists.
+      - name: Fetch the LFS files the suite reads
+        shell: bash
+        run: git lfs pull
       - uses: wow-look-at-my/actions@disable-windows-defender#latest
       - uses: wow-look-at-my/actions@secret-server#latest
       # run.bash reaches the same sandboxed generate directives the build leg does.
@@ -612,7 +622,13 @@ jobs:
       - name: Checkout code (for Go tests)
         uses: wow-look-at-my/actions@parallel-checkout#latest
         with:
-          lfs: true
+          # The action's LFS step starts before its worktree write ends, so it fails when that write is slow. The step below pulls the same objects.
+          lfs: false
+
+      # git lfs cannot see the commit while parallel-checkout still writes the worktree, and exits 2 with "Invalid ref argument" (job 140281387405). Pull once the worktree exists.
+      - name: Fetch the LFS files the tests read
+        shell: bash
+        run: git lfs pull
 
       - uses: wow-look-at-my/actions@disable-windows-defender#latest
 

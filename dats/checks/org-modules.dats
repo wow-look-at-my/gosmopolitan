@@ -15,5 +15,6 @@ tests:
 			- "--- PASS: TestScript/org_declared_sync"
 			- "--- PASS: TestScript/org_heads_passed"
 			- "--- PASS: TestScript/org_local_run"
+			- "--- PASS: TestScript/org_pin"
 	  timeout: 20m
 	  exit: 0
