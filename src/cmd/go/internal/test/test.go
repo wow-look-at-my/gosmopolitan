@@ -2156,15 +2156,35 @@ func testIdentity(builder *work.Builder, runAct *work.Action, linkAction *work.A
 		base.Fatalf("go: internal error: link action for %s does not lead with its own compile", linkAction.Package.ImportPath)
 	}
 	tested := runAct.Package.ImportPath
-	seen := map[*work.Action]bool{}
+	compiles := testedCompiles(runAct, linkAction)
 	var codes []string
+	for _, compile := range compiles {
+		codes = append(codes, compile.Package.ImportPath+"="+compile.BuildContentID())
+	}
+	if len(codes) == 0 {
+		base.Fatalf("go: internal error: test main for %s imports no test variant of it", tested)
+	}
+	if digest == "" {
+		base.Fatalf("go: internal error: no generated main was recorded for %s", tested)
+	}
+	slices.Sort(codes)
+	return strings.Join(codes, " ") + " main " + digest + " " + builder.LinkConfigID(linkAction.Package) + checkoutWord(compiles)
+}
+
+// testedCompiles answers the compile of each test variant of the package
+// runAct tests, and of every package those compiles import, directly or not.
+// A package that only shares the binary is not among them.
+func testedCompiles(runAct *work.Action, linkAction *work.Action) []*work.Action {
+	tested := runAct.Package.ImportPath
+	seen := map[*work.Action]bool{}
+	var compiles []*work.Action
 	var visit func(compile *work.Action)
 	visit = func(compile *work.Action) {
 		if seen[compile] {
 			return
 		}
 		seen[compile] = true
-		codes = append(codes, compile.Package.ImportPath+"="+compile.BuildContentID())
+		compiles = append(compiles, compile)
 		for _, dep := range compile.Deps {
 			if dep.Package != nil && dep.Mode == "build" {
 				visit(dep)
@@ -2179,14 +2199,15 @@ func testIdentity(builder *work.Builder, runAct *work.Action, linkAction *work.A
 			visit(dep)
 		}
 	}
-	if len(codes) == 0 {
-		base.Fatalf("go: internal error: test main for %s imports no test variant of it", tested)
-	}
-	if digest == "" {
-		base.Fatalf("go: internal error: no generated main was recorded for %s", tested)
-	}
-	slices.Sort(codes)
-	return strings.Join(codes, " ") + " main " + digest + " " + builder.LinkConfigID(linkAction.Package)
+	return compiles
+}
+
+// checkoutWord names the module directories the test binary reports for the
+// packages of compiles. Those compiles are the same in every checkout, and
+// the binary is not: it names the files of this one, and a test can open what
+// it names.
+func checkoutWord(compiles []*work.Action) string {
+	return " checkout=" + work.SourceDirsID(compiles)
 }
 
 // testReachIdentity keys a test result on the code the package's tests reach,
@@ -2202,7 +2223,7 @@ func testReachIdentity(builder *work.Builder, runAct *work.Action, linkAction *w
 	if reach == "" || digest == "" {
 		return ""
 	}
-	return "reach " + reach + " main " + digest + " " + builder.LinkConfigID(linkAction.Package)
+	return "reach " + reach + " main " + digest + " " + builder.LinkConfigID(linkAction.Package) + checkoutWord(testedCompiles(runAct, linkAction))
 }
 
 var reachCache struct {

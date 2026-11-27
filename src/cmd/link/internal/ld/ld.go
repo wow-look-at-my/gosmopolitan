@@ -89,6 +89,11 @@ func (ctxt *Link) readImportCfg(file string) {
 				log.Fatalf("%s:%d: invalid modinfo: %v", file, lineNum, err)
 			}
 			addstrdata1(ctxt, "runtime.modinfo="+s)
+		case "sourcedir":
+			if before == "" || after == "" {
+				log.Fatalf(`%s:%d: invalid sourcedir: syntax is "sourcedir module=directory"`, file, lineNum)
+			}
+			addSourceDir(before, after)
 		}
 	}
 }
