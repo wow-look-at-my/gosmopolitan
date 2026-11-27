@@ -1118,7 +1118,7 @@ func (d *dwctxt) importInfoSymbol(dsym loader.Sym) {
 
 func expandFile(fname string) string {
 	fname = strings.TrimPrefix(fname, src.FileSymPrefix)
-	return expandGoroot(fname)
+	return expandSourceDir(expandGoroot(fname))
 }
 
 // writeDirFileTables emits the portion of the DWARF line table

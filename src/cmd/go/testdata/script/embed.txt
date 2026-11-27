@@ -1,3 +1,8 @@
+# The builds below must run, so they get a cache nothing has written. A
+# package of the main module shares its key with every other checkout.
+env GOCACHE=$WORK/gocache
+mkdir $GOCACHE
+
 # go list shows patterns and files
 go list -f '{{.EmbedPatterns}}'
 stdout '\[x\*t\*t\]'
