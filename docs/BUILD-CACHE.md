@@ -73,6 +73,23 @@ Each request has a local form. The owner answers it from the directory alone, an
 
 A caller holding an open file names that file. One holding anything else spills to a temporary file first. The bytes have to reach another process. A path is what this protocol carries.
 
+## A checkout is not in the key
+
+Upstream keys a package of the main module on the directory it sits in, because its compile writes that directory into the object. A CI runner, a developer checkout and a git worktree each hold the tree at another path. Each then compiled every package of the module again, under a key no other machine asks for. A build with `-trimpath` and a test without it compiled each package twice on one machine for the same reason.
+
+The go command now compiles such a package as `-trimpath` does. The compile names its source by module path, and the key names the module in place of the directory. One object serves every checkout, with the flag or without it. A module that a replace directive points at a directory takes the same route, under `module@version`. A package with cgo or SWIG keeps its directory, because the C compiler and the cgo tool write that path too. So does a package whose `-gcflags` carry a `-trimpath` of their own: those flags name its source.
+
+The binary still names the files on disk. `writeLinkImportcfg` adds a `sourcedir module=directory` line for each such module. The linker rewrites each file name under the module to the directory, in the pclntab file table and in the DWARF line tables (`expandSourceDir`). A stack trace, `runtime.Caller` and a debugger read the same paths as before. A link with `-trimpath` gets no such line and keeps the module path.
+
+What follows from one object for every checkout:
+
+- **The link is per checkout.** The `sourcedir` lines are in the link's action ID.
+- **A test result is per checkout.** The compiles no longer tell checkouts apart, and the binary does. `checkoutWord` adds the module directories to the test identity. It reads them from the compiles the tested package reaches, not from the whole binary. A package that only shares the binary leaves the result alone.
+- **Tool output is stored trimmed.** `trimSourceDir` rewrites each file position in what the cache keeps, and `restoreSourceDir` puts the directory back at each print. A warning then names the file of the checkout that prints it. Both rewrite a position anywhere in the module, because the compiler reports an inlined call where its body is. Text that is no position stays as written.
+- **A vet result is shared, and its text is not always.** The facts carry no path. A stdout stream that names a local directory, as `-json` does, is stored under a key with the package directory in it. A fix archive is too.
+
+Code: `cmd/go/internal/work/moduledir.go` and `cmd/link/internal/ld/sourcedir.go`. `build_cache_moduledir_path.txt` and `vet_cache_checkout.txt` hold it.
+
 ## An archive is stamped with its content, not its action
 
 Upstream stamps `actionID/contentID` into every package archive. The action ID names the inputs of one compile, so a compile with a different flag and the same object code writes a different file. Every key then holds its own bytes, and a store that addresses objects by content keeps a copy per key.
