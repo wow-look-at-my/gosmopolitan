@@ -427,7 +427,7 @@ func (b *Builder) buildActionID(a *Action) cache.ActionID {
 
 	// Include information about the origin of the package that
 	// may be embedded in the debug info for the object file.
-	fmt.Fprint(h, packageOriginKey(p, cfg.BuildTrimpath || trimsModuleCachePath(p), b.WorkDir))
+	fmt.Fprint(h, packageOriginKey(p, cfg.BuildTrimpath || trimsModuleCachePath(p) || trimsModuleDirPath(p), b.WorkDir))
 
 	if p.Module != nil {
 		fmt.Fprintf(h, "go %s\n", p.Module.GoVersion)
@@ -435,7 +435,10 @@ func (b *Builder) buildActionID(a *Action) cache.ActionID {
 	fmt.Fprintf(h, "goos %s goarch %s\n", cfg.Goos, cfg.Goarch)
 	fmt.Fprintf(h, "import %q\n", p.ImportPath)
 	fmt.Fprintf(h, "omitdebug %v standard %v local %v prefix %q\n", p.Internal.OmitDebug, p.Standard, p.Internal.Local, p.Internal.LocalPrefix)
-	if cfg.BuildTrimpath && !compilesFromModuleCache(p) {
+	// A package in a module directory compiles the same with the flag and
+	// without it, and takes the key the flag gives it. A build with -trimpath
+	// and a test without it then share its object too.
+	if (cfg.BuildTrimpath || trimsModuleDirPath(p)) && !compilesFromModuleCache(p) {
 		fmt.Fprintln(h, "trimpath")
 	}
 	if p.Internal.ForceLibrary {
@@ -1619,10 +1622,13 @@ func (b *Builder) vet(ctx context.Context, a *Action) error {
 			vcfg.PackageVetx[a1.Package.ImportPath] = a1.built
 		}
 	}
+	// A checkout at another path asks for the same id. The facts are the same
+	// there. A fix names files of this checkout, and so can the stdout stream.
 	var (
-		id            = cache.ActionID(h.Sum())     // for .vetx file
-		stdoutKey     = cache.Subkey(id, "stdout")  // for .stdout file
-		fixArchiveKey = cache.Subkey(id, "fix.zip") // for .fix.zip file
+		id             = cache.ActionID(h.Sum())                       // for .vetx file
+		stdoutKey      = cache.Subkey(id, "stdout")                    // for a .stdout file that names no local directory
+		localStdoutKey = cache.Subkey(id, "stdout in "+a.Package.Dir)  // for one that does
+		fixArchiveKey  = cache.Subkey(id, "fix.zip in "+a.Package.Dir) // for .fix.zip file
 	)
 
 	// Check the cache. The block is bare rather than dedented because
@@ -1655,7 +1661,11 @@ func (b *Builder) vet(ctx context.Context, a *Action) error {
 		}
 
 		// Copy cached .stdout file to stdout.
-		if file, _, err := cache.GetFile(c, stdoutKey); err == nil {
+		file, _, err := cache.GetFile(c, stdoutKey)
+		if err != nil {
+			file, _, err = cache.GetFile(c, localStdoutKey)
+		}
+		if err == nil {
 			f, err := os.Open(file)
 			if err != nil {
 				goto cachemiss
@@ -1749,8 +1759,13 @@ cachemiss:
 		if err := VetHandleStdout(f); err != nil {
 			return err
 		}
-		f.Seek(0, io.SeekStart)     // ignore error
-		a.cache().Put(stdoutKey, f) // ignore error
+		key := stdoutKey
+		f.Seek(0, io.SeekStart) // ignore error
+		if text, err := io.ReadAll(f); err != nil || namesLocalDir(text, a.Package) {
+			key = localStdoutKey
+		}
+		f.Seek(0, io.SeekStart) // ignore error
+		a.cache().Put(key, f)   // ignore error
 	} else {
 		cache.PutBytes(a.cache(), stdoutKey, nil) // ignore error
 	}
@@ -1784,6 +1799,8 @@ func (b *Builder) linkActionID(a *Action) cache.ActionID {
 	if cfg.BuildTrimpath {
 		fmt.Fprintln(h, "trimpath")
 	}
+	// The linker writes these directories into the binary.
+	fmt.Fprint(h, sourceDirLines(a.Deps))
 
 	// Toolchain-dependent configuration, shared with b.linkSharedActionID.
 	b.printLinkerConfig(h, p)
@@ -1950,6 +1967,7 @@ func (b *Builder) writeLinkImportcfg(a *Action, file string) error {
 		info = a.Package.Internal.BuildInfo.String()
 	}
 	fmt.Fprintf(&icfg, "modinfo %q\n", modload.ModInfoData(info))
+	icfg.WriteString(sourceDirLines(a.Deps))
 	return b.Shell(a).writeFile(file, icfg.Bytes())
 }
 

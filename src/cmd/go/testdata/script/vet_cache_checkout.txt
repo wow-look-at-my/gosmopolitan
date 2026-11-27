@@ -1,0 +1,39 @@
+# Two checkouts of one module share a vet result. A result that names a file
+# names it by directory, so the second checkout must run the tool again and
+# report its own file.
+
+env GOCACHE=$WORK/gocache
+mkdir $GOCACHE
+
+cd first
+go vet -json ./bad
+stdout 'first.*bad\.go'
+! stdout second
+
+mkdir $WORK/second/bad
+cp go.mod $WORK/second/go.mod
+cp bad/bad.go $WORK/second/bad/bad.go
+cd $WORK/second
+go vet -json ./bad
+stdout 'second.*bad\.go'
+! stdout first
+
+# The first checkout still reads its own result.
+cd $WORK/gopath/src/first
+go vet -json ./bad
+stdout 'first.*bad\.go'
+! stdout second
+
+-- first/go.mod --
+module m
+
+go 1.20
+-- first/bad/bad.go --
+package bad
+
+import "fmt"
+
+// Print formats a string with the verb of a number.
+func Print() {
+	fmt.Printf("%d\n", "text")
+}

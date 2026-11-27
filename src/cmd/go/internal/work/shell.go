@@ -486,10 +486,10 @@ func (sh *Shell) reportCmd(desc, dir string, cmdOut []byte, cmdErr error) error 
 	// A capturing action keeps the output as the tool wrote it. That text is
 	// what the build cache stores, and it is formatted each time it prints.
 	if cmdErr == nil && a != nil && a.output != nil {
-		a.output = append(a.output, out...)
+		a.output = append(a.output, trimSourceDir(out, p)...)
 		return nil
 	}
-	out = formatToolOutput(out, dir)
+	out = formatToolOutput(restoreSourceDir(out, p), dir)
 
 	// Usually desc is already p.Desc(), but if not, signal cmdError.Error to
 	// add a line explicitly mentioning the import path.
